@@ -1,0 +1,45 @@
+# Entorno local completo: PostgreSQL más el orquestador.
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: chatbox-postgres
+    environment:
+      POSTGRES_USER: chatbox
+      POSTGRES_PASSWORD: chatbox
+      POSTGRES_DB: chatbox
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./db/migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U chatbox -d chatbox"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build: .
+    container_name: chatbox-api
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      # Dentro de la red de Compose el host es el nombre del servicio.
+      DATABASE_URL: postgresql+asyncpg://chatbox:chatbox@postgres:5432/chatbox
+    volumes:
+      # Sin este volumen, reconstruir la imagen borraría las imágenes subidas.
+      - uploads-data:/app/uploads
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://localhost:8000/health')\""]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres-data:
+  uploads-data:

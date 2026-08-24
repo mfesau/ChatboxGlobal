@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Chatbox — Asistente</title>
+    <link rel="stylesheet" href="/static/chat.css?v=__ASSET_VERSION__" />
+  </head>
+  <body>
+    <!-- Acceso ------------------------------------------------------------- -->
+    <div class="gate" id="gate">
+      <form class="gate__card" id="login-form">
+        <h1>Chatbox — Asistente</h1>
+        <p class="gate__hint">Inicie sesión para continuar la conversación.</p>
+        <label>
+          <span>Correo</span>
+          <input type="email" id="login-email" autocomplete="username" required />
+        </label>
+        <label>
+          <span>Contraseña</span>
+          <input
+            type="password"
+            id="login-password"
+            autocomplete="current-password"
+            required
+          />
+        </label>
+        <p class="gate__error" id="login-error" hidden></p>
+        <button type="submit" class="send-button" id="login-button">Entrar</button>
+        <p class="gate__switch">
+          ¿No tiene cuenta?
+          <button type="button" class="link-button" id="show-register">Regístrese</button>
+        </p>
+      </form>
+
+      <form class="gate__card" id="register-form" hidden>
+        <h1>Crear una cuenta</h1>
+        <p class="gate__hint">Regístrese con su correo para empezar a chatear.</p>
+        <label>
+          <span>Nombre</span>
+          <input type="text" id="register-name" autocomplete="name" maxlength="160" />
+        </label>
+        <label>
+          <span>Correo</span>
+          <input type="email" id="register-email" autocomplete="username" required />
+        </label>
+        <label>
+          <span>Contraseña</span>
+          <input
+            type="password"
+            id="register-password"
+            autocomplete="new-password"
+            minlength="8"
+            required
+          />
+        </label>
+        <p class="gate__error" id="register-error" hidden></p>
+        <button type="submit" class="send-button" id="register-button">Registrarme</button>
+        <p class="gate__switch">
+          ¿Ya tiene cuenta?
+          <button type="button" class="link-button" id="show-login">Inicie sesión</button>
+        </p>
+      </form>
+    </div>
+
+    <!-- Aplicación ----------------------------------------------------------- -->
+    <main class="shell" id="shell" data-width="comfortable" hidden>
+      <header class="shell__header">
+        <div class="identity">
+          <span class="identity__dot" id="status-dot" aria-hidden="true"></span>
+          <div>
+            <h1 class="identity__name" id="identity-name">Chatbox</h1>
+            <p class="identity__state" id="status-text">Conectando…</p>
+          </div>
+        </div>
+        <div class="header-actions">
+          <button
+            type="button"
+            class="ghost-button"
+            id="width-toggle"
+            title="Alternar el ancho del panel"
+            aria-label="Alternar el ancho del panel"
+          >
+            Ancho
+          </button>
+          <button
+            type="button"
+            class="ghost-button"
+            id="reset-button"
+            title="Recargar la conversación"
+          >
+            Actualizar
+          </button>
+          <button type="button" class="ghost-button" id="logout-button" title="Cerrar sesión">
+            Cerrar sesión
+          </button>
+        </div>
+      </header>
+
+      <section
+        class="thread"
+        id="thread"
+        role="log"
+        aria-live="polite"
+        aria-label="Historial de la conversación"
+      >
+        <div class="empty-state" id="empty-state">
+          <h2>¿En qué podemos ayudarle?</h2>
+          <p>
+            Escriba su consulta. Este chatbox comparte la misma capa de
+            orquestación que WhatsApp y Microsoft Teams, de modo que la
+            conversación continúa allí donde la deje.
+          </p>
+          <div class="suggestions" id="suggestions">
+            <button type="button" data-suggestion="¿Cuál es el estado de mi pedido?">
+              Estado de mi pedido
+            </button>
+            <button type="button" data-suggestion="Necesito una factura.">
+              Solicitar una factura
+            </button>
+            <button type="button" data-suggestion="/agente">
+              Hablar con una persona
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <div class="typing" id="typing" hidden>
+        <span></span><span></span><span></span>
+      </div>
+
+      <div class="quick-replies" id="quick-replies" hidden></div>
+
+      <footer class="composer">
+        <form id="composer-form" class="composer__form">
+          <label class="visually-hidden" for="composer-input">Mensaje</label>
+          <textarea
+            id="composer-input"
+            class="composer__input"
+            rows="1"
+            maxlength="4000"
+            placeholder="Escriba su mensaje. Mayús + Intro inserta un salto de línea."
+            autocomplete="off"
+          ></textarea>
+          <button
+            type="button"
+            class="ghost-button attach-button"
+            id="attach-button"
+            title="Adjuntar una imagen"
+            aria-label="Adjuntar una imagen"
+          >
+            📎
+          </button>
+          <input type="file" id="attach-input" accept="image/*" hidden />
+          <button type="submit" class="send-button" id="send-button" disabled>
+            Enviar
+          </button>
+        </form>
+        <p class="composer__meta">
+          <span id="char-count">0 / 4000</span>
+          <span class="composer__hint">Intro envía · Mayús + Intro salta de línea</span>
+        </p>
+      </footer>
+    </main>
+
+    <script src="/static/chat.js?v=__ASSET_VERSION__"></script>
+  </body>
+</html>

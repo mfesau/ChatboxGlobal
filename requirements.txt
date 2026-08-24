@@ -1,0 +1,23 @@
+# --- Núcleo web / ASGI ---
+fastapi==0.141.1
+uvicorn[standard]==0.38.0
+python-multipart==0.0.20
+
+# --- Configuración y validación ---
+pydantic==2.12.3
+pydantic-settings==2.11.0
+
+# --- Persistencia PostgreSQL ---
+SQLAlchemy[asyncio]==2.0.44
+asyncpg==0.30.0
+alembic==1.17.1
+
+# --- Clientes HTTP y seguridad de canales ---
+httpx==0.28.1
+PyJWT[crypto]==2.10.1
+
+# --- Motor de IA ---
+anthropic==0.75.0
+
+# --- Observabilidad ---
+structlog==25.4.0

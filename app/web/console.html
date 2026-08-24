@@ -1,0 +1,338 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Consola del equipo</title>
+    <link rel="stylesheet" href="/static/chat.css?v=__ASSET_VERSION__" />
+    <link rel="stylesheet" href="/static/console.css?v=__ASSET_VERSION__" />
+  </head>
+  <body class="console-body">
+    <!-- Acceso ------------------------------------------------------------- -->
+    <div class="gate" id="gate" hidden>
+      <form class="gate__card" id="login-form">
+        <h1 id="login-title">Consola del equipo</h1>
+        <p class="console__muted">
+          Acceda con las credenciales que le facilitó su supervisor.
+        </p>
+        <label>
+          <span>Correo</span>
+          <input type="email" id="login-email" autocomplete="username" required />
+        </label>
+        <label>
+          <span>Contraseña</span>
+          <input
+            type="password"
+            id="login-password"
+            autocomplete="current-password"
+            required
+          />
+        </label>
+        <p class="gate__error" id="login-error" hidden></p>
+        <button type="submit" class="send-button" id="login-button">Entrar</button>
+      </form>
+    </div>
+
+    <!-- Aplicación --------------------------------------------------------- -->
+    <div class="console" id="app" hidden>
+      <aside class="console__sidebar">
+        <header class="console__sidebar-header">
+          <div class="console__identity">
+            <div>
+              <strong id="who">—</strong>
+              <p class="console__muted" id="who-role"></p>
+            </div>
+            <button type="button" class="ghost-button" id="logout-button">Salir</button>
+          </div>
+
+          <nav class="console__tabs" role="tablist" aria-label="Bandejas">
+            <button type="button" role="tab" data-scope="unassigned" aria-selected="true">
+              Cola común <span class="console__count" id="count-unassigned">0</span>
+            </button>
+            <button type="button" role="tab" data-scope="mine" aria-selected="false">
+              Mis chats <span class="console__count" id="count-mine">0</span>
+            </button>
+            <button
+              type="button"
+              role="tab"
+              data-scope="all"
+              aria-selected="false"
+              id="tab-all"
+              hidden
+            >
+              Todos <span class="console__count" id="count-all">0</span>
+            </button>
+          </nav>
+
+          <div class="console__filters">
+            <select id="status-filter" aria-label="Filtrar por estado">
+              <option value="open">Abiertas</option>
+              <option value="closed">Cerradas</option>
+              <option value="">Todas</option>
+            </select>
+            <select id="channel-filter" aria-label="Filtrar por canal">
+              <option value="">Todos los canales</option>
+              <option value="whatsapp">WhatsApp</option>
+              <option value="msbot">Microsoft</option>
+              <option value="web">Web</option>
+            </select>
+            <select id="department-filter" aria-label="Filtrar por departamento">
+              <option value="">Todos los departamentos</option>
+            </select>
+          </div>
+        </header>
+
+        <ul class="console__list" id="conversation-list"></ul>
+
+        <footer class="console__sidebar-footer">
+          <button type="button" class="ghost-button" id="admin-button" hidden>
+            Administrar usuarios
+          </button>
+          <button type="button" class="ghost-button" id="supervisor-button" hidden>
+            Panel de supervisión
+          </button>
+        </footer>
+      </aside>
+
+      <main class="console__main">
+        <header class="console__thread-header">
+          <div class="console__thread-title">
+            <h2 id="thread-title">Seleccione una conversación</h2>
+            <p id="thread-subtitle" class="console__muted"></p>
+          </div>
+          <div class="header-actions" id="thread-actions" hidden>
+            <button type="button" class="ghost-button" id="aside-toggle">Equipo</button>
+            <button type="button" class="ghost-button" id="claim-button">Atender yo</button>
+            <button type="button" class="ghost-button" id="release-button">
+              Devolver a la cola
+            </button>
+            <button type="button" class="ghost-button" id="close-button">Cerrar</button>
+          </div>
+        </header>
+
+        <section class="thread" id="console-thread">
+          <p class="console__empty">
+            La cola común reúne todo lo que entra por WhatsApp, Microsoft Teams y el
+            chatbox web. Tome una conversación o revise las suyas.
+          </p>
+        </section>
+
+        <footer class="composer">
+          <form id="console-form" class="composer__form">
+            <label class="visually-hidden" for="console-input">Respuesta</label>
+            <textarea
+              id="console-input"
+              class="composer__input"
+              rows="1"
+              placeholder="Escriba la respuesta al cliente…"
+              disabled
+            ></textarea>
+            <button
+              type="button"
+              class="ghost-button attach-button"
+              id="console-attach-button"
+              title="Adjuntar una imagen"
+              aria-label="Adjuntar una imagen"
+              disabled
+            >
+              📎
+            </button>
+            <input type="file" id="console-attach-input" accept="image/*" hidden />
+            <button type="submit" class="send-button" id="console-send" disabled>
+              Responder
+            </button>
+          </form>
+          <p class="composer__meta">
+            <span id="console-status">Sin conversación seleccionada</span>
+            <span class="composer__hint">La respuesta sale por el canal de origen</span>
+          </p>
+        </footer>
+      </main>
+
+      <!-- Panel lateral: derivación, notas e historial -------------------- -->
+      <aside class="console__aside" id="aside" hidden>
+        <section class="panel">
+          <h3>Derivar a un compañero</h3>
+          <p class="console__muted">
+            La conversación conserva todo su historial; solo cambia el responsable.
+          </p>
+          <label class="panel__field">
+            <span>Compañero</span>
+            <select id="transfer-target"><option value="">— Elegir —</option></select>
+          </label>
+          <label class="panel__field">
+            <span>o departamento (vuelve a la cola, sin dueño)</span>
+            <select id="transfer-department"><option value="">— Elegir —</option></select>
+          </label>
+          <label class="panel__field">
+            <span>Motivo (se guarda como nota interna)</span>
+            <textarea id="transfer-note" rows="2" placeholder="Contexto para quien la reciba"></textarea>
+          </label>
+          <button type="button" class="send-button" id="transfer-button" disabled>
+            Derivar
+          </button>
+        </section>
+
+        <section class="panel">
+          <h3>Notas internas</h3>
+          <p class="console__muted">Visibles solo para el equipo. El cliente no las recibe.</p>
+          <ul class="panel__list" id="notes-list"></ul>
+          <form id="note-form" class="panel__inline-form">
+            <textarea id="note-body" rows="2" placeholder="Añadir una nota…"></textarea>
+            <button type="submit" class="ghost-button">Guardar nota</button>
+          </form>
+        </section>
+
+        <section class="panel">
+          <h3>Historial de derivaciones</h3>
+          <ol class="panel__timeline" id="assignment-list"></ol>
+        </section>
+
+        <section class="panel">
+          <h3>Datos del contacto</h3>
+          <p class="console__muted">
+            Editar queda reservado a supervisión y administración.
+          </p>
+          <label class="panel__field">
+            <span>Nombre</span>
+            <input type="text" id="contact-name" maxlength="160" disabled />
+          </label>
+          <label class="panel__field">
+            <span>Teléfono</span>
+            <input type="text" id="contact-phone" maxlength="32" disabled />
+          </label>
+          <label class="panel__field">
+            <span>Correo</span>
+            <input type="email" id="contact-email" maxlength="254" disabled />
+          </label>
+          <button type="button" class="send-button" id="contact-save" hidden>
+            Guardar
+          </button>
+          <p class="gate__error" id="contact-error" hidden></p>
+
+          <h4>Comentarios</h4>
+          <ul class="panel__list" id="contact-comments"></ul>
+          <form id="contact-comment-form" class="panel__inline-form" hidden>
+            <textarea
+              id="contact-comment-body"
+              rows="2"
+              placeholder="Añadir un comentario…"
+            ></textarea>
+            <button type="submit" class="ghost-button">Guardar comentario</button>
+          </form>
+        </section>
+      </aside>
+
+      <!-- Panel de supervisión ------------------------------------------- -->
+      <div class="overlay" id="admin-panel" hidden>
+        <div class="overlay__card">
+          <header class="overlay__header">
+            <h2>Administración de usuarios</h2>
+            <button type="button" class="ghost-button" id="admin-close">Cerrar</button>
+          </header>
+          <form class="panel" id="auto-reply-form">
+            <h3>Respuesta automática</h3>
+            <p class="console__muted">
+              Se envía una sola vez, en el primer mensaje que el asistente no
+              logra resolver.
+            </p>
+            <label class="panel__field">
+              <span>Texto</span>
+              <textarea id="auto-reply-text" rows="3" maxlength="2000" required></textarea>
+            </label>
+            <button type="submit" class="send-button">Guardar respuesta automática</button>
+          </form>
+          <section class="admin-grid">
+            <form class="panel" id="create-user-form">
+              <h3>Crear usuario</h3>
+              <label class="panel__field"><span>Correo</span><input type="email" id="new-user-email" autocomplete="email" required /></label>
+              <label class="panel__field"><span>Nombre visible</span><input type="text" id="new-user-name" maxlength="160" /></label>
+              <label class="panel__field"><span>Rol</span><select id="new-user-role"><option value="agent">Agente</option><option value="supervisor">Supervisor</option><option value="admin">Administrador</option></select></label>
+              <label class="panel__field"><span>Departamento principal</span><select id="new-user-department"><option value="">Sin departamento</option></select></label>
+              <label class="panel__field"><span>Contraseña inicial</span><input type="password" id="new-user-password" minlength="8" autocomplete="new-password" required /></label>
+              <button type="submit" class="send-button">Crear usuario</button>
+            </form>
+            <form class="panel" id="reset-password-form">
+              <h3>Cambiar contraseña</h3>
+              <label class="panel__field"><span>Usuario</span><select id="password-user" required></select></label>
+              <label class="panel__field"><span>Nueva contraseña</span><input type="password" id="reset-password" minlength="8" autocomplete="new-password" required /></label>
+              <button type="submit" class="send-button">Guardar contraseña</button>
+            </form>
+          </section>
+          <section class="admin-grid">
+            <form class="panel" id="create-department-form">
+              <h3>Departamentos</h3>
+              <label class="panel__field"><span>Nombre</span><input type="text" id="new-department-name" maxlength="120" required /></label>
+              <button type="submit" class="send-button">Crear departamento</button>
+              <ul class="panel__list" id="department-list"></ul>
+            </form>
+            <form class="panel" id="agent-departments-form">
+              <h3>Departamentos de una persona</h3>
+              <p class="console__muted">
+                El principal se fija al crear la cuenta; aquí se cambia o se
+                otorga acceso a otros, además del propio.
+              </p>
+              <label class="panel__field"><span>Persona</span><select id="departments-user" required></select></label>
+              <label class="panel__field"><span>Principal</span><select id="departments-primary"><option value="">Sin departamento</option></select></label>
+              <label class="panel__field">
+                <span>Adicionales</span>
+                <select id="departments-extra" multiple></select>
+              </label>
+              <button type="submit" class="send-button">Guardar departamentos</button>
+            </form>
+          </section>
+          <section class="panel">
+            <h3>Usuarios registrados</h3>
+            <div class="table-scroll">
+              <table class="data-table" id="admin-users-table">
+                <thead>
+                  <tr>
+                    <th>Nombre</th>
+                    <th>Correo</th>
+                    <th>Rol</th>
+                    <th>Estado</th>
+                    <th>Acciones</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </section>
+          <p class="gate__error" id="admin-error" hidden></p>
+        </div>
+      </div>
+
+      <div class="overlay" id="supervisor-panel" hidden>
+        <div class="overlay__card">
+          <header class="overlay__header">
+            <h2>Panel de supervisión</h2>
+            <button type="button" class="ghost-button" id="supervisor-close">Cerrar</button>
+          </header>
+          <section>
+            <h3>Carga por agente</h3>
+            <div class="table-scroll">
+              <table class="data-table" id="workload-table">
+                <thead>
+                  <tr>
+                    <th>Agente</th>
+                    <th>Rol</th>
+                    <th>Presencia</th>
+                    <th>Abiertas</th>
+                    <th>Sin leer</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </section>
+          <section>
+            <h3>Últimas derivaciones</h3>
+            <ol class="panel__timeline" id="transfer-activity"></ol>
+          </section>
+        </div>
+      </div>
+    </div>
+
+    <script src="/static/console.js?v=__ASSET_VERSION__"></script>
+  </body>
+</html>
