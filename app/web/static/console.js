@@ -9,13 +9,7 @@
   "use strict";
 
   const dom = {
-    gate: document.getElementById("gate"),
     app: document.getElementById("app"),
-    loginForm: document.getElementById("login-form"),
-    loginEmail: document.getElementById("login-email"),
-    loginPassword: document.getElementById("login-password"),
-    loginError: document.getElementById("login-error"),
-    loginButton: document.getElementById("login-button"),
     logout: document.getElementById("logout-button"),
     who: document.getElementById("who"),
     whoRole: document.getElementById("who-role"),
@@ -77,18 +71,34 @@
     newUserRole: document.getElementById("new-user-role"),
     newUserDepartment: document.getElementById("new-user-department"),
     newUserPassword: document.getElementById("new-user-password"),
-    resetPasswordForm: document.getElementById("reset-password-form"),
-    passwordUser: document.getElementById("password-user"),
-    resetPassword: document.getElementById("reset-password"),
     adminError: document.getElementById("admin-error"),
     adminUsers: document.querySelector("#admin-users-table tbody"),
     createDepartmentForm: document.getElementById("create-department-form"),
     newDepartmentName: document.getElementById("new-department-name"),
     departmentList: document.getElementById("department-list"),
-    agentDepartmentsForm: document.getElementById("agent-departments-form"),
-    departmentsUser: document.getElementById("departments-user"),
-    departmentsPrimary: document.getElementById("departments-primary"),
-    departmentsExtra: document.getElementById("departments-extra"),
+    createChannelAccountForm: document.getElementById("create-channel-account-form"),
+    newAccountChannel: document.getElementById("new-account-channel"),
+    newAccountExternalId: document.getElementById("new-account-external-id"),
+    newAccountName: document.getElementById("new-account-name"),
+    newAccountDepartment: document.getElementById("new-account-department"),
+    newAccountToken: document.getElementById("new-account-token"),
+    channelAccountsTable: document.querySelector("#channel-accounts-table tbody"),
+    contactsButton: document.getElementById("contacts-button"),
+    contactsPanel: document.getElementById("contacts-panel"),
+    contactsClose: document.getElementById("contacts-close"),
+    contactsSearch: document.getElementById("contacts-search"),
+    contactsTable: document.querySelector("#contacts-table tbody"),
+    contactProfile: document.getElementById("contact-profile"),
+    profileTitle: document.getElementById("contact-profile-title"),
+    profileName: document.getElementById("profile-name"),
+    profilePhone: document.getElementById("profile-phone"),
+    profileEmail: document.getElementById("profile-email"),
+    profileSave: document.getElementById("profile-save"),
+    profileError: document.getElementById("profile-error"),
+    profileComments: document.getElementById("profile-comments"),
+    profileCommentForm: document.getElementById("profile-comment-form"),
+    profileCommentBody: document.getElementById("profile-comment-body"),
+    profileConversations: document.getElementById("profile-conversations"),
   };
 
   const state = {
@@ -101,6 +111,7 @@
     socket: null,
     pendingAttachment: null,
     contact: null,
+    contactProfileId: null,
   };
 
   const CHANNEL_LABELS = {
@@ -162,16 +173,16 @@
   /* ---------------------------------------------------------------- acceso */
 
   function showGate() {
-    dom.gate.hidden = false;
-    dom.app.hidden = true;
+    // "/" es la entrada única de la aplicación: sin sesión de agente válida,
+    // la consola no tiene login propio, redirige allá.
     if (state.socket) {
       state.socket.close();
       state.socket = null;
     }
+    window.location.href = "/";
   }
 
   function showApp() {
-    dom.gate.hidden = true;
     dom.app.hidden = false;
   }
 
@@ -184,6 +195,7 @@
       dom.whoRole.textContent = me.is_supervisor ? "Supervisión" : "Agente";
       dom.tabAll.hidden = !me.is_supervisor;
       dom.supervisorButton.hidden = !me.is_supervisor;
+      dom.contactsButton.hidden = !me.is_supervisor;
       dom.adminButton.hidden = me.role !== "admin";
       showApp();
       return true;
@@ -193,33 +205,11 @@
     }
   }
 
-  dom.loginForm.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    dom.loginError.hidden = true;
-    dom.loginButton.disabled = true;
-    try {
-      await api("/api/auth/login", {
-        method: "POST",
-        body: JSON.stringify({
-          email: dom.loginEmail.value.trim(),
-          password: dom.loginPassword.value,
-        }),
-      });
-      dom.loginPassword.value = "";
-      await start();
-    } catch (error) {
-      dom.loginError.textContent = error.message;
-      dom.loginError.hidden = false;
-    } finally {
-      dom.loginButton.disabled = false;
-    }
-  });
-
   dom.logout.addEventListener("click", async () => {
     try {
       await api("/api/auth/logout", { method: "POST" });
     } catch {
-      // Aunque falle el cierre en el servidor, la consola vuelve al acceso.
+      // Aunque falle el cierre en el servidor, igual se vuelve al acceso.
     }
     state.me = null;
     showGate();
@@ -588,6 +578,8 @@
         return `${entry.to_agent} tomó la conversación`;
       case "transfer":
         return `Derivada de ${entry.from_agent || "la cola"} a ${entry.to_agent}`;
+      case "transfer_department":
+        return `Derivada a la cola del departamento ${entry.to_department || "sin nombre"}`;
       case "release":
         return `${entry.from_agent || "El equipo"} la devolvió a la cola`;
       case "close":
@@ -832,6 +824,31 @@
 
   /* ----------------------------------------------------------- compañeros */
 
+  function buildDepartmentSelect(agent, { multiple = false } = {}) {
+    const select = document.createElement("select");
+    if (multiple) {
+      select.multiple = true;
+      select.size = Math.min(4, Math.max(2, state.departments.length || 2));
+    } else {
+      const empty = document.createElement("option");
+      empty.value = "";
+      empty.textContent = "Sin departamento";
+      select.appendChild(empty);
+    }
+    state.departments.forEach((department) => {
+      const option = document.createElement("option");
+      option.value = department.id;
+      option.textContent = department.name;
+      if (multiple) {
+        option.selected = agent.extra_department_ids.includes(department.id);
+      } else if (department.id === agent.department_id) {
+        option.selected = true;
+      }
+      select.appendChild(option);
+    });
+    return select;
+  }
+
   function buildAdminUserRow(agent) {
     const row = document.createElement("tr");
 
@@ -850,6 +867,28 @@
       row.appendChild(cell);
     });
 
+    const primaryCell = document.createElement("td");
+    const primarySelect = buildDepartmentSelect(agent);
+    primarySelect.setAttribute("aria-label", `Departamento principal de ${agent.email}`);
+    primaryCell.appendChild(primarySelect);
+    row.appendChild(primaryCell);
+
+    const extraCell = document.createElement("td");
+    const extraSelect = buildDepartmentSelect(agent, { multiple: true });
+    extraSelect.setAttribute("aria-label", `Departamentos adicionales de ${agent.email}`);
+    extraCell.appendChild(extraSelect);
+    row.appendChild(extraCell);
+
+    const passwordCell = document.createElement("td");
+    const passwordInput = document.createElement("input");
+    passwordInput.type = "password";
+    passwordInput.minLength = 8;
+    passwordInput.autocomplete = "new-password";
+    passwordInput.placeholder = "Sin cambios";
+    passwordInput.setAttribute("aria-label", `Nueva contraseña de ${agent.email}`);
+    passwordCell.appendChild(passwordInput);
+    row.appendChild(passwordCell);
+
     const actionsCell = document.createElement("td");
     const saveButton = document.createElement("button");
     saveButton.type = "button";
@@ -861,15 +900,39 @@
         showAdminError("El nombre no puede quedar vacío.");
         return;
       }
+      const password = passwordInput.value;
+      if (password && password.length < 8) {
+        showAdminError("La nueva contraseña debe tener al menos 8 caracteres.");
+        return;
+      }
+      showAdminError("");
+      saveButton.disabled = true;
       try {
         await api(`/api/agents/${agent.id}`, {
           method: "PATCH",
           body: JSON.stringify({ display_name: displayName }),
         });
+        await api(`/api/agents/${agent.id}/departments`, {
+          method: "PUT",
+          body: JSON.stringify({
+            department_id: primarySelect.value || null,
+            extra_department_ids: Array.from(extraSelect.selectedOptions).map(
+              (option) => option.value,
+            ),
+          }),
+        });
+        if (password) {
+          await api(`/api/agents/${agent.id}/password`, {
+            method: "POST",
+            body: JSON.stringify({ password }),
+          });
+        }
         await loadAgents();
-        setStatus("Nombre actualizado.");
+        setStatus("Usuario actualizado.");
       } catch (error) {
         showAdminError(error.message);
+      } finally {
+        saveButton.disabled = false;
       }
     });
     actionsCell.appendChild(saveButton);
@@ -925,26 +988,8 @@
       option.textContent = "No hay compañeros disponibles";
       dom.transferTarget.appendChild(option);
     }
-    dom.passwordUser.textContent = "";
-    state.agents.forEach((agent) => {
-      const option = document.createElement("option");
-      option.value = agent.id;
-      option.textContent = `${agent.display_name || agent.email} (${agent.role})`;
-      dom.passwordUser.appendChild(option);
-    });
     dom.adminUsers.textContent = "";
     state.agents.forEach((agent) => dom.adminUsers.appendChild(buildAdminUserRow(agent)));
-
-    dom.departmentsUser.textContent = "";
-    state.agents.forEach((agent) => {
-      const option = document.createElement("option");
-      option.value = agent.id;
-      option.textContent = `${agent.display_name || agent.email} (${agent.role})`;
-      dom.departmentsUser.appendChild(option);
-    });
-    if (dom.departmentsUser.options.length > 0) {
-      selectAgentDepartments(state.agents[0]);
-    }
   }
 
   /* ------------------------------------------------------------ departamentos */
@@ -973,15 +1018,7 @@
     fillWithPlaceholder(dom.departmentFilter, "Todos los departamentos");
     fillWithPlaceholder(dom.transferDepartment, "— Elegir —");
     fillWithPlaceholder(dom.newUserDepartment, "Sin departamento");
-    fillWithPlaceholder(dom.departmentsPrimary, "Sin departamento");
-
-    dom.departmentsExtra.textContent = "";
-    state.departments.forEach((department) => {
-      const option = document.createElement("option");
-      option.value = department.id;
-      option.textContent = department.name;
-      dom.departmentsExtra.appendChild(option);
-    });
+    fillWithPlaceholder(dom.newAccountDepartment, "Sin departamento");
 
     dom.departmentList.textContent = "";
     if (state.departments.length === 0) {
@@ -998,20 +1035,6 @@
     }
   }
 
-  function selectAgentDepartments(agent) {
-    dom.departmentsPrimary.value = agent.department_id || "";
-    Array.from(dom.departmentsExtra.options).forEach((option) => {
-      option.selected = agent.extra_department_ids.includes(option.value);
-    });
-  }
-
-  dom.departmentsUser.addEventListener("change", () => {
-    const agent = state.agents.find((candidate) => candidate.id === dom.departmentsUser.value);
-    if (agent) {
-      selectAgentDepartments(agent);
-    }
-  });
-
   dom.createDepartmentForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     showAdminError("");
@@ -1023,37 +1046,152 @@
       await api("/api/departments", { method: "POST", body: JSON.stringify({ name }) });
       dom.newDepartmentName.value = "";
       await loadDepartments();
+      await loadAgents();
+      await loadChannelAccounts();
       setStatus("Departamento creado.");
     } catch (error) {
       showAdminError(error.message);
     }
   });
 
-  dom.agentDepartmentsForm.addEventListener("submit", async (event) => {
+  /* ------------------------------------------------------------ cuentas de canal */
+
+  const CHANNEL_ACCOUNT_LABELS = { whatsapp: "WhatsApp", facebook: "Facebook", msbot: "Teams" };
+
+  function buildChannelAccountRow(account) {
+    const row = document.createElement("tr");
+
+    [
+      CHANNEL_ACCOUNT_LABELS[account.channel] || account.channel,
+      account.external_id,
+    ].forEach((value) => {
+      const cell = document.createElement("td");
+      cell.textContent = value;
+      row.appendChild(cell);
+    });
+
+    const nameCell = document.createElement("td");
+    const nameInput = document.createElement("input");
+    nameInput.type = "text";
+    nameInput.maxLength = 160;
+    nameInput.value = account.display_name || "";
+    nameInput.setAttribute("aria-label", `Nombre de ${account.external_id}`);
+    nameCell.appendChild(nameInput);
+    row.appendChild(nameCell);
+
+    const departmentCell = document.createElement("td");
+    const departmentSelect = document.createElement("select");
+    const noneOption = document.createElement("option");
+    noneOption.value = "";
+    noneOption.textContent = "Sin departamento";
+    departmentSelect.appendChild(noneOption);
+    state.departments.forEach((department) => {
+      const option = document.createElement("option");
+      option.value = department.id;
+      option.textContent = department.name;
+      option.selected = department.id === account.department_id;
+      departmentSelect.appendChild(option);
+    });
+    departmentSelect.setAttribute("aria-label", `Departamento de ${account.external_id}`);
+    departmentCell.appendChild(departmentSelect);
+    row.appendChild(departmentCell);
+
+    const tokenCell = document.createElement("td");
+    const tokenInput = document.createElement("input");
+    tokenInput.type = "password";
+    tokenInput.maxLength = 4096;
+    tokenInput.autocomplete = "off";
+    tokenInput.placeholder = account.has_own_credentials ? "Reemplazar" : "Sin token propio";
+    tokenInput.setAttribute("aria-label", `Nuevo token de ${account.external_id}`);
+    tokenCell.appendChild(tokenInput);
+    row.appendChild(tokenCell);
+
+    const statusCell = document.createElement("td");
+    statusCell.textContent = account.is_active ? "Activa" : "Inactiva";
+    row.appendChild(statusCell);
+
+    const actionsCell = document.createElement("td");
+    const saveButton = document.createElement("button");
+    saveButton.type = "button";
+    saveButton.className = "ghost-button";
+    saveButton.textContent = "Guardar";
+    saveButton.addEventListener("click", async () => {
+      showAdminError("");
+      const displayName = nameInput.value.trim();
+      const body = {
+        display_name: displayName || null,
+        department_id: departmentSelect.value || null,
+      };
+      if (tokenInput.value) {
+        body.access_token = tokenInput.value;
+      }
+      saveButton.disabled = true;
+      try {
+        await api(`/api/channel-accounts/${account.id}`, {
+          method: "PATCH",
+          body: JSON.stringify(body),
+        });
+        await loadChannelAccounts();
+        setStatus("Cuenta de canal actualizada.");
+      } catch (error) {
+        showAdminError(error.message);
+      } finally {
+        saveButton.disabled = false;
+      }
+    });
+    actionsCell.appendChild(saveButton);
+
+    const toggleButton = document.createElement("button");
+    toggleButton.type = "button";
+    toggleButton.className = "ghost-button";
+    toggleButton.textContent = account.is_active ? "Desactivar" : "Reactivar";
+    toggleButton.addEventListener("click", async () => {
+      showAdminError("");
+      try {
+        await api(`/api/channel-accounts/${account.id}`, {
+          method: "PATCH",
+          body: JSON.stringify({ is_active: !account.is_active }),
+        });
+        await loadChannelAccounts();
+        setStatus(account.is_active ? "Cuenta desactivada." : "Cuenta reactivada.");
+      } catch (error) {
+        showAdminError(error.message);
+      }
+    });
+    actionsCell.appendChild(toggleButton);
+
+    row.appendChild(actionsCell);
+    return row;
+  }
+
+  async function loadChannelAccounts() {
+    let accounts = [];
+    try {
+      accounts = await api("/api/channel-accounts");
+    } catch {
+      accounts = [];
+    }
+    dom.channelAccountsTable.textContent = "";
+    accounts.forEach((account) => dom.channelAccountsTable.appendChild(buildChannelAccountRow(account)));
+  }
+
+  dom.createChannelAccountForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     showAdminError("");
-    const agentId = dom.departmentsUser.value;
-    if (!agentId) {
-      return;
-    }
-    const extraIds = Array.from(dom.departmentsExtra.selectedOptions).map((option) => option.value);
     try {
-      await api(`/api/agents/${agentId}/departments`, {
-        method: "PUT",
+      await api("/api/channel-accounts", {
+        method: "POST",
         body: JSON.stringify({
-          department_id: dom.departmentsPrimary.value || null,
-          extra_department_ids: extraIds,
+          channel: dom.newAccountChannel.value,
+          external_id: dom.newAccountExternalId.value.trim(),
+          display_name: dom.newAccountName.value.trim() || null,
+          department_id: dom.newAccountDepartment.value || null,
+          access_token: dom.newAccountToken.value || null,
         }),
       });
-      await loadAgents();
-      // `loadAgents()` reconstruye el <select> y por defecto vuelve a la
-      // primera persona; se restituye la que se acababa de editar.
-      dom.departmentsUser.value = agentId;
-      const agent = state.agents.find((candidate) => candidate.id === agentId);
-      if (agent) {
-        selectAgentDepartments(agent);
-      }
-      setStatus("Departamentos actualizados.");
+      dom.createChannelAccountForm.reset();
+      await loadChannelAccounts();
+      setStatus("Cuenta de canal conectada.");
     } catch (error) {
       showAdminError(error.message);
     }
@@ -1105,6 +1243,181 @@
     dom.supervisorPanel.hidden = true;
   });
 
+  /* ------------------------------------------------ directorio de contactos */
+
+  let contactsSearchTimer = null;
+
+  function renderContactsTable(rows) {
+    dom.contactsTable.textContent = "";
+    if (rows.length === 0) {
+      const tr = document.createElement("tr");
+      const td = document.createElement("td");
+      td.colSpan = 6;
+      td.className = "console__muted";
+      td.textContent = "Sin resultados.";
+      tr.appendChild(td);
+      dom.contactsTable.appendChild(tr);
+      return;
+    }
+    rows.forEach((contact) => {
+      const tr = document.createElement("tr");
+      [
+        contact.display_name || "—",
+        contact.primary_phone || "—",
+        contact.primary_email || "—",
+        contact.conversation_count,
+        formatTime(contact.last_message_at) || "—",
+      ].forEach((value) => {
+        const td = document.createElement("td");
+        td.textContent = value;
+        tr.appendChild(td);
+      });
+      const actions = document.createElement("td");
+      const view = document.createElement("button");
+      view.type = "button";
+      view.className = "ghost-button";
+      view.textContent = "Ver";
+      view.addEventListener("click", () => openContactProfile(contact.id));
+      actions.appendChild(view);
+      tr.appendChild(actions);
+      dom.contactsTable.appendChild(tr);
+    });
+  }
+
+  async function loadContacts(search) {
+    try {
+      const query = search ? `?search=${encodeURIComponent(search)}` : "";
+      const rows = await api(`/api/contacts${query}`);
+      renderContactsTable(rows);
+    } catch (error) {
+      setStatus(error.message);
+    }
+  }
+
+  function showProfileError(message) {
+    dom.profileError.textContent = message;
+    dom.profileError.hidden = !message;
+  }
+
+  async function openContactProfile(contactId) {
+    showProfileError("");
+    try {
+      const contact = await api(`/api/contacts/${contactId}`);
+      state.contactProfileId = contact.id;
+      dom.contactProfile.hidden = false;
+      dom.profileTitle.textContent = contact.display_name || "Contacto sin nombre";
+      dom.profileName.value = contact.display_name || "";
+      dom.profilePhone.value = contact.primary_phone || "";
+      dom.profileEmail.value = contact.primary_email || "";
+
+      dom.profileComments.textContent = "";
+      if (contact.comments.length === 0) {
+        const empty = document.createElement("li");
+        empty.className = "console__muted";
+        empty.textContent = "Todavía no hay comentarios.";
+        dom.profileComments.appendChild(empty);
+      } else {
+        contact.comments.forEach((comment) => {
+          const item = document.createElement("li");
+          item.textContent = comment.body;
+          const meta = document.createElement("span");
+          meta.className = "panel__meta";
+          meta.textContent = `${comment.agent || "sistema"} · ${formatTime(comment.created_at)}`;
+          item.appendChild(meta);
+          dom.profileComments.appendChild(item);
+        });
+      }
+
+      dom.profileConversations.textContent = "";
+      if (contact.conversations.length === 0) {
+        const empty = document.createElement("li");
+        empty.className = "console__muted";
+        empty.textContent = "Sin conversaciones.";
+        dom.profileConversations.appendChild(empty);
+      } else {
+        contact.conversations.forEach((conversation) => {
+          const item = document.createElement("li");
+          const link = document.createElement("button");
+          link.type = "button";
+          link.className = "ghost-button";
+          const channel = CHANNEL_LABELS[conversation.channel] || conversation.channel;
+          link.textContent =
+            `${channel} · ${conversation.status} · ` +
+            (formatTime(conversation.last_message_at) || "sin mensajes");
+          link.addEventListener("click", async () => {
+            dom.contactsPanel.hidden = true;
+            await selectConversation(conversation);
+          });
+          item.appendChild(link);
+          dom.profileConversations.appendChild(item);
+        });
+      }
+    } catch (error) {
+      dom.contactProfile.hidden = true;
+      showProfileError(error.message);
+    }
+  }
+
+  dom.contactsButton.addEventListener("click", async () => {
+    dom.contactProfile.hidden = true;
+    dom.contactsSearch.value = "";
+    dom.contactsPanel.hidden = false;
+    await loadContacts("");
+  });
+
+  dom.contactsClose.addEventListener("click", () => {
+    dom.contactsPanel.hidden = true;
+  });
+
+  dom.contactsSearch.addEventListener("input", () => {
+    clearTimeout(contactsSearchTimer);
+    contactsSearchTimer = setTimeout(() => {
+      loadContacts(dom.contactsSearch.value.trim());
+    }, 300);
+  });
+
+  dom.profileSave.addEventListener("click", async () => {
+    if (!state.contactProfileId) {
+      return;
+    }
+    showProfileError("");
+    dom.profileSave.disabled = true;
+    try {
+      await api(`/api/contacts/${state.contactProfileId}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          display_name: dom.profileName.value.trim() || null,
+          primary_phone: dom.profilePhone.value.trim() || null,
+          primary_email: dom.profileEmail.value.trim() || null,
+        }),
+      });
+      await openContactProfile(state.contactProfileId);
+      await loadContacts(dom.contactsSearch.value.trim());
+    } catch (error) {
+      showProfileError(error.message);
+    } finally {
+      dom.profileSave.disabled = false;
+    }
+  });
+
+  dom.profileCommentForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const body = dom.profileCommentBody.value.trim();
+    if (!body || !state.contactProfileId) {
+      return;
+    }
+    try {
+      await api(`/api/contacts/${state.contactProfileId}/comments`, {
+        method: "POST",
+        body: JSON.stringify({ body }),
+      });
+      dom.profileCommentBody.value = "";
+      await openContactProfile(state.contactProfileId);
+    } catch (error) {
+      showProfileError(error.message);
+    }
+  });
+
   function showAdminError(message) {
     dom.adminError.textContent = message;
     dom.adminError.hidden = !message;
@@ -1117,6 +1430,7 @@
     await loadDepartments();
     await loadAgents();
     await loadAutoReply();
+    await loadChannelAccounts();
     dom.adminPanel.hidden = false;
   });
 
@@ -1164,21 +1478,6 @@
       dom.createUserForm.reset();
       await loadAgents();
       setStatus("Usuario creado.");
-    } catch (error) {
-      showAdminError(error.message);
-    }
-  });
-
-  dom.resetPasswordForm.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    showAdminError("");
-    try {
-      await api(`/api/agents/${dom.passwordUser.value}/password`, {
-        method: "POST",
-        body: JSON.stringify({ password: dom.resetPassword.value }),
-      });
-      dom.resetPasswordForm.reset();
-      setStatus("Contraseña actualizada.");
     } catch (error) {
       showAdminError(error.message);
     }
@@ -1269,6 +1568,7 @@
     // Una sola consola para todos: a quien entra como administrador se le
     // abre el panel de administración de una vez, sin URL aparte que elegir.
     if (state.me.role === "admin") {
+      await loadChannelAccounts();
       dom.adminPanel.hidden = false;
     }
     connectInbox();

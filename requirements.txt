@@ -16,6 +16,10 @@ alembic==1.17.1
 httpx==0.28.1
 PyJWT[crypto]==2.10.1
 
+# --- Inicio de sesión único (SAML 2.0) de la consola ---
+# Necesita las bibliotecas nativas libxml2/libxmlsec1; ver Dockerfile.
+python3-saml==1.16.0
+
 # --- Motor de IA ---
 anthropic==0.75.0
 

@@ -37,6 +37,8 @@
     loginPassword: document.getElementById("login-password"),
     loginError: document.getElementById("login-error"),
     loginButton: document.getElementById("login-button"),
+    ssoSeparator: document.getElementById("sso-separator"),
+    ssoButton: document.getElementById("sso-button"),
     showRegister: document.getElementById("show-register"),
     registerForm: document.getElementById("register-form"),
     registerName: document.getElementById("register-name"),
@@ -110,6 +112,34 @@
     dom.identityName.textContent = state.clientName ? `Cliente ${state.clientName}` : "Cliente";
   }
 
+  async function hasAgentSession() {
+    // "/" es la entrada única: quien ya tiene abierta una sesión de equipo
+    // (por ejemplo, tras iniciar sesión con SSO) va directo a la consola en
+    // vez de ver el chatbox. Con `fetch` liso, no con `api()`, para no
+    // disparar `showGate()` ante el 401 esperado de quien no es agente.
+    try {
+      const response = await fetch("/api/auth/me", { credentials: "same-origin" });
+      if (!response.ok) {
+        return false;
+      }
+      const data = await response.json();
+      return Boolean(data.agent);
+    } catch {
+      return false;
+    }
+  }
+
+  async function checkSso() {
+    try {
+      const info = await api("/api/auth/sso");
+      dom.ssoSeparator.hidden = !info.available;
+      dom.ssoButton.hidden = !info.available;
+    } catch {
+      dom.ssoSeparator.hidden = true;
+      dom.ssoButton.hidden = true;
+    }
+  }
+
   async function loadIdentity() {
     try {
       const data = await api("/api/contact/me");
@@ -139,7 +169,9 @@
     dom.loginError.hidden = true;
     dom.loginButton.disabled = true;
     try {
-      const data = await api("/api/contact/login", {
+      // Un solo formulario para todos: el servidor determina si el correo es
+      // de un agente o de un cliente, y a dónde corresponde entrar.
+      const data = await api("/api/session/login", {
         method: "POST",
         body: JSON.stringify({
           email: dom.loginEmail.value.trim(),
@@ -147,6 +179,10 @@
         }),
       });
       dom.loginPassword.value = "";
+      if (data.kind === "agent") {
+        window.location.href = data.redirect || "/console";
+        return;
+      }
       state.clientName = data.contact?.display_name || null;
       updateHeaderIdentity();
       showApp();
@@ -549,5 +585,13 @@
 
   autoGrow();
   updateSendButton();
-  loadIdentity();
+
+  (async () => {
+    if (await hasAgentSession()) {
+      window.location.href = "/console";
+      return;
+    }
+    await checkSso();
+    await loadIdentity();
+  })();
 })();

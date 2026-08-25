@@ -20,7 +20,7 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 
 from app import __version__
-from app.api import auth, console, contact_auth, webhooks, ws
+from app.api import attachments, auth, console, contact_auth, saml, session, webhooks, ws
 from app.channels.base import ChannelRegistry
 from app.config import get_settings
 from app.core.dispatcher import OutboxDispatcher
@@ -119,7 +119,10 @@ def create_app() -> FastAPI:
     application.include_router(ws.router)
     application.include_router(auth.router)
     application.include_router(contact_auth.router)
+    application.include_router(session.router)
+    application.include_router(saml.router)
     application.include_router(console.router)
+    application.include_router(attachments.router)
 
     if WEB_DIR.is_dir():
         application.mount(
@@ -139,9 +142,9 @@ def create_app() -> FastAPI:
             """
             return HTMLResponse(render_page("console.html"))
 
-    uploads_dir = Path(settings.uploads_dir)
-    uploads_dir.mkdir(parents=True, exist_ok=True)
-    application.mount("/uploads", StaticFiles(directory=uploads_dir), name="uploads")
+    # Los adjuntos NO se sirven como estáticos: cada descarga comprueba que
+    # quien la pide puede ver la conversación que contiene el fichero.
+    Path(settings.uploads_dir).mkdir(parents=True, exist_ok=True)
 
     @application.get("/health", tags=["operación"])
     async def health() -> dict[str, Any]:

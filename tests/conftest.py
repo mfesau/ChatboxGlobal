@@ -35,6 +35,13 @@ for _isolated in (
     "MICROSOFT_APP_ID",
     "MICROSOFT_APP_PASSWORD",
     "MICROSOFT_APP_TENANT_ID",
+    "SAML_IDP_ENTITY_ID",
+    "SAML_IDP_SSO_URL",
+    "SAML_IDP_X509_CERT",
+    "SAML_SP_ENTITY_ID",
+    "FACEBOOK_APP_SECRET",
+    "FACEBOOK_VERIFY_TOKEN",
+    "SECRET_ENCRYPTION_KEY",
 ):
     os.environ[_isolated] = ""
 

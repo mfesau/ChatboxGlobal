@@ -8,6 +8,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field, field_validator
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import (
     SESSION_COOKIE,
@@ -16,9 +17,11 @@ from app.api.deps import (
     SessionDep,
     SettingsDep,
 )
+from app.config import Settings
 from app.core.hub import hub, presence_topic
 from app.core.security import hash_password, hash_token, new_session_token, verify_password
 from app.db import repositories as repo
+from app.db.models import Agent, Tenant
 from app.logging_setup import get_logger
 
 log = get_logger(__name__)
@@ -75,6 +78,37 @@ async def login(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Credenciales no válidas"
         )
 
+    await issue_session(
+        agent=agent, tenant=tenant, request=request, response=response,
+        session=session, settings=settings,
+    )
+    await repo.record_audit(
+        session,
+        tenant_id=tenant.id,
+        actor=f"agent:{agent.email}",
+        action="login",
+        subject_type="agent",
+        subject_id=str(agent.id),
+    )
+    log.info("login_ok", agent=agent.email, role=agent.role)
+    return {"agent": _serialize(agent), "expires_in_s": int(SESSION_TTL.total_seconds())}
+
+
+async def issue_session(
+    *,
+    agent: Agent,
+    tenant: Tenant,
+    request: Request,
+    response: Response,
+    session: AsyncSession,
+    settings: Settings,
+) -> None:
+    """Abre una sesión de agente y la deja en una cookie ``HttpOnly``.
+
+    Común al login por contraseña y al inicio de sesión único (SAML): ambos
+    terminan en el mismo tipo de sesión, así que el resto de la consola no
+    distingue por qué puerta entró cada agente.
+    """
     token = new_session_token()
     await repo.open_agent_session(
         session,
@@ -85,15 +119,6 @@ async def login(
         user_agent=request.headers.get("user-agent"),
     )
     await repo.touch_agent_presence(session, agent.id, "available")
-    await repo.record_audit(
-        session,
-        tenant_id=tenant.id,
-        actor=f"agent:{agent.email}",
-        action="login",
-        subject_type="agent",
-        subject_id=str(agent.id),
-    )
-
     response.set_cookie(
         SESSION_COOKIE,
         token,
@@ -109,8 +134,6 @@ async def login(
         presence_topic(tenant.slug),
         {"type": "agent_online", "agent_id": str(agent.id), "agent": agent.label},
     )
-    log.info("login_ok", agent=agent.email, role=agent.role)
-    return {"agent": _serialize(agent), "expires_in_s": int(SESSION_TTL.total_seconds())}
 
 
 @router.post("/logout")
@@ -124,6 +147,15 @@ async def logout(
         await repo.touch_agent_presence(session, principal.agent.id, "offline")
     response.delete_cookie(SESSION_COOKIE, path="/")
     return {"status": "ok"}
+
+
+@router.get("/sso")
+async def sso_status(settings: SettingsDep) -> dict[str, bool]:
+    """Le dice a la pantalla de acceso si debe mostrar el botón de SSO.
+
+    Sin autenticar a propósito: hace falta saberlo antes de iniciar sesión.
+    """
+    return {"available": settings.saml_enabled}
 
 
 @router.get("/me")

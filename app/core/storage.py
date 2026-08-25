@@ -1,9 +1,10 @@
 """Almacenamiento local de las imágenes subidas desde el chatbox y la consola.
 
 Sin proveedor de objetos externo: el fichero se guarda en disco, bajo un
-directorio propio por inquilino, con un nombre aleatorio que hace de control de
-acceso — igual de simple que servir un enlace de WhatsApp o de Teams, pero sin
-depender de esos proveedores.
+directorio propio por inquilino, con un nombre aleatorio que evita colisiones y
+adivinanzas. El control de acceso NO lo da ese nombre, sino el enrutador de
+``app/api/attachments.py``, que comprueba en cada descarga si quien la pide
+puede ver la conversación que contiene el adjunto.
 """
 
 from __future__ import annotations
@@ -51,7 +52,8 @@ async def save_upload(file: UploadFile, *, namespace: str, settings: Settings) -
         )
 
     # Nombre aleatorio: evita colisiones, ataques de recorrido de ruta y que el
-    # nombre original del cliente filtre información en la URL pública.
+    # nombre original del cliente aparezca en la URL. La autorización se aplica
+    # al descargar, no aquí.
     stored_name = f"{uuid.uuid4().hex}{extension}"
     directory = Path(settings.uploads_dir) / namespace
     directory.mkdir(parents=True, exist_ok=True)

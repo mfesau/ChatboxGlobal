@@ -8,30 +8,7 @@
     <link rel="stylesheet" href="/static/console.css?v=__ASSET_VERSION__" />
   </head>
   <body class="console-body">
-    <!-- Acceso ------------------------------------------------------------- -->
-    <div class="gate" id="gate" hidden>
-      <form class="gate__card" id="login-form">
-        <h1 id="login-title">Consola del equipo</h1>
-        <p class="console__muted">
-          Acceda con las credenciales que le facilitó su supervisor.
-        </p>
-        <label>
-          <span>Correo</span>
-          <input type="email" id="login-email" autocomplete="username" required />
-        </label>
-        <label>
-          <span>Contraseña</span>
-          <input
-            type="password"
-            id="login-password"
-            autocomplete="current-password"
-            required
-          />
-        </label>
-        <p class="gate__error" id="login-error" hidden></p>
-        <button type="submit" class="send-button" id="login-button">Entrar</button>
-      </form>
-    </div>
+    <!-- Sin acceso propio: "/" es la entrada única (ver console.js, showGate()). -->
 
     <!-- Aplicación --------------------------------------------------------- -->
     <div class="console" id="app" hidden>
@@ -42,6 +19,9 @@
               <strong id="who">—</strong>
               <p class="console__muted" id="who-role"></p>
             </div>
+            <button type="button" class="ghost-button" id="contacts-button" hidden>
+              Contactos
+            </button>
             <button type="button" class="ghost-button" id="logout-button">Salir</button>
           </div>
 
@@ -252,37 +232,20 @@
               <label class="panel__field"><span>Contraseña inicial</span><input type="password" id="new-user-password" minlength="8" autocomplete="new-password" required /></label>
               <button type="submit" class="send-button">Crear usuario</button>
             </form>
-            <form class="panel" id="reset-password-form">
-              <h3>Cambiar contraseña</h3>
-              <label class="panel__field"><span>Usuario</span><select id="password-user" required></select></label>
-              <label class="panel__field"><span>Nueva contraseña</span><input type="password" id="reset-password" minlength="8" autocomplete="new-password" required /></label>
-              <button type="submit" class="send-button">Guardar contraseña</button>
-            </form>
-          </section>
-          <section class="admin-grid">
             <form class="panel" id="create-department-form">
               <h3>Departamentos</h3>
               <label class="panel__field"><span>Nombre</span><input type="text" id="new-department-name" maxlength="120" required /></label>
               <button type="submit" class="send-button">Crear departamento</button>
               <ul class="panel__list" id="department-list"></ul>
             </form>
-            <form class="panel" id="agent-departments-form">
-              <h3>Departamentos de una persona</h3>
-              <p class="console__muted">
-                El principal se fija al crear la cuenta; aquí se cambia o se
-                otorga acceso a otros, además del propio.
-              </p>
-              <label class="panel__field"><span>Persona</span><select id="departments-user" required></select></label>
-              <label class="panel__field"><span>Principal</span><select id="departments-primary"><option value="">Sin departamento</option></select></label>
-              <label class="panel__field">
-                <span>Adicionales</span>
-                <select id="departments-extra" multiple></select>
-              </label>
-              <button type="submit" class="send-button">Guardar departamentos</button>
-            </form>
           </section>
           <section class="panel">
             <h3>Usuarios registrados</h3>
+            <p class="console__muted">
+              El nombre, el departamento principal, los adicionales y la
+              contraseña se guardan juntos con un solo «Guardar» por fila.
+              Dejar la contraseña en blanco la conserva sin cambios.
+            </p>
             <div class="table-scroll">
               <table class="data-table" id="admin-users-table">
                 <thead>
@@ -290,6 +253,69 @@
                     <th>Nombre</th>
                     <th>Correo</th>
                     <th>Rol</th>
+                    <th>Estado</th>
+                    <th>Departamento principal</th>
+                    <th>Adicionales</th>
+                    <th>Nueva contraseña</th>
+                    <th>Acciones</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </section>
+          <section class="panel">
+            <h3>Cuentas de canal</h3>
+            <p class="console__muted">
+              Conecte tantos números de WhatsApp, páginas de Facebook o
+              equipos de Teams como necesite. Con departamento asignado, una
+              conversación nueva de esa cuenta cae directo en su cola, sin que
+              nadie tenga que derivarla a mano; sin departamento, sigue en la
+              cola común como hasta ahora.
+            </p>
+            <form id="create-channel-account-form">
+              <label class="panel__field">
+                <span>Canal</span>
+                <select id="new-account-channel">
+                  <option value="whatsapp">WhatsApp</option>
+                  <option value="facebook">Facebook</option>
+                  <option value="msbot">Teams</option>
+                </select>
+              </label>
+              <label class="panel__field">
+                <span>Identificador</span>
+                <input type="text" id="new-account-external-id" maxlength="128" required />
+              </label>
+              <label class="panel__field">
+                <span>Nombre visible</span>
+                <input type="text" id="new-account-name" maxlength="160" />
+              </label>
+              <label class="panel__field">
+                <span>Departamento</span>
+                <select id="new-account-department"><option value="">Sin departamento</option></select>
+              </label>
+              <label class="panel__field">
+                <span>Token de acceso</span>
+                <input type="password" id="new-account-token" maxlength="4096" autocomplete="off" />
+              </label>
+              <button type="submit" class="send-button">Conectar cuenta</button>
+            </form>
+            <p class="console__muted" id="new-account-hint">
+              El identificador es el <code>phone_number_id</code> en WhatsApp,
+              el id de la página en Facebook, o el id del equipo en Teams (se
+              ve solo tras el primer mensaje de ese equipo). El token es
+              obligatorio en Facebook; en WhatsApp, si falta, se usa el token
+              global de <code>.env</code>; en Teams no hace falta ninguno.
+            </p>
+            <div class="table-scroll">
+              <table class="data-table" id="channel-accounts-table">
+                <thead>
+                  <tr>
+                    <th>Canal</th>
+                    <th>Identificador</th>
+                    <th>Nombre</th>
+                    <th>Departamento</th>
+                    <th>Nuevo token</th>
                     <th>Estado</th>
                     <th>Acciones</th>
                   </tr>
@@ -328,6 +354,73 @@
           <section>
             <h3>Últimas derivaciones</h3>
             <ol class="panel__timeline" id="transfer-activity"></ol>
+          </section>
+        </div>
+      </div>
+
+      <!-- Directorio de contactos: solo supervisión y administración ------ -->
+      <div class="overlay" id="contacts-panel" hidden>
+        <div class="overlay__card">
+          <header class="overlay__header">
+            <h2>Contactos</h2>
+            <button type="button" class="ghost-button" id="contacts-close">Cerrar</button>
+          </header>
+
+          <label class="panel__field">
+            <span>Buscar</span>
+            <input
+              type="search"
+              id="contacts-search"
+              placeholder="Nombre, teléfono o correo"
+            />
+          </label>
+
+          <div class="table-scroll">
+            <table class="data-table" id="contacts-table">
+              <thead>
+                <tr>
+                  <th>Nombre</th>
+                  <th>Teléfono</th>
+                  <th>Correo</th>
+                  <th>Conversaciones</th>
+                  <th>Última actividad</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+
+          <section class="panel" id="contact-profile" hidden>
+            <h3 id="contact-profile-title">Ficha del contacto</h3>
+            <label class="panel__field">
+              <span>Nombre</span>
+              <input type="text" id="profile-name" maxlength="160" />
+            </label>
+            <label class="panel__field">
+              <span>Teléfono</span>
+              <input type="text" id="profile-phone" maxlength="32" />
+            </label>
+            <label class="panel__field">
+              <span>Correo</span>
+              <input type="email" id="profile-email" maxlength="254" />
+            </label>
+            <button type="button" class="send-button" id="profile-save">Guardar</button>
+            <p class="gate__error" id="profile-error" hidden></p>
+
+            <h4>Comentarios</h4>
+            <ul class="panel__list" id="profile-comments"></ul>
+            <form id="profile-comment-form" class="panel__inline-form">
+              <textarea
+                id="profile-comment-body"
+                rows="2"
+                placeholder="Añadir un comentario…"
+              ></textarea>
+              <button type="submit" class="ghost-button">Guardar comentario</button>
+            </form>
+
+            <h4>Conversaciones</h4>
+            <ul class="panel__list" id="profile-conversations"></ul>
           </section>
         </div>
       </div>

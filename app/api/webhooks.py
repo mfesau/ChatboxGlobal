@@ -15,6 +15,7 @@ from fastapi import APIRouter, HTTPException, Request, Response, status
 
 from app.api.deps import ContactDep, OrchestratorDep, SettingsDep
 from app.channels.base import SignatureError
+from app.channels.facebook import FacebookAdapter
 from app.channels.whatsapp import WhatsAppAdapter
 from app.core.envelope import ChannelKind
 from app.logging_setup import get_logger
@@ -76,6 +77,38 @@ async def whatsapp_webhook(
         )
     except SignatureError as exc:
         log.warning("whatsapp_signature_rejected", error=str(exc))
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+    return {"status": "ok", **result}
+
+
+# --------------------------------------------------------------------------- #
+# Facebook Messenger
+# --------------------------------------------------------------------------- #
+@router.get("/webhooks/facebook", include_in_schema=False)
+async def verify_facebook(request: Request, orchestrator: OrchestratorDep) -> Response:
+    """Responde al reto de suscripción de Meta."""
+    adapter = orchestrator.registry.get(ChannelKind.FACEBOOK)
+    assert isinstance(adapter, FacebookAdapter)
+    try:
+        challenge = adapter.verify_subscription(dict(request.query_params))
+    except SignatureError as exc:
+        log.warning("facebook_verification_rejected", error=str(exc))
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    return Response(content=challenge, media_type="text/plain")
+
+
+@router.post("/webhooks/facebook")
+async def facebook_webhook(request: Request, orchestrator: OrchestratorDep) -> dict[str, Any]:
+    payload, raw = await _read_json(request)
+    try:
+        result = await orchestrator.handle_event(
+            ChannelKind.FACEBOOK,
+            payload=payload,
+            headers=request.headers,
+            raw_body=raw,
+        )
+    except SignatureError as exc:
+        log.warning("facebook_signature_rejected", error=str(exc))
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
     return {"status": "ok", **result}
 

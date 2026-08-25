@@ -43,24 +43,6 @@ CREATE TABLE audit_log (
 );
 CREATE INDEX ix_audit_tenant_time ON audit_log (tenant_id, created_at);
 
--- channel_accounts
-CREATE TABLE channel_accounts (
-	id UUID NOT NULL, 
-	tenant_id UUID NOT NULL, 
-	channel VARCHAR(32) NOT NULL, 
-	external_id VARCHAR(128) NOT NULL, 
-	display_name VARCHAR(160), 
-	is_active BOOLEAN NOT NULL, 
-	config JSONB NOT NULL, 
-	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
-	updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
-	PRIMARY KEY (id), 
-	CONSTRAINT uq_channel_account_external UNIQUE (channel, external_id), 
-	FOREIGN KEY(tenant_id) REFERENCES tenants (id) ON DELETE CASCADE
-);
-CREATE INDEX ix_channel_accounts_created_at ON channel_accounts (created_at);
-CREATE INDEX ix_channel_accounts_tenant ON channel_accounts (tenant_id, channel);
-
 -- contacts
 CREATE TABLE contacts (
 	id UUID NOT NULL, 
@@ -117,6 +99,28 @@ CREATE TABLE agents (
 );
 CREATE INDEX ix_agents_created_at ON agents (created_at);
 CREATE INDEX ix_agents_tenant_role ON agents (tenant_id, role);
+
+-- channel_accounts
+CREATE TABLE channel_accounts (
+	id UUID NOT NULL, 
+	tenant_id UUID NOT NULL, 
+	channel VARCHAR(32) NOT NULL, 
+	external_id VARCHAR(128) NOT NULL, 
+	display_name VARCHAR(160), 
+	is_active BOOLEAN NOT NULL, 
+	department_id UUID, 
+	config JSONB NOT NULL, 
+	credentials_ciphertext TEXT, 
+	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
+	updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
+	PRIMARY KEY (id), 
+	CONSTRAINT uq_channel_account_external UNIQUE (channel, external_id), 
+	FOREIGN KEY(tenant_id) REFERENCES tenants (id) ON DELETE CASCADE, 
+	FOREIGN KEY(department_id) REFERENCES departments (id) ON DELETE SET NULL
+);
+CREATE INDEX ix_channel_accounts_created_at ON channel_accounts (created_at);
+CREATE INDEX ix_channel_accounts_department_id ON channel_accounts (department_id);
+CREATE INDEX ix_channel_accounts_tenant ON channel_accounts (tenant_id, channel);
 
 -- contact_identities
 CREATE TABLE contact_identities (

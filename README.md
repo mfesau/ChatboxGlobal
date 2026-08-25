@@ -1,13 +1,16 @@
 # Chat de equipo en red local — capa central de orquestación
 
 Servicio que reúne en **un único punto de entrada** todos los chats —WhatsApp,
-Microsoft Teams y el chatbox web propio—, los normaliza a un formato interno
-común, les aplica lógica de negocio y de IA, y permite **derivarlos entre
-compañeros conservando el historial íntegro**.
+Facebook Messenger, Microsoft Teams y el chatbox web propio—, los normaliza a
+un formato interno común, les aplica lógica de negocio y de IA, y permite
+**derivarlos entre compañeros conservando el historial íntegro**. De cada
+canal se puede conectar tantas cuentas como se quiera —varios números, varias
+páginas, varios equipos—, cada una con su propio departamento de destino.
 
 Cada agente ve la cola común y su propia cartera. La supervisión ve todo. Se
-despliega en la red interna: las credenciales son locales y no hace falta un
-proveedor de identidad externo.
+despliega en la red interna: las credenciales locales bastan por sí solas, sin
+depender de ningún proveedor externo; el inicio de sesión único (SAML) es
+opcional, para quien lo quiera además de eso.
 
 ---
 
@@ -15,6 +18,7 @@ proveedor de identidad externo.
 
 ```
    WhatsApp ─┐
+   Facebook ─┤
    Teams ────┼──▶  ┌──────────────────┐   nadie asignado
    Chatbox ──┘     │   COLA COMÚN     │◀────────────────────┐
                    │ punto único de   │                     │
@@ -51,9 +55,11 @@ confirmar que existe ya revelaría información sobre la cartera de un compañer
 
 ### Departamentos
 
-Una conversación nace sin departamento —como siempre— y sigue visible para
-cualquiera hasta que alguien la deriva explícitamente a uno; no hay enrutado
-automático por canal. A partir de ahí, solo la ve quien atiende ese
+Una conversación recibe su departamento por una de dos vías: lo hereda de la
+cuenta de canal por la que entró —cada número de WhatsApp, página de Facebook o
+bot de Teams puede llevar el suyo—, o se lo asigna quien la deriva. Una cuenta
+de canal sin departamento deja el hilo en la cola común, visible para
+cualquiera. En cuanto tiene departamento, solo lo ve quien atiende ese
 departamento: el suyo por defecto, más los que el **administrador** le
 otorgue. Supervisión y administración no tienen esa restricción. Derivar a un
 departamento reutiliza el mismo panel "Derivar a un compañero": basta elegir
@@ -221,15 +227,38 @@ todas las interfaces.
 
 ### Paso 4 — acceso del equipo
 
+Una sola dirección para todos: `http://192.168.1.50:8000/`. El mismo
+formulario de correo y contraseña sirve tanto para un cliente como para
+alguien del equipo — el servidor determina cuál es por la cuenta que
+encuentra, y lo manda a la consola o al chatbox según corresponda. `/console`
+ya no es una dirección de acceso aparte: solo se llega ahí tras iniciar
+sesión, y quien la visite sin sesión de agente vuelve a `/` automáticamente.
+
 | Quién | Dirección |
 |---|---|
-| Clientes (chatbox) | `http://192.168.1.50:8000/` |
-| Agentes y supervisión | `http://192.168.1.50:8000/console` |
+| Cualquiera (clientes, agentes, supervisión) | `http://192.168.1.50:8000/` |
 | Documentación de la API | `http://192.168.1.50:8000/docs` |
 
 ---
 
 ## 5. La consola de equipo
+
+**«/» es la entrada única** de toda la aplicación (`POST /api/session/login`):
+un solo formulario de correo y contraseña, sin que quien lo llena tenga que
+elegir de antemano si es cliente o del equipo. El servidor prueba primero si
+la cuenta es de un agente y, si no, si es de un cliente, y deja la sesión que
+corresponde — a un agente lo manda a `/console`; a un cliente lo deja en el
+chatbox, ahí mismo. `/console` ya no tiene login propio: sin sesión de agente
+válida, redirige a `/`; con una sesión de agente ya abierta, `/` redirige para
+el otro lado, directo a `/console`.
+
+Además del formulario, está el botón **«Iniciar sesión con SSO»**, que solo
+aparece cuando hay un proveedor de identidad configurado (ver «Inicio de
+sesión único» en la sección 6) — es exclusivo para el equipo, así que
+siempre entrega en `/console`. Quien entra por SSO por primera vez con un
+correo que todavía no tiene cuenta se da de alta automáticamente como agente
+—nunca con más permisos, aunque el proveedor lo marque como alguien
+importante—; quien ya tenía cuenta conserva su rol tal cual estaba.
 
 Tres pestañas, con su contador en vivo:
 
@@ -254,6 +283,14 @@ El panel derecho reúne el trabajo en equipo:
   comentarios con autor y fecha. Cualquier agente con acceso a la conversación
   puede consultarla; editarla queda reservado a supervisión y administración.
 
+El botón **«Contactos»**, visible solo para supervisión y administración,
+abre el directorio completo de clientes del inquilino: nombre, teléfono,
+correo, cantidad de conversaciones y última actividad, con una búsqueda por
+cualquiera de esos tres primeros datos. La ficha de cada contacto reúne lo
+mismo que el panel «Datos del contacto» —edición y comentarios— más el
+listado de **todas sus conversaciones**, en cualquier canal; al elegir una,
+la consola la abre directamente y cierra el directorio.
+
 El compositor admite adjuntar una imagen (📎), tanto en el chatbox del cliente
 como en la respuesta del agente; se sube a `/uploads` y se muestra como burbuja
 de imagen en ambos lados.
@@ -266,13 +303,22 @@ El **panel de supervisión** muestra la carga abierta por agente, la cola común
 como fila aparte, los mensajes por canal y las últimas derivaciones con su motivo.
 
 El **panel de administración** («Administrar usuarios», solo para `admin`)
-reúne, además de las cuentas del equipo: el texto de la respuesta automática
-del asistente, la creación de departamentos, y el departamento principal más
-los adicionales de cada persona. La tabla de usuarios permite editar el nombre
-visible y desactivar una cuenta —no se borra la fila: sigue apareciendo en el
-historial de derivaciones, notas y auditoría, solo que ya no puede iniciar
-sesión— y reactivarla más tarde. No se puede desactivar la propia cuenta ni al
-único administrador activo que quede.
+reúne el texto de la respuesta automática del asistente, la creación de
+cuentas, la creación de departamentos y la tabla «Usuarios registrados».
+Esa tabla concentra toda la configuración por persona en una sola fila —nombre,
+departamento principal, departamentos adicionales y una nueva contraseña
+opcional— que se guarda de una vez con un solo botón «Guardar»; dejar la
+contraseña en blanco la conserva sin cambios. El botón «Desactivar»/«Reactivar»
+no borra la fila: sigue apareciendo en el historial de derivaciones, notas y
+auditoría, solo que ya no puede iniciar sesión. No se puede desactivar la
+propia cuenta ni al único administrador activo que quede.
+
+La sección **«Cuentas de canal»** conecta tantos números de WhatsApp, páginas
+de Facebook o equipos de Teams como se necesite, cada uno con su propio
+departamento: una conversación nueva de esa cuenta cae directo en esa cola,
+sin que nadie tenga que derivarla a mano. Una cuenta sin departamento sigue
+en la cola común, igual que siempre. Ver «Varias cuentas por canal» en la
+sección 6 para el detalle de credenciales por canal.
 
 Las novedades llegan por WebSocket: cuando alguien le deriva una conversación,
 aparece en su bandeja sin recargar la página. Los enlaces al CSS y al JavaScript
@@ -282,6 +328,40 @@ que tras una actualización nadie se queda con una versión antigua en caché.
 ---
 
 ## 6. Configuración de los canales
+
+### Varias cuentas por canal, cada una con su departamento
+
+WhatsApp, Facebook y Teams admiten **tantas cuentas como se quiera** —varios
+números, varias páginas, varios equipos—, cada una conectada desde «Cuentas
+de canal» en el panel de administración. Con departamento asignado, una
+conversación nueva de esa cuenta cae directo en esa cola; sin departamento,
+sigue en la cola común, exactamente como si esta función no existiera.
+
+El identificador que pide el formulario es, según el canal: el
+`phone_number_id` en WhatsApp, el id de la página en Facebook, o el id del
+equipo en Teams —este último no se conoce de antemano, así que la cuenta se
+crea sola con el primer mensaje que llegue de ese equipo; luego se le asigna
+un departamento desde la misma pantalla—.
+
+Las credenciales propias de una cuenta (el token de acceso) se guardan
+cifradas, nunca en claro: hace falta `SECRET_ENCRYPTION_KEY` en `.env` antes
+de poder cargar una. Genérela una sola vez con:
+
+```
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+```
+
+Cambiarla vuelve ilegibles las credenciales ya guardadas —no la clave global
+de WhatsApp en `.env`, que no pasa por aquí—, así que consérvela en un lugar
+seguro. WhatsApp y Facebook difieren en si el token es obligatorio por cuenta:
+
+* **WhatsApp**: opcional. Si falta, se usa el `WHATSAPP_ACCESS_TOKEN` global
+  de más abajo — cubre el caso común de un solo token de sistema para varios
+  números de la misma cuenta de WhatsApp Business.
+* **Facebook**: obligatorio. Cada página tiene su propio token; no hay uno
+  "por defecto" razonable.
+* **Teams**: no aplica. Un solo bot de Azure ya puede estar en muchos equipos;
+  no hace falta una credencial por equipo.
 
 ### WhatsApp Cloud API
 
@@ -298,25 +378,85 @@ en lugar de aceptarla sin verificar.
 Meta exige una dirección pública con TLS: el webhook no alcanza una IP privada.
 Publique el servicio tras un proxy inverso con certificado, o use un túnel.
 
+**Antivirus o proxy con inspección TLS (p. ej. Kaspersky):** si el contenedor
+falla al llamar a `graph.facebook.com` con `certificate verify failed:
+self-signed certificate in certificate chain`, es porque algo en la red
+reemplaza el certificado de Meta por uno propio para revisar el tráfico
+cifrado. La solución no es desactivar la verificación: hay que sumar esa raíz
+al conjunto de confianza del contenedor. Exporte el certificado raíz desde el
+almacén de Windows (`Cert:\LocalMachine\Root`, o el que corresponda al
+antivirus) en formato PEM y colóquelo en `docker/certs/`; el `Dockerfile` lo
+suma al paquete de `certifi` y expone `SSL_CERT_FILE` con el resultado, así
+que toda llamada saliente —WhatsApp, IA, Microsoft— queda cubierta sin tocar
+el código. La carpeta puede quedar vacía en una red sin inspección TLS: el
+resultado es entonces idéntico al paquete normal de `certifi`.
+
+### Facebook Messenger
+
+1. En la misma aplicación de Meta for Developers (o en una nueva), añada el
+   producto Messenger.
+2. Registre el webhook en `https://SU_DOMINIO/webhooks/facebook` con el valor
+   de `FACEBOOK_VERIFY_TOKEN` y suscríbase a los campos `messages`,
+   `messaging_postbacks`.
+3. Complete `FACEBOOK_APP_SECRET` en `.env` — es lo único común a todas las
+   páginas; el token de cada página se carga por separado desde «Cuentas de
+   canal» (ver más arriba), porque ahí sí es obligatorio, no hay uno global.
+
+Misma disciplina de firma que WhatsApp (`X-Hub-Signature-256` sobre el cuerpo
+sin modificar) y la misma exigencia de una dirección pública con TLS.
+
 ### Microsoft Bot Framework
 
 1. Cree un recurso *Azure Bot* con *Messaging endpoint*
    `https://SU_DOMINIO/api/messages`.
 2. Complete `MICROSOFT_APP_ID` y `MICROSOFT_APP_PASSWORD`; en modo
    `SingleTenant`, también `MICROSOFT_APP_TENANT_ID`.
+3. Instale el bot en tantos equipos de Microsoft Teams como necesite — es el
+   mismo bot para todos, no hace falta un registro por equipo. Cada equipo
+   aparece solo en «Cuentas de canal» tras su primer mensaje; desde ahí se le
+   asigna un departamento.
 
 Cada llamada se valida contra los metadatos OpenID del servicio de canales
 —firma, audiencia y emisor—. Las respuestas salen por la Connector API con un
 token de Microsoft Entra ID que el adaptador renueva por su cuenta. Frente al
 Bot Framework Emulator, ponga `MICROSOFT_VALIDATE_JWT=false`.
 
+### Inicio de sesión único (SAML 2.0 / Microsoft Entra ID)
+
+Solo para la consola del equipo — el chatbox de clientes no cambia. Convive
+con el correo y contraseña de siempre: mientras falte cualquiera de los tres
+datos del IdP, el botón queda oculto y nada más cambia.
+
+1. En Microsoft Entra ID: dé de alta una *aplicación empresarial* con inicio
+   de sesión único SAML. Como *Identificador de entidad* y *URL de respuesta
+   (ACS)*, use respectivamente `https://SU_DOMINIO/saml/metadata` y
+   `https://SU_DOMINIO/saml/acs` — o cárguelos a partir de los metadatos que
+   sirve el propio servicio en esa primera URL, una vez configurado.
+2. Complete `SAML_IDP_ENTITY_ID` (Entra ID Identifier), `SAML_IDP_SSO_URL`
+   (Login URL) y `SAML_IDP_X509_CERT` (el certificado en Base64, sin las
+   líneas `-----BEGIN/END CERTIFICATE-----`) con los datos de esa aplicación.
+3. En los atributos y notificaciones de la aplicación, asegúrese de que viaje
+   el correo del usuario — como NameID en formato correo, o como el reclamo
+   `.../claims/emailaddress` — y opcionalmente el nombre visible
+   (`.../claims/displayname`).
+
+Quien entra por primera vez con un correo sin cuenta previa se da de alta
+automáticamente como agente, con el rol básico y sin contraseña propia
+(`password_hash` queda `NULL`: esa cuenta solo entra por SSO, a menos que
+administración le fije una contraseña aparte). Una cuenta desactivada no
+revive por este camino: sigue rechazada aunque el IdP la autentique.
+`GET /saml/metadata` y `GET /saml/login` responden 404 mientras falte
+configurar el IdP, así que no hace falta ningún interruptor aparte para
+desactivar la función.
+
 ### Chatbox web
 
 No requiere configuración y funciona íntegramente dentro de la red local. El
 login es obligatorio: quien visita `/` debe registrarse con correo y
-contraseña (`POST /api/contact/register`) o iniciar sesión (`POST
-/api/contact/login`) antes de poder escribir; la sesión viaja en la cookie
-`chatbox_contact_session`, independiente de la cookie de la consola.
+contraseña (`POST /api/contact/register`) o iniciar sesión por el formulario
+único (`POST /api/session/login`, ver sección 5) antes de poder escribir; la
+sesión viaja en la cookie `chatbox_contact_session`, independiente de la
+cookie de la consola.
 
 El encabezado muestra «Cliente `<nombre>`» mientras atiende el asistente
 automático, y el nombre del agente o supervisor en cuanto alguien toma la
@@ -340,6 +480,33 @@ conversación —sin recargar la página, por WebSocket—.
 | Acceso a la consola o al chatbox sin credenciales | El login es obligatorio en todo entorno, también en `dev`; no existe acceso anónimo ni siquiera sin `ADMIN_API_KEY` configurada |
 | Un fallo en la lógica de negocio deja al usuario sin respuesta | La cadena aísla cada handler y `FallbackHandler` garantiza contestación |
 | Acuses de recibo desordenados | El estado del mensaje solo avanza, nunca retrocede |
+| El volumen de Postgres desaparece (ya ocurrió varias veces sin causa identificada) | Respaldo periódico con `pg_dump`, ver más abajo |
+| Alguien con acceso al IdP se gana permisos de supervisión o administración | El alta automática por SSO siempre entra con el rol básico de agente; el ascenso de rol es un paso aparte, manual, desde la consola |
+| Un enlace de SSO manipulado redirige tras el login a un sitio ajeno | `next`/`RelayState` solo admite una ruta propia (`/algo`); cualquier otro valor cae a `/console` |
+| Robo de la base expone los tokens de WhatsApp/Facebook de cada cuenta | Se guardan cifrados (`SECRET_ENCRYPTION_KEY`), nunca en claro; los adaptadores no acceden a la base directamente |
+
+### Respaldo de la base de datos
+
+`scripts/backup_db.ps1` ejecuta `pg_dump --clean --if-exists` dentro de
+`chatbox-postgres` y escribe el volcado en `backups/`, una carpeta común del
+proyecto montada en el contenedor (`docker-compose.yml`) — no un volumen con
+nombre. La diferencia importa: `docker compose down -v` borra los volúmenes
+con nombre pero nunca una carpeta del disco, así que los respaldos sobreviven
+aunque el volumen de datos desaparezca por completo, que es exactamente lo que
+ya pasó más de una vez en este proyecto sin que se identificara la causa.
+
+- **Alta de la tarea programada** (una sola vez):
+  `powershell -File scripts\register_backup_task.ps1` — crea la tarea
+  «ChatboxDbBackup» del Programador de tareas de Windows, cada 4 horas por
+  defecto (`-IntervalHours`), reteniendo 14 días de respaldos por defecto
+  (`-RetentionDays`). Corre con la cuenta con dominio del usuario actual
+  (`Interactive`): sin eso, la tarea no alcanza el Docker Desktop de la
+  sesión y falla en silencio.
+- **Respaldo manual**: `powershell -File scripts\backup_db.ps1`.
+- **Restaurar**: `powershell -File scripts\restore_db.ps1 -Latest` (o
+  `-BackupFile <nombre.sql>` para uno puntual). Pide confirmación porque
+  sobrescribe la base actual; `-Force` la omite.
+- **Quitar la tarea**: `Unregister-ScheduledTask -TaskName ChatboxDbBackup`.
 
 ---
 
@@ -459,6 +626,8 @@ notas internas y panel de supervisión.
 |---|---|---|
 | `GET` | `/webhooks/whatsapp` | Reto de suscripción de Meta |
 | `POST` | `/webhooks/whatsapp` | Mensajes y acuses de WhatsApp |
+| `GET` | `/webhooks/facebook` | Reto de suscripción de Meta (Messenger) |
+| `POST` | `/webhooks/facebook` | Mensajes y acuses de Facebook Messenger |
 | `POST` | `/api/messages` | *Activities* del Bot Framework |
 | `POST` | `/api/web/messages` | Mensaje del chatbox por REST |
 | `POST` | `/webhooks/{canal}` | Ruta genérica para canales nuevos |
@@ -469,10 +638,15 @@ notas internas y panel de supervisión.
 
 | Método | Ruta | Uso |
 |---|---|---|
-| `POST` | `/api/auth/login` | Entrada del agente; deja la cookie de sesión |
+| `POST` | `/api/session/login` | **Login unificado** (formulario de «/»): agente o cliente, según la cuenta |
+| `POST` | `/api/auth/login` | Entrada del agente por su cuenta, sin pasar por el login unificado |
 | `POST` | `/api/auth/logout` | Cierre y revocación de la sesión |
 | `GET` | `/api/auth/me` | Identidad y rol efectivos |
+| `GET` | `/api/auth/sso` | Si hay que mostrar el botón de inicio de sesión único |
 | `POST` | `/api/auth/presence` | Disponibilidad: `available`, `away`, `offline` |
+| `GET` | `/saml/metadata` | Metadatos del SP, para darlos de alta en el IdP (404 sin configurar) |
+| `GET` | `/saml/login` | Arranca el inicio de sesión único, redirige al IdP (404 sin configurar) |
+| `POST` | `/saml/acs` | Recibe la aserción del IdP y abre la sesión (404 sin configurar) |
 
 ### Cuenta del chatbox
 
@@ -507,6 +681,10 @@ notas internas y panel de supervisión.
 | `GET` | `/api/conversations/{id}/contact` | Ficha del contacto y su historial de comentarios |
 | `PATCH` | `/api/conversations/{id}/contact` | Edita nombre, teléfono o correo (solo supervisión/administración) |
 | `POST` | `/api/conversations/{id}/contact/comments` | Añade un comentario (solo supervisión/administración) |
+| `GET` | `/api/contacts` | Directorio de clientes, con búsqueda (solo supervisión/administración) |
+| `GET` | `/api/contacts/{id}` | Ficha completa: datos, comentarios y todas sus conversaciones (solo supervisión/administración) |
+| `PATCH` | `/api/contacts/{id}` | Edita nombre, teléfono o correo desde el directorio (solo supervisión/administración) |
+| `POST` | `/api/contacts/{id}/comments` | Añade un comentario desde el directorio (solo supervisión/administración) |
 | `POST` | `/api/uploads` | Sube una imagen para adjuntarla a la próxima respuesta |
 | `GET` | `/api/agents` | Directorio del equipo |
 | `POST` | `/api/agents` | Alta de agente, rol y departamento principal (solo administración) |
@@ -516,6 +694,9 @@ notas internas y panel de supervisión.
 | `GET` | `/api/departments` | Lista de departamentos |
 | `POST` | `/api/departments` | Crea un departamento (solo administración) |
 | `PUT` | `/api/agents/{id}/departments` | Fija el principal y los adicionales de una persona (solo administración) |
+| `GET` | `/api/channel-accounts` | Lista de cuentas de canal (solo administración) |
+| `POST` | `/api/channel-accounts` | Conecta una cuenta de WhatsApp, Facebook o Teams (solo administración) |
+| `PATCH` | `/api/channel-accounts/{id}` | Cambia nombre, departamento, estado o token propio (solo administración) |
 | `GET`/`PUT` | `/api/admin/settings` | Texto de la respuesta automática (solo administración para editar) |
 | `GET` | `/api/supervisor/overview` | Carga por agente y derivaciones (supervisión) |
 | `GET` | `/api/stats` | Mensajes por canal |

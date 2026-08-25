@@ -132,10 +132,21 @@ class ChannelAccount(Base, TimestampMixin):
     external_id: Mapped[str] = mapped_column(String(128), nullable=False)
     display_name: Mapped[str | None] = mapped_column(String(160))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    #: Configuración no sensible. Los secretos permanecen en el gestor de secretos.
+    #: A qué departamento cae, sin derivación manual, una conversación nueva
+    #: de esta cuenta. Nulo = cola común, igual que hoy (compatibilidad).
+    department_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("departments.id", ondelete="SET NULL"), index=True
+    )
+    #: Configuración no sensible.
     config: Mapped[dict[str, Any]] = mapped_column(JSONBType, default=dict, nullable=False)
+    #: Credenciales propias de esta cuenta (p. ej. el token de acceso de un
+    #: número de WhatsApp o de una página de Facebook), cifradas con
+    #: ``app/core/secrets.py``. Nulo cuando la cuenta usa la credencial global
+    #: de ``.env`` (WhatsApp) o no necesita ninguna (Teams).
+    credentials_ciphertext: Mapped[str | None] = mapped_column(Text)
 
     tenant: Mapped[Tenant] = relationship(back_populates="channel_accounts")
+    department: Mapped[Department | None] = relationship()
 
 
 # --------------------------------------------------------------------------- #
@@ -207,7 +218,8 @@ class Department(Base, TimestampMixin):
 
     Una conversación nace sin departamento, igual que hoy, y solo queda
     acotada a uno cuando alguien la deriva explícitamente (ver
-    ``Assignment.to_department_id``): no hay enrutado automático por canal.
+    ``Assignment.to_department_id``), o bien lo hereda al nacer de la cuenta de
+    canal por la que entró, cuando esa cuenta tiene departamento asignado.
     """
 
     __tablename__ = "departments"
@@ -224,9 +236,12 @@ class Department(Base, TimestampMixin):
 class Agent(Base, TimestampMixin):
     """Operador humano de la bandeja de entrada.
 
-    Las credenciales son locales a propósito: el servicio está pensado para
-    ejecutarse en la red interna, sin depender de un proveedor de identidad
-    externo. La contraseña se guarda derivada con ``scrypt``, nunca en claro.
+    Las credenciales locales (correo y contraseña) son el mecanismo de por
+    defecto: el servicio funciona sin depender de un proveedor de identidad
+    externo. La contraseña se guarda derivada con ``scrypt``, nunca en claro,
+    y ``password_hash`` queda ``None`` en las cuentas que solo entran por el
+    inicio de sesión único (ver ``app/core/saml.py``) — no es un estado de
+    error, sino la representación de "esta cuenta no tiene clave propia".
     """
 
     __tablename__ = "agents"

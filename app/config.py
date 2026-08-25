@@ -42,10 +42,29 @@ class Settings(BaseSettings):
     # ----------------------------------------------------------------- WhatsApp
     whatsapp_verify_token: SecretStr | None = None
     whatsapp_app_secret: SecretStr | None = None
+    #: Token global; se usa cuando una cuenta de WhatsApp (``ChannelAccount``)
+    #: no tiene uno propio. Cubre el caso común de un solo token de sistema
+    #: para varios números de la misma cuenta de WhatsApp Business.
     whatsapp_access_token: SecretStr | None = None
     whatsapp_phone_number_id: str | None = None
     whatsapp_api_version: str = "v21.0"
     whatsapp_api_base: str = "https://graph.facebook.com"
+
+    # ----------------------------------------------------------------- Facebook
+    #: Cada página necesita su propio token (se guarda cifrado por cuenta);
+    #: aquí solo va lo que valida el webhook, común a todas las páginas de la
+    #: misma app de Meta.
+    facebook_app_secret: SecretStr | None = None
+    facebook_verify_token: SecretStr | None = None
+    facebook_api_version: str = "v21.0"
+    facebook_api_base: str = "https://graph.facebook.com"
+
+    # ------------------------------------------------- cifrado de credenciales
+    #: Clave de ``cryptography.fernet.Fernet`` para las credenciales propias de
+    #: cada ``ChannelAccount`` (p. ej. el token de una página de Facebook).
+    #: Generar con: python -c "from cryptography.fernet import Fernet;
+    #: print(Fernet.generate_key().decode())"
+    secret_encryption_key: SecretStr | None = None
 
     # ----------------------------------------- Microsoft Bot Framework (Teams…)
     microsoft_app_id: str | None = None
@@ -73,6 +92,24 @@ class Settings(BaseSettings):
     outbox_max_attempts: int = 6
     inbound_rate_limit_per_minute: int = 30
     default_tenant_slug: str = "default"
+
+    # ---------------------------------------------------------------------SAML
+    #: Inicio de sesión único de la consola contra un proveedor de identidad
+    #: (Microsoft Entra ID u otro SAML 2.0). Convive con el login por
+    #: contraseña: mientras no estén los tres datos del IdP, estas rutas
+    #: quedan inactivas y la consola sigue funcionando exactamente igual.
+    saml_idp_entity_id: str | None = None
+    saml_idp_sso_url: str | None = None
+    #: Certificado público (X.509) del IdP, en base64, sin las líneas
+    #: "-----BEGIN/END CERTIFICATE-----".
+    saml_idp_x509_cert: str | None = None
+    #: Identidad de este servicio ante el IdP. Por omisión, se deriva de
+    #: `public_base_url` + `/saml/metadata`.
+    saml_sp_entity_id: str | None = None
+
+    @property
+    def saml_enabled(self) -> bool:
+        return bool(self.saml_idp_entity_id and self.saml_idp_sso_url and self.saml_idp_x509_cert)
 
     # ------------------------------------------------------------------ consola
     admin_api_key: SecretStr | None = None

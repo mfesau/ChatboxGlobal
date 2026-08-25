@@ -19,6 +19,7 @@ class ChannelKind(StrEnum):
     """Canales soportados. Ampliable sin migración de datos."""
 
     WHATSAPP = "whatsapp"
+    FACEBOOK = "facebook"    # Messenger (Meta Graph API)
     MSBOT = "msbot"          # Microsoft Bot Framework (Teams, Web Chat, Direct Line)
     WEB = "web"              # Chatbox propio embebido
     INTERNAL = "internal"    # Mensajes generados por el sistema

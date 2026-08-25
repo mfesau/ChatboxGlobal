@@ -58,6 +58,23 @@
   border-radius: 10px;
 }
 
+.gate__separator {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+#sso-button {
+  display: block;
+  width: 100%;
+  height: 38px;
+  box-sizing: border-box;
+  text-align: center;
+  line-height: 38px;
+  text-decoration: none;
+}
+
 /* --- Estructura --------------------------------------------------------- */
 .console {
   display: grid;
@@ -71,6 +88,10 @@
   display: flex;
   flex-direction: column;
   min-width: 0;
+  /* Sin esto, el elemento de la cuadrícula crece para acomodar todo su
+     contenido (la lista de conversaciones, los paneles) en vez de quedarse
+     en la altura de la fila y dejar que cada uno haga scroll por su cuenta. */
+  min-height: 0;
   background: var(--surface);
 }
 
@@ -88,6 +109,7 @@
   display: flex;
   flex-direction: column;
   min-width: 0;
+  min-height: 0;
   background: var(--surface);
 }
 
@@ -459,9 +481,12 @@
   font-variant-numeric: tabular-nums;
 }
 
-#admin-users-table input[type="text"] {
+#admin-users-table input[type="text"],
+#admin-users-table input[type="password"],
+#channel-accounts-table input[type="text"],
+#channel-accounts-table input[type="password"] {
   width: 100%;
-  min-width: 140px;
+  min-width: 130px;
   padding: 5px 8px;
   font: inherit;
   color: var(--text);
@@ -470,10 +495,33 @@
   border-radius: 6px;
 }
 
-#admin-users-table td:last-child {
+#admin-users-table select,
+#channel-accounts-table select {
+  min-width: 130px;
+  padding: 5px 8px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+/* Las columnas con formularios quedan a la izquierda; solo las acciones se
+   alinean a la derecha, pese a la regla general de `.data-table` que alinea
+   a la derecha desde la cuarta columna. */
+#admin-users-table td:nth-child(n + 4),
+#channel-accounts-table td:nth-child(n + 4) {
+  text-align: left;
+  font-variant-numeric: normal;
+}
+
+#admin-users-table td:last-child,
+#channel-accounts-table td:last-child {
   display: flex;
   gap: 6px;
   justify-content: flex-end;
+  text-align: right;
 }
 
 /* --- Adaptación a pantallas estrechas --------------------------------- */

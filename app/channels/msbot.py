@@ -142,10 +142,17 @@ class MicrosoftBotAdapter(ChannelAdapter):
         recipient = payload.get("recipient") or {}
         activity_id = payload.get("id") or f"{conversation_id}:{time.time_ns()}"
 
+        # En un canal/equipo de Teams, `channelData.team.id` identifica al
+        # equipo — no al bot, que es el mismo para todos—, así que es lo que
+        # se usa para poder conectar "tantos equipos de Teams como se quiera"
+        # por departamento (ver ChannelAccount.department_id). En un chat 1:1,
+        # Web Chat o Direct Line no hay equipo: se mantiene el comportamiento
+        # de siempre, sin acotar por departamento.
+        team_id = ((payload.get("channelData") or {}).get("team") or {}).get("id")
         ref = ConversationRef(
             channel=ChannelKind.MSBOT,
             channel_conversation_id=conversation_id,
-            channel_account_id=recipient.get("id") or self.settings.microsoft_app_id,
+            channel_account_id=team_id or recipient.get("id") or self.settings.microsoft_app_id,
             service_url=payload.get("serviceUrl"),
             reply_to_message_id=activity_id,
             extra={

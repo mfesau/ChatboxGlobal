@@ -6,6 +6,7 @@ las conversaciones entran por la cola común, sea cual sea el canal.
 
 from __future__ import annotations
 
+import urllib.parse
 import uuid
 from collections.abc import AsyncIterator, Callable
 from typing import Any, ClassVar
@@ -17,8 +18,11 @@ from sqlalchemy import select
 
 from app.channels.base import ChannelRegistry
 from app.config import get_settings
+from app.core.envelope import ChannelKind, ConversationRef
 from app.core.orchestrator import Orchestrator
 from app.core.pipeline import Handler, NextFn, Pipeline, TurnContext
+from app.core.saml import AgentInactiveError, login_or_provision_agent
+from app.core.secrets import EncryptionNotConfiguredError, decrypt_json, encrypt_json
 from app.core.security import (
     WeakPasswordError,
     hash_password,
@@ -29,7 +33,7 @@ from app.core.security import (
 )
 from app.db import repositories as repo
 from app.db.engine import session_scope
-from app.db.models import Assignment, Conversation, InternalNote, Message
+from app.db.models import ROLE_ADMIN, ROLE_AGENT, Assignment, Conversation, InternalNote, Message
 from app.main import create_app
 
 PASSWORD = "ClaveSegura123"
@@ -1059,6 +1063,151 @@ async def test_upload_rejects_a_file_over_the_limit(as_agent, team, monkeypatch)
 
 
 # --------------------------------------------------------------------------- #
+# Descarga de adjuntos: la misma regla que para el hilo que los contiene
+# --------------------------------------------------------------------------- #
+async def _attach_as_agent(client: httpx.AsyncClient, conversation_id: str) -> str:
+    """Sube una imagen y la envía al cliente. Devuelve la URL del adjunto."""
+    upload = await client.post(
+        "/api/uploads", files={"file": ("foto.png", _PNG_BYTES, "image/png")}
+    )
+    assert upload.status_code == 201
+    attachment = upload.json()
+
+    reply = await client.post(
+        f"/api/conversations/{conversation_id}/reply",
+        json={"text": "Le envío la imagen.", "attachments": [attachment]},
+    )
+    assert reply.status_code == 202
+    return attachment["url"]
+
+
+async def test_attachment_requires_a_session(anonymous, as_agent, team):
+    conversation_id = await arrive(anonymous, "web-adjunto-1")
+    ana = await as_agent(team["ana"]["email"])
+    await ana.post(f"/api/conversations/{conversation_id}/claim")
+    url = await _attach_as_agent(ana, conversation_id)
+
+    # `anonymous` no tiene cookie de agente ni de contacto.
+    assert (await anonymous.get(url)).status_code == 401
+
+
+async def test_an_agent_with_access_downloads_the_attachment(anonymous, as_agent, team):
+    conversation_id = await arrive(anonymous, "web-adjunto-2")
+    ana = await as_agent(team["ana"]["email"])
+    await ana.post(f"/api/conversations/{conversation_id}/claim")
+    url = await _attach_as_agent(ana, conversation_id)
+
+    response = await ana.get(url)
+
+    assert response.status_code == 200
+    assert response.content == _PNG_BYTES
+    assert response.headers["content-type"] == "image/png"
+    # Contenido privado: ninguna caché compartida debe guardarlo.
+    assert "no-store" in response.headers["cache-control"]
+
+
+async def test_the_supervisor_downloads_any_attachment(anonymous, as_agent, team):
+    conversation_id = await arrive(anonymous, "web-adjunto-3")
+    ana = await as_agent(team["ana"]["email"])
+    marta = await as_agent(team["marta"]["email"])
+    await ana.post(f"/api/conversations/{conversation_id}/claim")
+    url = await _attach_as_agent(ana, conversation_id)
+
+    assert (await marta.get(url)).status_code == 200
+
+
+async def test_an_agent_outside_the_department_cannot_download_it(anonymous, as_agent, team):
+    """El adjunto queda tan acotado como la conversación que lo contiene."""
+    conversation_id = await arrive(anonymous, "web-adjunto-4")
+    admin = await as_agent(team["admin"]["email"])
+    ana = await as_agent(team["ana"]["email"])
+    luis = await as_agent(team["luis"]["email"])
+
+    await ana.post(f"/api/conversations/{conversation_id}/claim")
+    url = await _attach_as_agent(ana, conversation_id)
+
+    department = (await admin.post("/api/departments", json={"name": "Adjuntos"})).json()
+    await admin.put(
+        f"/api/agents/{team['luis']['id']}/departments",
+        json={"department_id": department["id"], "extra_department_ids": []},
+    )
+    transfer = await admin.post(
+        f"/api/conversations/{conversation_id}/transfer",
+        json={"to_department_id": department["id"]},
+    )
+    assert transfer.status_code == 200
+
+    # Luis atiende ese departamento; Ana, no.
+    assert (await luis.get(url)).status_code == 200
+    assert (await ana.get(url)).status_code == 404
+
+
+async def test_the_owner_contact_downloads_its_own_attachment(anonymous):
+    transport = httpx.ASGITransport(app=anonymous.asgi_app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://pruebas") as duenio:
+        register = await duenio.post(
+            "/api/contact/register",
+            json={"email": "duenio-adjunto@clientes.local", "password": CLIENT_PASSWORD},
+        )
+        assert register.status_code == 201
+
+        upload = await duenio.post(
+            "/api/contact/uploads", files={"file": ("foto.png", _PNG_BYTES, "image/png")}
+        )
+        attachment = upload.json()
+        sent = await duenio.post(
+            "/api/web/messages",
+            json={"session_id": "adjunto-propio", "text": "Mire", "attachments": [attachment]},
+        )
+        assert sent.status_code == 200
+
+        assert (await duenio.get(attachment["url"])).status_code == 200
+
+        # Otro cliente, con su propia cuenta, no alcanza ese fichero.
+        async with httpx.AsyncClient(transport=transport, base_url="http://pruebas") as ajeno:
+            await ajeno.post(
+                "/api/contact/register",
+                json={"email": "ajeno-adjunto@clientes.local", "password": CLIENT_PASSWORD},
+            )
+            assert (await ajeno.get(attachment["url"])).status_code == 404
+
+
+async def test_attachment_rejects_a_name_outside_the_expected_shape(as_agent, team):
+    """El patrón del nombre descarta el recorrido de rutas de raíz."""
+    ana = await as_agent(team["ana"]["email"])
+    namespace = str(team["tenant_id"])
+
+    for nombre in ("no-es-un-uuid.png", "0" * 32 + ".exe", "..%2Fmain.py", "algo.png"):
+        response = await ana.get(f"/uploads/{namespace}/{nombre}")
+        assert response.status_code == 404, nombre
+
+
+async def test_attachment_of_another_tenant_is_not_found(anonymous, as_agent, team):
+    conversation_id = await arrive(anonymous, "web-adjunto-5")
+    ana = await as_agent(team["ana"]["email"])
+    await ana.post(f"/api/conversations/{conversation_id}/claim")
+    url = await _attach_as_agent(ana, conversation_id)
+    filename = url.rsplit("/", 1)[-1]
+
+    # Mismo fichero, inquilino ajeno en la ruta.
+    response = await ana.get(f"/uploads/{uuid.uuid4()}/{filename}")
+    assert response.status_code == 404
+
+
+async def test_attachment_never_seen_in_a_message_is_not_served(as_agent, team):
+    """Un fichero huérfano no se entrega, aunque exista en disco."""
+    ana = await as_agent(team["ana"]["email"])
+    upload = await ana.post(
+        "/api/uploads", files={"file": ("suelta.png", _PNG_BYTES, "image/png")}
+    )
+    url = upload.json()["url"]
+
+    # Se subió, pero nunca se adjuntó a un mensaje: no hay conversación que
+    # respalde el acceso.
+    assert (await ana.get(url)).status_code == 404
+
+
+# --------------------------------------------------------------------------- #
 # Ficha de contacto
 # --------------------------------------------------------------------------- #
 async def test_any_agent_can_view_the_contact_detail(anonymous, as_agent, team):
@@ -1124,3 +1273,428 @@ async def test_editing_the_contact_email_rejects_a_duplicate(anonymous, as_agent
         f"/api/conversations/{second_id}/contact", json={"primary_email": first_email}
     )
     assert response.status_code == 409
+
+
+# --------------------------------------------------------------------------- #
+# Directorio de contactos
+# --------------------------------------------------------------------------- #
+async def test_a_plain_agent_cannot_use_the_contacts_directory(anonymous, as_agent, team):
+    conversation_id = await arrive(anonymous, "web-directorio-1")
+    ana = await as_agent(team["ana"]["email"])
+    contact_id = (await ana.get(f"/api/conversations/{conversation_id}/contact")).json()["id"]
+
+    listing = await ana.get("/api/contacts")
+    profile = await ana.get(f"/api/contacts/{contact_id}")
+    assert listing.status_code == 403
+    assert profile.status_code == 403
+
+
+async def test_supervisor_can_list_and_search_contacts(anonymous, as_agent, team):
+    await arrive(anonymous, "web-directorio-2")
+    await arrive(anonymous, "web-directorio-3")
+    marta = await as_agent(team["marta"]["email"])
+
+    listing = (await marta.get("/api/contacts")).json()
+    emails = {row["primary_email"] for row in listing}
+    assert "web-directorio-2@clientes.local" in emails
+    assert "web-directorio-3@clientes.local" in emails
+    for row in listing:
+        assert row["conversation_count"] >= 1
+
+    filtered = (await marta.get("/api/contacts", params={"search": "web-directorio-2"})).json()
+    assert [row["primary_email"] for row in filtered] == ["web-directorio-2@clientes.local"]
+
+
+async def test_contact_profile_lists_its_conversation_and_comment(anonymous, as_agent, team):
+    conversation_id = await arrive(anonymous, "web-directorio-4")
+    marta = await as_agent(team["marta"]["email"])
+    contact_id = (await marta.get(f"/api/conversations/{conversation_id}/contact")).json()["id"]
+
+    comment = await marta.post(
+        f"/api/contacts/{contact_id}/comments", json={"body": "Cliente frecuente."}
+    )
+    assert comment.status_code == 201
+
+    profile = (await marta.get(f"/api/contacts/{contact_id}")).json()
+    assert {c["id"] for c in profile["conversations"]} == {conversation_id}
+    assert len(profile["comments"]) == 1
+    assert profile["comments"][0]["body"] == "Cliente frecuente."
+    assert profile["comments"][0]["agent"] == team["marta"]["name"]
+
+
+async def test_supervisor_can_edit_a_contact_from_the_directory(anonymous, as_agent, team):
+    conversation_id = await arrive(anonymous, "web-directorio-5")
+    admin = await as_agent(team["admin"]["email"])
+    contact_id = (await admin.get(f"/api/conversations/{conversation_id}/contact")).json()["id"]
+
+    edit = await admin.patch(
+        f"/api/contacts/{contact_id}",
+        json={"display_name": "Cliente del directorio", "primary_phone": "0981000000"},
+    )
+    assert edit.status_code == 200
+
+    profile = (await admin.get(f"/api/contacts/{contact_id}")).json()
+    assert profile["display_name"] == "Cliente del directorio"
+    assert profile["primary_phone"] == "0981000000"
+
+
+async def test_editing_from_the_directory_rejects_a_duplicate_email(anonymous, as_agent, team):
+    first_id = await arrive(anonymous, "web-directorio-6")
+    second_id = await arrive(anonymous, "web-directorio-7")
+    admin = await as_agent(team["admin"]["email"])
+    first_email = (await admin.get(f"/api/conversations/{first_id}/contact")).json()[
+        "primary_email"
+    ]
+    second_contact_id = (await admin.get(f"/api/conversations/{second_id}/contact")).json()["id"]
+
+    response = await admin.patch(
+        f"/api/contacts/{second_contact_id}", json={"primary_email": first_email}
+    )
+    assert response.status_code == 409
+
+
+async def test_contact_profile_404_for_an_unknown_contact(as_agent, team):
+    marta = await as_agent(team["marta"]["email"])
+    response = await marta.get(f"/api/contacts/{uuid.uuid4()}")
+    assert response.status_code == 404
+
+
+# --------------------------------------------------------------------------- #
+# SSO de la consola (SAML)
+#
+# La validación criptográfica de una aserción firmada es responsabilidad de
+# `python3-saml`, ya probada aguas arriba; aquí se cubre lo propio de este
+# servicio: que las rutas queden inactivas sin configurar, que no abran un
+# redireccionamiento abierto, y la política de aprovisionamiento (alta
+# automática con el rol básico, sin elevar a quien ya existe, cuentas
+# desactivadas no reviven) aislada de la aserción SAML en sí.
+# --------------------------------------------------------------------------- #
+def _configure_saml(monkeypatch: Any, settings: Any) -> None:
+    monkeypatch.setattr(settings, "saml_idp_entity_id", "https://sts.windows.net/tenant-id/")
+    monkeypatch.setattr(
+        settings, "saml_idp_sso_url", "https://login.microsoftonline.com/tenant-id/saml2"
+    )
+    monkeypatch.setattr(
+        settings, "saml_idp_x509_cert", "MIIC8DCCAdigAwIBAgIQfakefakefakefakefakeAAA=="
+    )
+
+
+async def test_sso_status_is_unavailable_by_default(anonymous):
+    response = await anonymous.get("/api/auth/sso")
+    assert response.status_code == 200
+    assert response.json() == {"available": False}
+
+
+async def test_saml_routes_are_hidden_when_not_configured(anonymous):
+    assert (await anonymous.get("/saml/metadata")).status_code == 404
+    assert (await anonymous.get("/saml/login")).status_code == 404
+    assert (await anonymous.post("/saml/acs")).status_code == 404
+
+
+async def test_sso_status_reports_available_once_configured(anonymous, monkeypatch):
+    _configure_saml(monkeypatch, get_settings())
+    response = await anonymous.get("/api/auth/sso")
+    assert response.json() == {"available": True}
+
+
+async def test_saml_metadata_describes_this_service_as_the_sp(anonymous, monkeypatch):
+    _configure_saml(monkeypatch, get_settings())
+    response = await anonymous.get("/saml/metadata")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/xml")
+    assert "EntityDescriptor" in response.text
+    assert "/saml/acs" in response.text
+
+
+async def test_saml_login_redirects_to_the_idp_with_the_return_path(anonymous, monkeypatch):
+    _configure_saml(monkeypatch, get_settings())
+    response = await anonymous.get("/saml/login?next=/console", follow_redirects=False)
+    assert response.status_code == 302
+    location = response.headers["location"]
+    parsed = urllib.parse.urlsplit(location)
+    assert f"{parsed.scheme}://{parsed.netloc}{parsed.path}" == (
+        "https://login.microsoftonline.com/tenant-id/saml2"
+    )
+    query = urllib.parse.parse_qs(parsed.query)
+    assert "SAMLRequest" in query
+    assert query["RelayState"] == ["/console"]
+
+
+async def test_saml_login_never_opens_a_redirect_to_another_site(anonymous, monkeypatch):
+    _configure_saml(monkeypatch, get_settings())
+    response = await anonymous.get(
+        "/saml/login?next=https://ataque.example/robo", follow_redirects=False
+    )
+    query = urllib.parse.parse_qs(urllib.parse.urlsplit(response.headers["location"]).query)
+    assert query["RelayState"] == ["/console"]
+
+
+async def test_login_or_provision_agent_creates_a_new_agent_with_the_basic_role(team):
+    async with session_scope() as session:
+        agent, created = await login_or_provision_agent(
+            session,
+            tenant_id=team["tenant_id"],
+            email="nueva.persona@empresa.local",
+            display_name="Nueva Persona",
+        )
+        assert created is True
+        assert agent.role == ROLE_AGENT
+        assert agent.password_hash is None
+        assert agent.display_name == "Nueva Persona"
+
+    async with session_scope() as session:
+        found = await repo.find_agent_by_email(
+            session, tenant_id=team["tenant_id"], email="nueva.persona@empresa.local"
+        )
+        assert found is not None
+
+
+async def test_login_or_provision_agent_does_not_elevate_an_existing_account(team):
+    async with session_scope() as session:
+        agent, created = await login_or_provision_agent(
+            session,
+            tenant_id=team["tenant_id"],
+            email=team["admin"]["email"],
+            display_name="Suplantado",
+        )
+    assert created is False
+    assert agent.role == ROLE_ADMIN
+    # El nombre visible ya existente tampoco se pisa con lo que mande el IdP.
+    assert agent.display_name == team["admin"]["name"]
+
+
+async def test_login_or_provision_agent_rejects_an_inactive_account(as_agent, team):
+    admin = await as_agent(team["admin"]["email"])
+    deactivate = await admin.delete(f"/api/agents/{team['luis']['id']}")
+    assert deactivate.status_code == 200
+
+    async with session_scope() as session:
+        with pytest.raises(AgentInactiveError):
+            await login_or_provision_agent(
+                session,
+                tenant_id=team["tenant_id"],
+                email=team["luis"]["email"],
+                display_name=None,
+            )
+
+
+# --------------------------------------------------------------------------- #
+# Cifrado de credenciales por cuenta de canal
+# --------------------------------------------------------------------------- #
+def test_encrypt_json_requires_the_encryption_key():
+    settings = get_settings()
+    with pytest.raises(EncryptionNotConfiguredError):
+        encrypt_json({"access_token": "x"}, settings=settings)
+
+
+def test_encrypt_and_decrypt_json_round_trip(monkeypatch):
+    from cryptography.fernet import Fernet
+    from pydantic import SecretStr
+
+    settings = get_settings()
+    key = SecretStr(Fernet.generate_key().decode())
+    monkeypatch.setattr(settings, "secret_encryption_key", key)
+
+    ciphertext = encrypt_json({"access_token": "abc123"}, settings=settings)
+    assert "abc123" not in ciphertext
+    assert decrypt_json(ciphertext, settings=settings) == {"access_token": "abc123"}
+
+
+# --------------------------------------------------------------------------- #
+# Cuentas de canal: enrutado automático a un departamento
+# --------------------------------------------------------------------------- #
+async def test_a_channel_account_with_a_department_routes_a_new_conversation(team):
+    async with session_scope() as session:
+        department = await repo.create_department(
+            session, tenant_id=team["tenant_id"], name="Ventas por WhatsApp"
+        )
+        account = await repo.create_channel_account(
+            session,
+            tenant_id=team["tenant_id"],
+            channel=ChannelKind.WHATSAPP,
+            external_id="595900000001",
+            department_id=department.id,
+        )
+        conversation = await repo.resolve_conversation(
+            session,
+            tenant_id=team["tenant_id"],
+            ref=ConversationRef(
+                channel=ChannelKind.WHATSAPP,
+                channel_conversation_id="595982000001",
+                channel_account_id=account.external_id,
+            ),
+            contact_id=None,
+            channel_account=account,
+        )
+        assert conversation.department_id == department.id
+
+
+async def test_a_channel_account_without_a_department_stays_in_the_common_queue(team):
+    async with session_scope() as session:
+        account = await repo.create_channel_account(
+            session,
+            tenant_id=team["tenant_id"],
+            channel=ChannelKind.WHATSAPP,
+            external_id="595900000002",
+        )
+        conversation = await repo.resolve_conversation(
+            session,
+            tenant_id=team["tenant_id"],
+            ref=ConversationRef(
+                channel=ChannelKind.WHATSAPP,
+                channel_conversation_id="595982000002",
+                channel_account_id=account.external_id,
+            ),
+            contact_id=None,
+            channel_account=account,
+        )
+        assert conversation.department_id is None
+
+
+# --------------------------------------------------------------------------- #
+# Cuentas de canal: administración
+# --------------------------------------------------------------------------- #
+async def test_a_plain_agent_cannot_manage_channel_accounts(as_agent, team):
+    ana = await as_agent(team["ana"]["email"])
+    listing = await ana.get("/api/channel-accounts")
+    creation = await ana.post(
+        "/api/channel-accounts", json={"channel": "whatsapp", "external_id": "595900000003"}
+    )
+    assert listing.status_code == 403
+    assert creation.status_code == 403
+
+
+async def test_admin_can_create_and_edit_a_channel_account(as_agent, team):
+    admin = await as_agent(team["admin"]["email"])
+    department = await admin.post("/api/departments", json={"name": "Soporte WhatsApp"})
+    assert department.status_code == 201
+    department_id = department.json()["id"]
+
+    created = await admin.post(
+        "/api/channel-accounts",
+        json={
+            "channel": "whatsapp",
+            "external_id": "595900000004",
+            "display_name": "Soporte WA",
+            "department_id": department_id,
+        },
+    )
+    assert created.status_code == 201
+    body = created.json()
+    assert body["department_name"] == "Soporte WhatsApp"
+    assert body["has_own_credentials"] is False
+
+    updated = await admin.patch(
+        f"/api/channel-accounts/{body['id']}", json={"display_name": "Soporte WhatsApp (nuevo)"}
+    )
+    assert updated.status_code == 200
+    assert updated.json()["display_name"] == "Soporte WhatsApp (nuevo)"
+    # El departamento no se tocó: no viajó en el PATCH.
+    assert updated.json()["department_name"] == "Soporte WhatsApp"
+
+    listing = (await admin.get("/api/channel-accounts")).json()
+    assert any(row["id"] == body["id"] for row in listing)
+
+
+async def test_creating_a_channel_account_rejects_an_unknown_department(as_agent, team):
+    admin = await as_agent(team["admin"]["email"])
+    response = await admin.post(
+        "/api/channel-accounts",
+        json={
+            "channel": "whatsapp",
+            "external_id": "595900000005",
+            "department_id": str(uuid.uuid4()),
+        },
+    )
+    assert response.status_code == 404
+
+
+async def test_facebook_requires_an_access_token(as_agent, team):
+    admin = await as_agent(team["admin"]["email"])
+    response = await admin.post(
+        "/api/channel-accounts", json={"channel": "facebook", "external_id": "1234567890"}
+    )
+    assert response.status_code == 422
+
+
+async def test_setting_an_access_token_requires_the_encryption_key(as_agent, team):
+    admin = await as_agent(team["admin"]["email"])
+    # SECRET_ENCRYPTION_KEY queda vacía por defecto en las pruebas (conftest.py).
+    response = await admin.post(
+        "/api/channel-accounts",
+        json={
+            "channel": "whatsapp",
+            "external_id": "595900000006",
+            "access_token": "un-token-cualquiera",
+        },
+    )
+    assert response.status_code == 409
+
+
+# --------------------------------------------------------------------------- #
+# Login unificado en "/": un solo formulario para agentes y clientes
+# --------------------------------------------------------------------------- #
+async def test_unified_login_recognizes_an_agent(anonymous, team):
+    response = await anonymous.post(
+        "/api/session/login", json={"email": team["ana"]["email"], "password": PASSWORD}
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["kind"] == "agent"
+    assert body["redirect"] == "/console"
+
+    # La cookie quedó puesta: una llamada posterior ya viene autenticada.
+    me = await anonymous.get("/api/auth/me")
+    assert me.status_code == 200
+    assert me.json()["agent"]["email"] == team["ana"]["email"]
+
+
+async def test_unified_login_recognizes_a_contact(anonymous):
+    register = await anonymous.post(
+        "/api/contact/register",
+        json={"email": "cliente-unificado@clientes.local", "password": "ClaveClienteSegura1"},
+    )
+    assert register.status_code == 201
+    # Registrarse ya deja la sesión de cliente puesta; se limpia para probar
+    # el login unificado desde cero, no el alta.
+    await anonymous.post("/api/contact/logout")
+
+    response = await anonymous.post(
+        "/api/session/login",
+        json={"email": "cliente-unificado@clientes.local", "password": "ClaveClienteSegura1"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["kind"] == "contact"
+    assert body["redirect"] == "/"
+
+    me = await anonymous.get("/api/contact/me")
+    assert me.status_code == 200
+    assert me.json()["contact"]["email"] == "cliente-unificado@clientes.local"
+
+
+async def test_unified_login_rejects_a_wrong_password(anonymous, team):
+    response = await anonymous.post(
+        "/api/session/login",
+        json={"email": team["ana"]["email"], "password": "contraseña-incorrecta"},
+    )
+    assert response.status_code == 401
+
+
+async def test_unified_login_rejects_an_email_in_neither_table(anonymous):
+    response = await anonymous.post(
+        "/api/session/login",
+        json={"email": "nadie@ninguna-parte.local", "password": "lo-que-sea-1234"},
+    )
+    assert response.status_code == 401
+
+
+async def test_unified_login_rejects_an_inactive_agent(as_agent, anonymous, team):
+    admin = await as_agent(team["admin"]["email"])
+    deactivate = await admin.delete(f"/api/agents/{team['luis']['id']}")
+    assert deactivate.status_code == 200
+
+    response = await anonymous.post(
+        "/api/session/login", json={"email": team["luis"]["email"], "password": PASSWORD}
+    )
+    assert response.status_code == 401

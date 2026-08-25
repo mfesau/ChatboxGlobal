@@ -13,9 +13,12 @@ import contextlib
 import os
 from datetime import timedelta
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.channels.base import ChannelRegistry
 from app.config import Settings
-from app.core.envelope import ConversationRef, OutboundMessage
+from app.core.envelope import ChannelKind, ConversationRef, OutboundMessage
+from app.core.secrets import DecryptionError, decrypt_json
 from app.db import repositories as repo
 from app.db.engine import session_scope
 from app.logging_setup import get_logger
@@ -92,7 +95,9 @@ class OutboxDispatcher:
                 (
                     item.id,
                     item.channel,
-                    ConversationRef.from_dict(item.payload["ref"]),
+                    await self._with_account_credentials(
+                        session, item.channel, ConversationRef.from_dict(item.payload["ref"])
+                    ),
                     OutboundMessage.from_dict(item.payload["message"]),
                 )
                 for item in items
@@ -101,6 +106,37 @@ class OutboxDispatcher:
         for item_id, channel, ref, message in claimed:
             await self._deliver(item_id, channel, ref, message)
         return len(claimed)
+
+    async def _with_account_credentials(
+        self, session: AsyncSession, channel: object, ref: ConversationRef
+    ) -> ConversationRef:
+        """Suma, si existen, las credenciales propias de la cuenta que envía.
+
+        Los adaptadores no tocan la base de datos (ver `ChannelAdapter`); este
+        es el único punto que ya tiene sesión abierta justo antes de invocar
+        a `adapter.send()`, así que es donde se resuelve qué credenciales usar
+        — el adaptador solo lee `ref.extra["credentials"]` si está.
+        """
+        if not ref.channel_account_id:
+            return ref
+        account = await repo.find_channel_account(
+            session, channel=ChannelKind(channel), external_id=ref.channel_account_id
+        )
+        if account is None or not account.credentials_ciphertext:
+            return ref
+        try:
+            credentials = decrypt_json(account.credentials_ciphertext, settings=self.settings)
+        except DecryptionError:
+            log.error("channel_account_credentials_undecryptable", account_id=str(account.id))
+            return ref
+        return ConversationRef(
+            channel=ref.channel,
+            channel_conversation_id=ref.channel_conversation_id,
+            channel_account_id=ref.channel_account_id,
+            service_url=ref.service_url,
+            reply_to_message_id=ref.reply_to_message_id,
+            extra={**ref.extra, "credentials": credentials},
+        )
 
     async def _deliver(
         self,

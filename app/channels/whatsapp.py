@@ -239,10 +239,23 @@ class WhatsAppAdapter(ChannelAdapter):
         )
 
     # ---------------------------------------------------------------- salida
+    def _resolve_token(self, ref: ConversationRef) -> str | None:
+        """Token propio de la cuenta si lo tiene; si no, el global de ``.env``.
+
+        Cubre el caso común de un solo token de sistema para varios números
+        de la misma cuenta de WhatsApp Business, sin obligar a dar de alta
+        una credencial por número.
+        """
+        account_token = ref.extra.get("credentials", {}).get("access_token")
+        if account_token:
+            return account_token
+        token = self.settings.whatsapp_access_token
+        return token.get_secret_value() if token else None
+
     async def send(
         self, *, ref: ConversationRef, message: OutboundMessage
     ) -> DeliveryReceipt:
-        token = self.settings.whatsapp_access_token
+        token = self._resolve_token(ref)
         phone_number_id = ref.channel_account_id or self.settings.whatsapp_phone_number_id
         if token is None or not phone_number_id:
             return DeliveryReceipt.failed(
@@ -252,7 +265,7 @@ class WhatsAppAdapter(ChannelAdapter):
 
         last: DeliveryReceipt | None = None
         for body in self._build_payloads(ref.channel_conversation_id, message):
-            last = await self._post(phone_number_id, token.get_secret_value(), body)
+            last = await self._post(phone_number_id, token, body)
             if not last.ok:
                 return last
         return last or DeliveryReceipt.failed("empty_message", "Nada que enviar")
@@ -391,13 +404,13 @@ class WhatsAppAdapter(ChannelAdapter):
         return DeliveryReceipt.sent(provider_id, **data)
 
     async def set_typing(self, *, ref: ConversationRef) -> None:
-        token = self.settings.whatsapp_access_token
+        token = self._resolve_token(ref)
         phone_number_id = ref.channel_account_id or self.settings.whatsapp_phone_number_id
         if token is None or not phone_number_id or not ref.reply_to_message_id:
             return
         await self._post(
             phone_number_id,
-            token.get_secret_value(),
+            token,
             {
                 "messaging_product": "whatsapp",
                 "status": "read",
@@ -407,13 +420,13 @@ class WhatsAppAdapter(ChannelAdapter):
         )
 
     async def mark_read(self, *, ref: ConversationRef, provider_message_id: str) -> None:
-        token = self.settings.whatsapp_access_token
+        token = self._resolve_token(ref)
         phone_number_id = ref.channel_account_id or self.settings.whatsapp_phone_number_id
         if token is None or not phone_number_id:
             return
         await self._post(
             phone_number_id,
-            token.get_secret_value(),
+            token,
             {
                 "messaging_product": "whatsapp",
                 "status": "read",

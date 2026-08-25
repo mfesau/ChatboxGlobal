@@ -61,6 +61,32 @@ async def test_parse_message_activity():
     assert message.conversation.channel_account_id == f"28:{APP_ID}"
 
 
+async def test_parse_in_a_team_channel_uses_the_team_as_the_account():
+    """Distingue de qué equipo de Teams vino el mensaje, no solo el bot —
+    para poder conectar tantos equipos como se quiera por departamento."""
+    adapter = make_adapter()
+    activity = teams_activity(
+        conversation={"id": "19:canal@thread.tacv2", "conversationType": "channel"},
+        channelData={
+            "tenant": {"id": "aaaa-bbbb"},
+            "team": {"id": "19:equipo-ventas@thread.tacv2", "name": "Ventas"},
+        },
+    )
+
+    [message] = await adapter.parse(payload=activity, headers={})
+
+    assert message.conversation.channel_account_id == "19:equipo-ventas@thread.tacv2"
+
+
+async def test_parse_a_personal_chat_still_falls_back_to_the_bot():
+    """Sin equipo (chat 1:1, Web Chat, Direct Line), nada cambia."""
+    adapter = make_adapter()
+
+    [message] = await adapter.parse(payload=teams_activity(), headers={})
+
+    assert message.conversation.channel_account_id == f"28:{APP_ID}"
+
+
 async def test_parse_strips_bot_mention():
     """En Teams el texto llega con la mención al bot incrustada."""
     adapter = make_adapter()

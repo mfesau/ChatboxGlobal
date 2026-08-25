@@ -142,6 +142,31 @@ async def register(
     return {"contact": _serialize(contact), "expires_in_s": _EXPIRES_IN_S}
 
 
+async def issue_contact_session(
+    *,
+    contact: Any,
+    request: Request,
+    response: Response,
+    session: SessionDep,
+    settings: SettingsDep,
+) -> None:
+    """Abre una sesión de cliente y la deja en una cookie ``HttpOnly``.
+
+    Aislada para que el login unificado de ``app/api/session.py`` pueda
+    reutilizarla tal cual, sin duplicar la apertura de sesión.
+    """
+    token = new_session_token()
+    await repo.open_contact_session(
+        session,
+        contact_id=contact.id,
+        token_hash=hash_token(token),
+        ttl=CONTACT_SESSION_TTL,
+        client_ip=request.client.host if request.client else None,
+        user_agent=request.headers.get("user-agent"),
+    )
+    _set_session_cookie(response, settings, token)
+
+
 @router.post("/login")
 async def login(
     body: LoginIn,
@@ -165,17 +190,9 @@ async def login(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Credenciales no válidas"
         )
 
-    token = new_session_token()
-    await repo.open_contact_session(
-        session,
-        contact_id=contact.id,
-        token_hash=hash_token(token),
-        ttl=CONTACT_SESSION_TTL,
-        client_ip=request.client.host if request.client else None,
-        user_agent=request.headers.get("user-agent"),
+    await issue_contact_session(
+        contact=contact, request=request, response=response, session=session, settings=settings
     )
-
-    _set_session_cookie(response, settings, token)
     log.info("contact_login_ok", contact=contact.primary_email)
     return {"contact": _serialize(contact), "expires_in_s": _EXPIRES_IN_S}
 

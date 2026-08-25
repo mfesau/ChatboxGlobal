@@ -34,10 +34,19 @@ from app.api.deps import (
 )
 from app.core.envelope import Attachment, ChannelKind, ContentType, Direction, OutboundMessage
 from app.core.hub import agent_topic, conversation_topic, hub, inbox_topic
+from app.core.secrets import EncryptionNotConfiguredError, encrypt_json
 from app.core.security import WeakPasswordError, hash_password
 from app.core.storage import save_upload
 from app.db import repositories as repo
-from app.db.models import ROLE_ADMIN, ROLE_AGENT, Agent, Conversation, Department, Tenant
+from app.db.models import (
+    ROLE_ADMIN,
+    ROLE_AGENT,
+    Agent,
+    ChannelAccount,
+    Conversation,
+    Department,
+    Tenant,
+)
 from app.handlers.builtin import FallbackHandler
 from app.logging_setup import get_logger
 
@@ -133,6 +142,26 @@ class ContactUpdateIn(BaseModel):
 
 class ContactCommentIn(BaseModel):
     body: str = Field(min_length=1, max_length=2_000)
+
+
+class ContactSummaryOut(BaseModel):
+    id: uuid.UUID
+    display_name: str | None
+    primary_phone: str | None
+    primary_email: str | None
+    is_blocked: bool
+    conversation_count: int
+    last_message_at: str | None
+
+
+class ContactProfileOut(BaseModel):
+    id: uuid.UUID
+    display_name: str | None
+    primary_phone: str | None
+    primary_email: str | None
+    is_blocked: bool
+    comments: list[ContactCommentOut]
+    conversations: list[ConversationOut]
 
 
 class AgentOut(BaseModel):
@@ -767,6 +796,129 @@ async def add_contact_comment(
 
 
 # --------------------------------------------------------------------------- #
+# Directorio de contactos
+#
+# A diferencia de "Datos del contacto" —accesible a cualquier agente, pero
+# solo a través de una conversación propia—, este directorio muestra TODOS
+# los contactos del inquilino de una sola vez, con su historial completo de
+# conversaciones en cualquier canal. Por eso queda reservado a supervisión y
+# administración, que de todos modos ya ven la totalidad de la bandeja.
+# --------------------------------------------------------------------------- #
+@router.get("/contacts", response_model=list[ContactSummaryOut])
+async def list_contacts(
+    session: SessionDep,
+    settings: SettingsDep,
+    principal: SupervisorDep,
+    search: str | None = None,
+    tenant: str | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+) -> list[ContactSummaryOut]:
+    """Directorio completo de clientes, con cuántas conversaciones tiene cada
+    uno y cuándo fue la última."""
+    tenant_row = await repo.get_or_create_tenant(session, tenant or settings.default_tenant_slug)
+    rows = await repo.list_contacts(
+        session, tenant_id=tenant_row.id, search=search, limit=limit, offset=offset
+    )
+    return [
+        ContactSummaryOut(
+            id=contact.id,
+            display_name=contact.display_name,
+            primary_phone=contact.primary_phone,
+            primary_email=contact.primary_email,
+            is_blocked=contact.is_blocked,
+            conversation_count=count,
+            last_message_at=last_message_at.isoformat() if last_message_at else None,
+        )
+        for contact, count, last_message_at in rows
+    ]
+
+
+@router.get("/contacts/{contact_id}", response_model=ContactProfileOut)
+async def get_contact_profile(
+    contact_id: uuid.UUID, session: SessionDep, principal: SupervisorDep
+) -> ContactProfileOut:
+    """Ficha completa: datos, comentarios y todas sus conversaciones."""
+    contact = await repo.get_contact(session, contact_id)
+    if contact is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contacto no encontrado")
+
+    comments = await repo.list_contact_comments(session, contact_id)
+    conversations = await repo.list_conversations_for_contact(session, contact_id)
+    names = await _agent_names(session, contact.tenant_id)
+    return ContactProfileOut(
+        id=contact.id,
+        display_name=contact.display_name,
+        primary_phone=contact.primary_phone,
+        primary_email=contact.primary_email,
+        is_blocked=contact.is_blocked,
+        comments=[
+            ContactCommentOut(
+                id=comment.id,
+                agent=names.get(comment.agent_id),
+                body=comment.body,
+                created_at=comment.created_at.isoformat(),
+            )
+            for comment in comments
+        ],
+        conversations=[_conversation_out(row) for row in conversations],
+    )
+
+
+@router.patch("/contacts/{contact_id}")
+async def update_contact_profile(
+    contact_id: uuid.UUID, body: ContactUpdateIn, session: SessionDep, principal: SupervisorDep
+) -> dict[str, str]:
+    """Edita nombre, teléfono o correo desde el directorio. Reservado a
+    supervisión."""
+    contact = await repo.get_contact(session, contact_id)
+    if contact is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contacto no encontrado")
+
+    changes = body.model_dump(exclude_unset=True)
+    if "primary_email" in changes and changes["primary_email"]:
+        existing = await repo.find_contact_by_email(
+            session, tenant_id=contact.tenant_id, email=changes["primary_email"]
+        )
+        if existing is not None and existing.id != contact_id:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Ya existe otro contacto con ese correo",
+            )
+
+    await repo.update_contact(session, contact_id=contact_id, **changes)
+    await repo.record_audit(
+        session,
+        tenant_id=contact.tenant_id,
+        actor=principal.audit_actor,
+        action="contact_updated",
+        subject_type="contact",
+        subject_id=str(contact_id),
+        detail=changes,
+    )
+    return {"status": "ok"}
+
+
+@router.post("/contacts/{contact_id}/comments", status_code=status.HTTP_201_CREATED)
+async def add_contact_profile_comment(
+    contact_id: uuid.UUID, body: ContactCommentIn, session: SessionDep, principal: SupervisorDep
+) -> dict[str, str]:
+    """Añade un comentario desde el directorio. Reservado a supervisión."""
+    contact = await repo.get_contact(session, contact_id)
+    if contact is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contacto no encontrado")
+
+    comment = await repo.add_contact_comment(
+        session,
+        contact_id=contact_id,
+        tenant_id=contact.tenant_id,
+        agent_id=principal.id,
+        body=body.body,
+    )
+    return {"status": "ok", "comment_id": str(comment.id)}
+
+
+# --------------------------------------------------------------------------- #
 # Estado del hilo
 # --------------------------------------------------------------------------- #
 @router.post("/conversations/{conversation_id}/control")
@@ -1059,6 +1211,177 @@ async def set_agent_departments(
         },
     )
     return {"status": "ok"}
+
+
+# --------------------------------------------------------------------------- #
+# Cuentas de canal
+#
+# Da de alta, con departamento propio, tantos números de WhatsApp, páginas de
+# Facebook o equipos de Teams como se quiera — sin esto, todos comparten la
+# cola común, exactamente como antes de que existiera esta pantalla.
+# --------------------------------------------------------------------------- #
+class ChannelAccountOut(BaseModel):
+    id: uuid.UUID
+    channel: str
+    external_id: str
+    display_name: str | None
+    is_active: bool
+    department_id: uuid.UUID | None
+    department_name: str | None
+    #: Nunca se expone el token en sí, ni cifrado ni en claro.
+    has_own_credentials: bool
+
+
+class ChannelAccountIn(BaseModel):
+    channel: Literal["whatsapp", "facebook", "msbot"]
+    external_id: str = Field(min_length=1, max_length=128)
+    display_name: str | None = Field(default=None, max_length=160)
+    department_id: uuid.UUID | None = None
+    #: Obligatorio en Facebook (cada página tiene el suyo); opcional en
+    #: WhatsApp (si falta, se usa el token global de .env); ignorado en Teams.
+    access_token: str | None = Field(default=None, max_length=4096)
+
+
+class ChannelAccountUpdateIn(BaseModel):
+    #: Solo se aplican los campos recibidos; ausente significa "no tocar".
+    display_name: str | None = Field(default=None, max_length=160)
+    department_id: uuid.UUID | None = None
+    is_active: bool | None = None
+    #: Cadena vacía = quitar el token propio y volver a la credencial global
+    #: (solo tiene sentido en WhatsApp); ausente = no tocarlo.
+    access_token: str | None = Field(default=None, max_length=4096)
+
+
+def _channel_account_out(account: ChannelAccount) -> ChannelAccountOut:
+    return ChannelAccountOut(
+        id=account.id,
+        channel=str(account.channel),
+        external_id=account.external_id,
+        display_name=account.display_name,
+        is_active=account.is_active,
+        department_id=account.department_id,
+        department_name=account.department.name if account.department else None,
+        has_own_credentials=bool(account.credentials_ciphertext),
+    )
+
+
+@router.get("/channel-accounts", response_model=list[ChannelAccountOut])
+async def list_channel_accounts(
+    session: SessionDep, settings: SettingsDep, principal: AdminDep, tenant: str | None = None
+) -> list[ChannelAccountOut]:
+    tenant_row = await repo.get_or_create_tenant(session, tenant or settings.default_tenant_slug)
+    accounts = await repo.list_channel_accounts(session, tenant_id=tenant_row.id)
+    return [_channel_account_out(account) for account in accounts]
+
+
+@router.post(
+    "/channel-accounts", status_code=status.HTTP_201_CREATED, response_model=ChannelAccountOut
+)
+async def create_channel_account(
+    body: ChannelAccountIn,
+    session: SessionDep,
+    settings: SettingsDep,
+    principal: AdminDep,
+    tenant: str | None = None,
+) -> ChannelAccountOut:
+    """Alta manual de una cuenta de canal. Reservado a administración."""
+    channel = ChannelKind(body.channel)
+    if channel is ChannelKind.FACEBOOK and not body.access_token:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Facebook exige el token de acceso de la página",
+        )
+
+    tenant_row = await repo.get_or_create_tenant(session, tenant or settings.default_tenant_slug)
+    if body.department_id is not None:
+        department = await repo.get_department(session, body.department_id)
+        if department is None or department.tenant_id != tenant_row.id:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="El departamento no existe"
+            )
+
+    credentials_ciphertext = None
+    if body.access_token and channel is not ChannelKind.MSBOT:
+        try:
+            credentials_ciphertext = encrypt_json(
+                {"access_token": body.access_token}, settings=settings
+            )
+        except EncryptionNotConfiguredError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    account = await repo.create_channel_account(
+        session,
+        tenant_id=tenant_row.id,
+        channel=channel,
+        external_id=body.external_id,
+        display_name=body.display_name,
+        department_id=body.department_id,
+        credentials_ciphertext=credentials_ciphertext,
+    )
+    await repo.record_audit(
+        session,
+        tenant_id=tenant_row.id,
+        actor=principal.audit_actor,
+        action="channel_account_created",
+        subject_type="channel_account",
+        subject_id=str(account.id),
+        detail={"channel": body.channel, "external_id": body.external_id},
+    )
+    account = await repo.get_channel_account(session, account.id)
+    return _channel_account_out(account)
+
+
+@router.patch("/channel-accounts/{account_id}", response_model=ChannelAccountOut)
+async def update_channel_account(
+    account_id: uuid.UUID,
+    body: ChannelAccountUpdateIn,
+    session: SessionDep,
+    settings: SettingsDep,
+    principal: AdminDep,
+) -> ChannelAccountOut:
+    """Edita nombre, departamento, estado o token propio. Reservado a administración."""
+    account = await repo.get_channel_account(session, account_id)
+    if account is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Cuenta no encontrada")
+
+    changes = body.model_dump(exclude_unset=True)
+    if changes.get("department_id") is not None:
+        department = await repo.get_department(session, changes["department_id"])
+        if department is None or department.tenant_id != account.tenant_id:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="El departamento no existe"
+            )
+
+    if "access_token" in changes:
+        token = changes.pop("access_token")
+        if token:
+            try:
+                changes["credentials_ciphertext"] = encrypt_json(
+                    {"access_token": token}, settings=settings
+                )
+            except EncryptionNotConfiguredError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT, detail=str(exc)
+                ) from exc
+        else:
+            changes["credentials_ciphertext"] = None
+
+    await repo.update_channel_account(session, account, **changes)
+    await repo.record_audit(
+        session,
+        tenant_id=account.tenant_id,
+        actor=principal.audit_actor,
+        action="channel_account_updated",
+        subject_type="channel_account",
+        subject_id=str(account.id),
+        detail={
+            key: (str(value) if isinstance(value, uuid.UUID) else value)
+            for key, value in changes.items()
+            if key != "credentials_ciphertext"
+        },
+    )
+    account = await repo.get_channel_account(session, account.id)
+    return _channel_account_out(account)
 
 
 # --------------------------------------------------------------------------- #

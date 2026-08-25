@@ -131,7 +131,7 @@ class Orchestrator:
                 tenant_id=tenant.id,
                 ref=inbound.conversation,
                 contact_id=contact.id,
-                channel_account_id=channel_account.id if channel_account else None,
+                channel_account=channel_account,
             )
             stored = await repo.record_inbound(
                 session,

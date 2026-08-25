@@ -10,7 +10,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import delete, func, or_, select, update
+from sqlalchemy import Text, cast, delete, func, or_, select, update
 from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -149,6 +149,82 @@ async def get_or_create_channel_account(
         )
     )
     return (await session.execute(stmt)).scalar_one()
+
+
+async def get_channel_account(
+    session: AsyncSession, account_id: uuid.UUID
+) -> ChannelAccount | None:
+    return (
+        await session.execute(
+            select(ChannelAccount)
+            .where(ChannelAccount.id == account_id)
+            .options(selectinload(ChannelAccount.department))
+        )
+    ).scalar_one_or_none()
+
+
+async def find_channel_account(
+    session: AsyncSession, *, channel: ChannelKind, external_id: str
+) -> ChannelAccount | None:
+    """Lectura simple, a diferencia de :func:`get_or_create_channel_account`:
+    no crea la fila si falta. Para resolver credenciales al enviar, donde la
+    cuenta ya debería existir desde que llegó el primer mensaje entrante.
+    """
+    return (
+        await session.execute(
+            select(ChannelAccount).where(
+                ChannelAccount.channel == channel, ChannelAccount.external_id == external_id
+            )
+        )
+    ).scalar_one_or_none()
+
+
+async def list_channel_accounts(
+    session: AsyncSession, *, tenant_id: uuid.UUID
+) -> list[ChannelAccount]:
+    stmt = (
+        select(ChannelAccount)
+        .where(ChannelAccount.tenant_id == tenant_id)
+        .options(selectinload(ChannelAccount.department))
+        .order_by(ChannelAccount.channel, ChannelAccount.display_name, ChannelAccount.external_id)
+    )
+    return list((await session.execute(stmt)).scalars())
+
+
+async def create_channel_account(
+    session: AsyncSession,
+    *,
+    tenant_id: uuid.UUID,
+    channel: ChannelKind,
+    external_id: str,
+    display_name: str | None = None,
+    department_id: uuid.UUID | None = None,
+    credentials_ciphertext: str | None = None,
+) -> ChannelAccount:
+    """Alta explícita desde la consola, a diferencia de
+    :func:`get_or_create_channel_account`, que solo se dispara sola cuando
+    llega el primer mensaje de un número/página/equipo nunca visto.
+    """
+    account = ChannelAccount(
+        tenant_id=tenant_id,
+        channel=channel,
+        external_id=external_id.strip(),
+        display_name=display_name,
+        department_id=department_id,
+        credentials_ciphertext=credentials_ciphertext,
+    )
+    session.add(account)
+    await session.flush()
+    return account
+
+
+async def update_channel_account(
+    session: AsyncSession, account: ChannelAccount, **changes: Any
+) -> ChannelAccount:
+    for key, value in changes.items():
+        setattr(account, key, value)
+    await session.flush()
+    return account
 
 
 # --------------------------------------------------------------------------- #
@@ -392,6 +468,53 @@ async def list_contact_comments(
     return list((await session.execute(stmt)).scalars())
 
 
+async def list_contacts(
+    session: AsyncSession,
+    *,
+    tenant_id: uuid.UUID,
+    search: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> list[tuple[Contact, int, datetime | None]]:
+    """Directorio de contactos con su número de conversaciones y última
+    actividad, para el listado global de la consola (solo supervisión)."""
+    stmt = (
+        select(Contact, func.count(Conversation.id), func.max(Conversation.last_message_at))
+        .outerjoin(Conversation, Conversation.contact_id == Contact.id)
+        .where(Contact.tenant_id == tenant_id)
+        .group_by(Contact.id)
+        .order_by(func.max(Conversation.last_message_at).desc().nulls_last())
+        .limit(limit)
+        .offset(offset)
+    )
+    if search:
+        pattern = f"%{search.strip().lower()}%"
+        stmt = stmt.where(
+            or_(
+                func.lower(Contact.display_name).like(pattern),
+                func.lower(Contact.primary_email).like(pattern),
+                Contact.primary_phone.like(f"%{search.strip()}%"),
+            )
+        )
+    return [(row[0], row[1], row[2]) for row in (await session.execute(stmt)).all()]
+
+
+async def list_conversations_for_contact(
+    session: AsyncSession, contact_id: uuid.UUID
+) -> list[Conversation]:
+    stmt = (
+        select(Conversation)
+        .where(Conversation.contact_id == contact_id)
+        .options(
+            selectinload(Conversation.contact),
+            selectinload(Conversation.assignee),
+            selectinload(Conversation.department),
+        )
+        .order_by(Conversation.last_message_at.desc().nulls_last())
+    )
+    return list((await session.execute(stmt)).scalars())
+
+
 # --------------------------------------------------------------------------- #
 # Conversaciones
 # --------------------------------------------------------------------------- #
@@ -401,7 +524,7 @@ async def resolve_conversation(
     tenant_id: uuid.UUID,
     ref: ConversationRef,
     contact_id: uuid.UUID | None,
-    channel_account_id: uuid.UUID | None = None,
+    channel_account: ChannelAccount | None = None,
 ) -> Conversation:
     stmt = select(Conversation).where(
         Conversation.tenant_id == tenant_id,
@@ -426,7 +549,11 @@ async def resolve_conversation(
                 "tenant_id": tenant_id,
                 "channel": ref.channel,
                 "channel_conversation_id": ref.channel_conversation_id,
-                "channel_account_id": channel_account_id,
+                "channel_account_id": channel_account.id if channel_account else None,
+                # Enrutado automático: una cuenta de canal sin departamento
+                # (el caso de hoy) deja la conversación en la cola común,
+                # exactamente como antes de que existiera este campo.
+                "department_id": channel_account.department_id if channel_account else None,
                 "contact_id": contact_id,
                 "conversation_ref": ref.to_dict(),
             },
@@ -434,6 +561,28 @@ async def resolve_conversation(
         )
     )
     return (await session.execute(stmt)).scalar_one()
+
+
+async def find_message_by_attachment(
+    session: AsyncSession, *, tenant_id: uuid.UUID, stored_name: str
+) -> Message | None:
+    """Localiza el mensaje que contiene el adjunto con ese nombre de fichero.
+
+    Los adjuntos viven dentro de ``messages.attachments``, de modo que la
+    búsqueda se hace sobre el JSON convertido a texto. El nombre es un UUID de
+    32 dígitos hexadecimales, así que la coincidencia por subcadena es
+    inequívoca. Se ejecuta una vez por descarga, no en el camino caliente del
+    turno de conversación.
+    """
+    stmt = (
+        select(Message)
+        .where(
+            Message.tenant_id == tenant_id,
+            cast(Message.attachments, Text).contains(stored_name),
+        )
+        .limit(1)
+    )
+    return (await session.execute(stmt)).scalars().first()
 
 
 async def find_conversation(

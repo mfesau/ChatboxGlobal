@@ -52,10 +52,17 @@
    desbordamiento se resuelve dentro de cada contenedor (el hilo, la lista de
    conversaciones, los paneles). Lo único que se despliega más allá de ese
    marco fijo son los elementos de borde —desplegables, el cajón «Equipo», los
-   paneles de administración y supervisión—, que ya usan `position: fixed`. */
+   paneles de administración y supervisión—, que ya usan `position: fixed`.
+   `100dvh` en vez de `100%`: en el celular, al abrirse el teclado para
+   escribir, `100%`/`100vh` no se achican con él en la mayoría de los
+   navegadores, y el redactor —anclado abajo de esa caja— queda tapado justo
+   cuando hace falta. La altura dinámica sí sigue al teclado; el navegador que
+   no la reconozca descarta la línea entera y se queda con el `100%` de más
+   arriba. */
 html,
 body {
   height: 100%;
+  height: 100dvh;
   margin: 0;
   overflow: hidden;
 }
@@ -144,6 +151,23 @@ body {
   font-size: 13px;
   color: var(--text-muted);
   text-align: center;
+}
+
+.gate__separator {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+#sso-button {
+  display: block;
+  width: 100%;
+  height: 38px;
+  box-sizing: border-box;
+  text-align: center;
+  line-height: 38px;
+  text-decoration: none;
 }
 
 .link-button {

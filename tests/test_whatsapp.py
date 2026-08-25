@@ -263,6 +263,32 @@ def test_split_text_preserves_all_content():
     assert "".join(chunks).replace("\n", "") == text.replace("\n", "")
 
 
+# --------------------------------------------------------------------------- #
+# Credenciales por cuenta (varios números bajo un mismo tenant)
+# --------------------------------------------------------------------------- #
+def test_resolve_token_prefers_the_account_credential_over_the_global_one():
+    adapter = make_adapter()
+    ref = ConversationRef(
+        channel=ChannelKind.WHATSAPP,
+        channel_conversation_id="595981123456",
+        channel_account_id="9999999999",
+        extra={"credentials": {"access_token": "token-propio-de-la-cuenta"}},
+    )
+
+    assert adapter._resolve_token(ref) == "token-propio-de-la-cuenta"
+
+
+def test_resolve_token_falls_back_to_the_global_setting():
+    adapter = make_adapter()
+    ref = ConversationRef(
+        channel=ChannelKind.WHATSAPP,
+        channel_conversation_id="595981123456",
+        channel_account_id="1234567890",
+    )
+
+    assert adapter._resolve_token(ref) == "EAAG-token"
+
+
 async def test_send_without_credentials_reports_configuration_error():
     settings = Settings(_env_file=None)
     adapter = WhatsAppAdapter(settings)
