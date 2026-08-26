@@ -496,16 +496,25 @@ aunque el volumen de datos desaparezca por completo, que es exactamente lo que
 ya pasó más de una vez en este proyecto sin que se identificara la causa.
 
 - **Alta de la tarea programada** (una sola vez):
-  `powershell -File scripts\register_backup_task.ps1` — crea la tarea
-  «ChatboxDbBackup» del Programador de tareas de Windows, cada 4 horas por
-  defecto (`-IntervalHours`), reteniendo 14 días de respaldos por defecto
+  `powershell -File scripts\register_backup_task.ps1 -IntervalMinutes 10` —
+  crea la tarea «ChatboxDbBackup» del Programador de tareas de Windows, cada
+  10 minutos (o `-IntervalHours` si prefiere esa unidad; sin ninguno de los
+  dos, cada 4 horas), reteniendo 14 días de respaldos por defecto
   (`-RetentionDays`). Corre con la cuenta con dominio del usuario actual
   (`Interactive`): sin eso, la tarea no alcanza el Docker Desktop de la
   sesión y falla en silencio.
 - **Respaldo manual**: `powershell -File scripts\backup_db.ps1`.
-- **Restaurar**: `powershell -File scripts\restore_db.ps1 -Latest` (o
+- **Restaurar a mano**: `powershell -File scripts\restore_db.ps1 -Latest` (o
   `-BackupFile <nombre.sql>` para uno puntual). Pide confirmación porque
   sobrescribe la base actual; `-Force` la omite.
+- **Recuperación automática al arrancar**: `db/migrations/9999_restore_latest_backup.sh`
+  corre solo, como el resto de `db/migrations/`, pero **solo** cuando el
+  volumen de datos está vacío —es decir, exactamente cuando ya no queda nada
+  que recuperar—. Si hay un respaldo en `backups/`, lo restaura antes de que
+  el contenedor termine de arrancar, sin que nadie tenga que intervenir; si
+  no hay ninguno, deja el esquema recién creado tal cual. Verificado en vivo
+  borrando el volumen a propósito y levantando la pila de nuevo: la cuenta y
+  los datos volvieron solos, sin ejecutar `restore_db.ps1` a mano.
 - **Quitar la tarea**: `Unregister-ScheduledTask -TaskName ChatboxDbBackup`.
 
 ---
