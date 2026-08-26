@@ -1,4 +1,4 @@
-# Chat de equipo en red local — capa central de orquestación
+# ChatboxGlobal — chat de equipo en red local
 
 Servicio que reúne en **un único punto de entrada** todos los chats —WhatsApp,
 Facebook Messenger, Microsoft Teams y el chatbox web propio—, los normaliza a

@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     )
 
     # ------------------------------------------------------------------ general
-    app_name: str = "Chatbox Orchestrator"
+    app_name: str = "ChatboxGlobal"
     environment: Literal["dev", "staging", "prod"] = "dev"
     log_level: str = "INFO"
     public_base_url: str = "http://localhost:8000"

@@ -99,7 +99,7 @@ def create_app() -> FastAPI:
     settings = get_settings()
     application = FastAPI(
         title=settings.app_name,
-        version="0.1.0",
+        version=__version__,
         summary=(
             "Capa central de orquestación para WhatsApp Cloud API, Microsoft Bot "
             "Framework y el chatbox web propio."
@@ -149,7 +149,12 @@ def create_app() -> FastAPI:
     @application.get("/health", tags=["operación"])
     async def health() -> dict[str, Any]:
         """Comprobación superficial: el proceso responde."""
-        return {"status": "ok", "environment": settings.environment}
+        return {
+            "status": "ok",
+            "environment": settings.environment,
+            "app": settings.app_name,
+            "version": __version__,
+        }
 
     @application.get("/health/ready", tags=["operación"])
     async def readiness() -> JSONResponse:

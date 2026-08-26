@@ -96,7 +96,10 @@ async def client() -> AsyncIterator[httpx.AsyncClient]:
 async def test_health_reports_ok(client: httpx.AsyncClient):
     response = await client.get("/health")
     assert response.status_code == 200
-    assert response.json()["status"] == "ok"
+    body = response.json()
+    assert body["status"] == "ok"
+    assert body["app"] == "ChatboxGlobal"
+    assert body["version"]
 
 
 async def test_readiness_checks_the_database(client: httpx.AsyncClient):
