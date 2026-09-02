@@ -1,0 +1,1256 @@
+/* Consola del equipo: bandeja, hilo y panel de trabajo en equipo. */
+.console-body {
+  display: block;
+}
+
+/* --- Acceso ------------------------------------------------------------- */
+.gate {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 24px;
+  overflow-y: auto;
+  background: var(--bg);
+}
+
+.gate__card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: 100%;
+  max-width: 380px;
+  padding: 28px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.gate__card h1 {
+  margin: 0;
+  font-size: 20px;
+}
+
+.gate__card label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+
+.gate__card input {
+  padding: 10px 12px;
+  font: inherit;
+  color: var(--text);
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.gate__error {
+  margin: 0;
+  padding: 9px 12px;
+  font-size: 13px;
+  color: #fff;
+  background: #c0392b;
+  border-radius: 10px;
+}
+
+.gate__separator {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+#sso-button {
+  display: block;
+  width: 100%;
+  height: 38px;
+  box-sizing: border-box;
+  text-align: center;
+  line-height: 38px;
+  text-decoration: none;
+}
+
+/* --- Estructura --------------------------------------------------------- */
+.console {
+  display: grid;
+  grid-template-columns: minmax(260px, 330px) minmax(0, 1fr) minmax(280px, 340px);
+  height: 100%;
+  background: var(--bg);
+}
+
+.console__sidebar,
+.console__aside {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  /* Sin esto, el elemento de la cuadrícula crece para acomodar todo su
+     contenido (la lista de conversaciones, los paneles) en vez de quedarse
+     en la altura de la fila y dejar que cada uno haga scroll por su cuenta. */
+  min-height: 0;
+  background: var(--surface);
+}
+
+.console__sidebar {
+  border-right: 1px solid var(--border);
+}
+
+.console__aside {
+  gap: 0;
+  overflow-y: auto;
+  border-left: 1px solid var(--border);
+}
+
+.console__main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--surface);
+}
+
+/* --- Cabecera de la bandeja -------------------------------------------- */
+.console__sidebar-header {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+/* Se permite el salto de línea: con el nombre de quien entra, dos botones y
+   el selector de idioma, en alemán ya no cabe todo en una sola fila. */
+.console__identity {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.console__identity > div:first-child {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.console__identity strong,
+.console__identity .console__muted {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.console__identity strong {
+  font-size: 14.5px;
+}
+
+.console__tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 10px;
+  padding: 3px;
+  background: var(--surface-alt);
+  border-radius: 10px;
+}
+
+.console__tabs button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  /* Anchos según el contenido y no iguales a la fuerza: «Alle» no necesita lo
+     mismo que «Warteschlange», y repartir a partes iguales cortaba la larga
+     mientras le sobraba sitio a la corta. */
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  padding: 7px 5px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text-muted);
+  background: transparent;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.console__tabs button[aria-selected="true"] {
+  color: var(--text);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+/* El rótulo cede antes que el contador: saber cuántas hay importa más que
+   leer el nombre entero de la bandeja, que además está al lado seleccionado. */
+.console__tabs button > span[data-i18n] {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.console__count {
+  flex: none;
+}
+
+.console__count {
+  padding: 0 6px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent-contrast);
+  background: var(--accent);
+  border-radius: 999px;
+}
+
+.console__tabs button[aria-selected="false"] .console__count {
+  color: var(--text-muted);
+  background: var(--inbound);
+}
+
+/* Dos por fila y no cuatro: en una barra de 260 px, cuatro desplegables
+   dejaban unos 60 px a cada uno y ningún rótulo entraba entero. Con dos
+   columnas cada uno dispone del doble, que ya alcanza para leerlos —y en
+   alemán, donde las palabras son más largas, es la diferencia entre leer
+   «Alle Kanäle» y ver «Alle Ka…». */
+.console__filters {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.console__filters select {
+  width: 100%;
+  min-width: 0;
+  padding: 7px 9px;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--text);
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  /* Un nombre de departamento largo se corta con puntos en vez de estirar
+     la columna y descuadrar la rejilla. */
+  text-overflow: ellipsis;
+}
+
+/* --- Estado de la conversación ------------------------------------------- */
+/* Los tres estados van juntos y no sueltos: son una misma elección, y verlos
+   como un grupo deja claro que marcar uno quita el anterior. */
+.state-switch {
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  background: var(--surface-alt);
+  border-radius: 999px;
+}
+
+.state-switch button {
+  padding: 6px 12px;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--text-muted);
+  background: transparent;
+  border: none;
+  border-radius: 999px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.state-switch button:hover:not([aria-pressed="true"]):not(:disabled) {
+  color: var(--text);
+}
+
+.state-switch button[aria-pressed="true"] {
+  color: #fff;
+  background: var(--text-muted);
+}
+
+/* Cada estado con su color: el que está en curso llama la atención y el
+   resuelto tranquiliza, sin tener que leer el rótulo. */
+.state-switch button[data-state="in_progress"][aria-pressed="true"] {
+  background: var(--warn);
+}
+
+.state-switch button[data-state="solved"][aria-pressed="true"] {
+  background: var(--ok);
+}
+
+.state-switch button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* Acción que no se deshace: se distingue de las demás, pero solo al pasar por
+   encima, para que no compita con el resto de botones de la fila. */
+.ghost-button--danger:hover:not(:disabled) {
+  color: #fff;
+  background: var(--danger);
+  border-color: var(--danger);
+}
+
+/* --- Pestañas del panel de administración -------------------------------- */
+/* Justo debajo de la cabecera, y fijas como ella: cambiar de sección desde
+   el final de una lista larga no debería obligar a subir primero. */
+.admin-tabs {
+  position: sticky;
+  top: 57px;
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0 16px;
+  padding: 4px;
+  background: var(--surface-alt);
+  border-radius: 10px;
+  box-shadow: 0 0 0 6px var(--surface);
+}
+
+.admin-tabs button {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 8px 12px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--text-muted);
+  background: transparent;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.admin-tabs button[aria-selected="true"] {
+  color: var(--text);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.admin-tabs button:hover[aria-selected="false"] {
+  color: var(--text);
+}
+
+/* La primera sección de cada pestaña no repite el borde que ya traza la
+   barra de pestañas justo encima. */
+.admin-tab-panel > :first-child {
+  border-top: 0;
+}
+
+/* --- Selector de idioma -------------------------------------------------- */
+.lang-select {
+  flex: none;
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+/* --- Macros -------------------------------------------------------------- */
+.macro-run-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.macro-run {
+  padding: 5px 12px;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--accent-ink);
+  background: transparent;
+  border: 1px solid var(--accent-ink);
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.macro-run:hover:not(:disabled) {
+  color: var(--accent-contrast);
+  background: var(--accent);
+}
+
+.macro-run:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Los pasos van numerados: en una macro el orden es parte del significado. */
+#macro-steps {
+  padding-left: 20px;
+  list-style: decimal;
+}
+
+/* --- Horario de atención ------------------------------------------------ */
+.hours-table {
+  width: 100%;
+  margin-top: 10px;
+  font-size: 12.5px;
+  border-collapse: collapse;
+}
+
+.hours-table th {
+  padding: 4px 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-align: left;
+}
+
+/* Cada par de horas bajo el nombre de su franja: así se ve de un vistazo cuál
+   «Cierra» pertenece a la mañana y cuál a la tarde. */
+.hours-table__group {
+  padding-bottom: 2px;
+  color: var(--text);
+  text-align: center;
+  border-bottom: 1px solid var(--border);
+}
+
+/* Separa las dos franjas sin dibujar una rejilla entera. */
+.hours-table th:nth-child(4),
+.hours-table tr > td:nth-child(4) {
+  border-left: 1px solid var(--border);
+  padding-left: 10px;
+}
+
+.hours-table thead tr:first-child th:nth-child(3) {
+  border-left: 1px solid var(--border);
+  padding-left: 10px;
+}
+
+.hours-table td {
+  padding: 3px 6px 3px 0;
+}
+
+.hours-table input[type="time"] {
+  width: 100%;
+  padding: 5px 6px;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--text);
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+/* Un día cerrado mantiene sus horas a la vista, pero atenuadas. */
+.hours-table tr[data-open="false"] input[type="time"] {
+  opacity: 0.4;
+}
+
+.hours-table__day {
+  white-space: nowrap;
+}
+
+.hours-table__day label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+}
+
+/* --- Vistas guardadas --------------------------------------------------- */
+.console__views {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.console__views-list {
+  display: contents;
+}
+
+.console__view {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 4px 3px 10px;
+  font-size: 12px;
+  color: var(--text-muted);
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+
+.console__view button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.console__view-apply {
+  padding: 0;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.console__view.is-active {
+  color: var(--accent-contrast);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.console__view-remove {
+  padding: 0 4px;
+  font-size: 14px;
+  line-height: 1;
+  opacity: 0.6;
+}
+
+.console__view-remove:hover {
+  opacity: 1;
+}
+
+.console__views-save {
+  padding: 3px 10px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px dashed var(--border);
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.console__views-save:hover {
+  color: var(--text);
+  background: var(--surface-alt);
+}
+
+.console__views-form {
+  flex: 1;
+  min-width: 120px;
+}
+
+.console__views-form input {
+  width: 100%;
+  padding: 3px 10px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--surface-alt);
+  border: 1px solid var(--accent-ink);
+  border-radius: 999px;
+}
+
+.console__views-form input:focus-visible {
+  outline: 2px solid var(--accent-ink);
+  outline-offset: 1px;
+}
+
+.console__views-shared {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 5px;
+  font-size: 11.5px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.console__views-shared input {
+  width: auto;
+  margin: 0;
+}
+
+/* Un punto delante distingue de un vistazo la vista del equipo de la propia. */
+.console__view--shared .console__view-apply::before {
+  content: "• ";
+  opacity: 0.7;
+}
+
+/* --- Lista de conversaciones ------------------------------------------- */
+.console__list {
+  flex: 1;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.console__sidebar-footer {
+  padding: 10px 16px;
+  border-top: 1px solid var(--border);
+}
+
+.console__item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 100%;
+  padding: 11px 16px;
+  text-align: left;
+  font: inherit;
+  color: var(--text);
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.console__item:hover {
+  background: var(--surface-alt);
+}
+
+.console__item[aria-current="true"] {
+  background: var(--surface-alt);
+  box-shadow: inset 3px 0 0 var(--accent-ink);
+}
+
+.console__item-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.console__item-name {
+  overflow: hidden;
+  font-weight: 600;
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.console__badge {
+  flex: none;
+  padding: 1px 8px;
+  font-size: 11px;
+  color: var(--text-muted);
+  background: var(--inbound);
+  border-radius: 999px;
+}
+
+.console__badge--human {
+  color: #fff;
+  background: var(--warn);
+}
+
+.console__badge--unread {
+  color: var(--accent-contrast);
+  background: var(--accent);
+}
+
+.console__badge--pool {
+  color: #fff;
+  background: var(--ok);
+}
+
+/* Objetivo de primera respuesta: a la espera y ya vencido. */
+.console__badge--sla {
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid var(--border);
+}
+
+.console__badge--breached {
+  color: #fff;
+  background: var(--danger);
+}
+
+.console__muted {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+
+.console__item-labels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 4px 0 0;
+}
+
+/* --- Composer: sugerencias de respuestas guardadas ---------------------- */
+.composer {
+  position: relative;
+}
+
+.composer__suggestions {
+  position: absolute;
+  right: 20px;
+  bottom: 100%;
+  left: 20px;
+  z-index: 5;
+  max-height: 220px;
+  margin: 0 0 6px;
+  padding: 6px;
+  overflow-y: auto;
+  list-style: none;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgb(10 12 16 / 20%);
+}
+
+.composer__suggestions li {
+  padding: 8px 10px;
+  font-size: 13px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.composer__suggestions li strong {
+  color: var(--accent-ink);
+}
+
+.composer__suggestions li.is-active {
+  background: var(--surface-alt);
+}
+
+/* --- Hilo -------------------------------------------------------------- */
+.console__thread-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 13px 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.console__thread-title {
+  min-width: 0;
+}
+
+.console__thread-header h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.console__empty {
+  max-width: 46ch;
+  margin: auto;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.bubble--note {
+  align-self: center;
+  max-width: 62ch;
+  font-size: 13px;
+  color: var(--text);
+  background: repeating-linear-gradient(
+    -45deg,
+    var(--surface-alt),
+    var(--surface-alt) 8px,
+    var(--inbound) 8px,
+    var(--inbound) 16px
+  );
+  box-shadow: none;
+}
+
+/* --- Paneles ----------------------------------------------------------- */
+.panel {
+  padding: 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.panel h3 {
+  margin: 0 0 6px;
+  font-size: 14px;
+}
+
+.panel__field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 12px 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.panel__field select,
+.panel__field input,
+.panel__field textarea,
+.panel__inline-form textarea {
+  width: 100%;
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  resize: vertical;
+}
+
+.admin-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.admin-grid .panel {
+  border-bottom: 0;
+}
+
+@media (max-width: 640px) {
+  .admin-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.panel .send-button {
+  width: 100%;
+  height: 38px;
+}
+
+.panel__list,
+.panel__timeline {
+  margin: 12px 0 0;
+  padding: 0 0 0 2px;
+  list-style: none;
+}
+
+.panel__timeline {
+  border-left: 2px solid var(--border);
+  padding-left: 12px;
+}
+
+.panel__list li,
+.panel__timeline li {
+  margin-bottom: 10px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.panel__meta {
+  display: block;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.panel__inline-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.panel__list--removable li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.panel__list-remove {
+  flex: none;
+  padding: 2px 10px;
+  font-size: 12px;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.panel__list-remove:hover {
+  color: var(--text);
+  background: var(--surface-alt);
+}
+
+/* --- Etiquetas ----------------------------------------------------------- */
+.label-toggle-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.label-toggle {
+  padding: 3px 10px;
+  font: inherit;
+  font-size: 12px;
+  color: #fff;
+  background: var(--text-muted);
+  border: none;
+  border-radius: 999px;
+  cursor: pointer;
+  opacity: 0.45;
+}
+
+.label-toggle.is-active {
+  opacity: 1;
+}
+
+/* --- Panel de supervisión --------------------------------------------- */
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgb(10 12 16 / 55%);
+}
+
+.overlay__card {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  width: 100%;
+  max-width: 860px;
+  max-height: 86vh;
+  overflow-y: auto;
+  /* Sin relleno arriba: esa franja quedaba por encima de la cabecera fija y
+     dejaba ver el contenido pasando por detrás. Lo aporta la propia cabecera. */
+  padding: 0 24px 22px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+/* Fija arriba: el panel es largo y, al desplazarse, se perdían de vista tanto
+   el título —dónde se está— como el botón de cerrar, que obligaba a volver
+   hasta el principio. Los márgenes negativos compensan el relleno de la
+   tarjeta para que la banda cubra todo el ancho al quedar pegada. */
+.overlay__header {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 0 -24px;
+  padding: 20px 24px 14px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.overlay__header h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.overlay__card h3 {
+  margin: 0 0 10px;
+  font-size: 14px;
+}
+
+.table-scroll {
+  overflow-x: auto;
+}
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13.5px;
+}
+
+.data-table th,
+.data-table td {
+  padding: 8px 10px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.data-table th {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.data-table td:nth-child(n + 4),
+.data-table th:nth-child(n + 4) {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+#admin-users-table input[type="text"],
+#admin-users-table input[type="password"],
+#channel-accounts-table input[type="text"],
+#channel-accounts-table input[type="password"] {
+  width: 100%;
+  min-width: 130px;
+  padding: 5px 8px;
+  font: inherit;
+  color: var(--text);
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+#admin-users-table select,
+#channel-accounts-table select {
+  min-width: 130px;
+  padding: 5px 8px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+/* Las columnas con formularios quedan a la izquierda; solo las acciones se
+   alinean a la derecha, pese a la regla general de `.data-table` que alinea
+   a la derecha desde la cuarta columna. */
+#admin-users-table td:nth-child(n + 4),
+#channel-accounts-table td:nth-child(n + 4) {
+  text-align: left;
+  font-variant-numeric: normal;
+}
+
+#admin-users-table td:last-child,
+#channel-accounts-table td:last-child {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+  text-align: right;
+}
+
+/* Borrar una cuenta. En reposo se ve como cualquier otro botón fantasma: el
+   rojo permanente en una tabla de varias filas convierte la pantalla en un
+   semáforo y deja de avisar de nada. Solo al armarse —tras el primer clic—
+   toma el color de peligro, que es cuando de verdad hay algo que mirar. */
+/* Ancho fijo para que armar el botón no mueva la fila. El rótulo cambia de
+   «Eliminar» a «¿Seguro?» —dos palabras de largo parecido, elegidas por eso— y
+   sin esta reserva el resto de los botones daría un salto lateral justo cuando
+   hay que leer con atención lo que se va a hacer. */
+.ghost-button--danger {
+  min-width: 9ch;
+}
+
+.ghost-button--danger:hover {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.ghost-button--danger.is-armed {
+  color: #fff;
+  background: var(--danger);
+  border-color: var(--danger);
+}
+
+/* --- Conversación saliente --------------------------------------------- */
+
+/* Comparte aspecto con «+ Guardar vista», que está justo encima: las dos son
+   acciones que añaden algo a la barra lateral. */
+.console__start {
+  width: 100%;
+  margin-top: 8px;
+  padding: 6px 10px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--accent-ink);
+  background: transparent;
+  border: 1px dashed var(--border);
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.console__start:hover {
+  background: var(--surface-alt);
+}
+
+/* Más estrecha que el panel de administración: aquí solo hay tres campos, y a
+   860px de ancho se leerían como una fila suelta perdida en la pantalla. */
+.overlay__card--narrow {
+  max-width: 460px;
+}
+
+/* El texto de la plantilla, tal como lo verá quien la reciba. Se muestra en el
+   mismo momento en que se elige, porque el nombre técnico
+   («jaspers_market_order_confirmation_v1») no dice nada de lo que se envía. */
+.start-preview {
+  margin: 0 0 4px;
+  padding: 10px 12px;
+  font-size: 13px;
+  white-space: pre-wrap;
+  color: var(--text);
+  background: var(--surface-alt);
+  border-radius: 10px;
+}
+
+.start-preview:empty {
+  display: none;
+}
+
+/* --- Apariencia: color de la marca ------------------------------------- */
+
+.brand-picker__controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.brand-picker .brand-picker__controls input[type="color"] {
+  flex: none;
+  width: 46px;
+  height: 34px;
+  padding: 2px;
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+/* El campo hexadecimal acompaña al selector porque una marca se comunica por
+   su código («nuestro azul es el #2f5bd7»), no señalando un punto en un
+   degradado. Los dos escriben y leen el mismo valor.
+
+   El selector lleva `.panel__field input` delante, que estira los campos a
+   todo el ancho; aquí se nombran los dos para ganarle, porque un campo de
+   siete caracteres ocupando la fila entera parece esperar una frase. */
+.brand-picker .brand-picker__hex {
+  width: 11ch;
+  font-family: ui-monospace, "Cascadia Mono", "Consolas", monospace;
+  text-transform: lowercase;
+}
+
+.brand-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0 4px;
+}
+
+.brand-presets button {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.brand-presets button[aria-pressed="true"] {
+  /* El anillo se dibuja por fuera con la sombra y no con el borde: cambiar el
+     grosor del borde movería el color un pixel y la fila entera bailaría al
+     elegir. */
+  box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--accent-ink);
+}
+
+.brand-preview {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+/* Los dos fondos son fijos y no salen de la paleta: son exactamente los mismos
+   con los que el servidor midió el contraste (SURFACE_LIGHT y SURFACE_DARK en
+   app/core/branding.py). Si aquí se usara `var(--surface)`, la muestra del tema
+   claro se vería sobre fondo oscuro para quien tenga la consola en oscuro, y
+   dejaría de enseñar lo que dice enseñar. */
+.brand-preview__card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.brand-preview__card[data-brand-preview="light"] {
+  background: #ffffff;
+}
+
+.brand-preview__card[data-brand-preview="dark"] {
+  background: #171a20;
+}
+
+.brand-preview__theme {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.brand-preview__card[data-brand-preview="light"] .brand-preview__theme {
+  color: #5f6672;
+}
+
+.brand-preview__card[data-brand-preview="dark"] .brand-preview__theme {
+  color: #99a1af;
+}
+
+.brand-preview__bubble {
+  max-width: 100%;
+  padding: 7px 12px;
+  font-size: 13px;
+  border-radius: 12px;
+  border-bottom-right-radius: 4px;
+}
+
+.brand-preview__button {
+  padding: 7px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: 10px;
+}
+
+.brand-preview__link {
+  font-size: 13px;
+  text-decoration: underline;
+}
+
+.brand-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+@media (max-width: 640px) {
+  .brand-preview {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* --- Adaptación a pantallas estrechas --------------------------------- */
+/* El conmutador solo hace falta cuando el panel deja de caber como columna. */
+#aside-toggle {
+  display: none;
+}
+
+@media (max-width: 1180px) {
+  .console {
+    grid-template-columns: minmax(240px, 300px) minmax(0, 1fr);
+  }
+
+  #aside-toggle {
+    display: inline-block;
+  }
+
+  /* Cajón lateral: el panel sigue alcanzable en pantallas estrechas. Ocultarlo
+     del todo dejaría al agente sin forma de derivar una conversación.
+     Su visibilidad la gobierna el atributo `hidden`, igual que en la columna
+     ancha: un solo mecanismo para los dos modos. */
+  .console__aside {
+    position: fixed;
+    inset: 0 0 0 auto;
+    z-index: 15;
+    width: min(340px, 92vw);
+    border-left: 1px solid var(--border);
+    box-shadow: var(--shadow);
+  }
+}
+
+@media (max-width: 820px) {
+  .console {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(200px, 38vh) 1fr;
+  }
+
+  .console__sidebar {
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+}

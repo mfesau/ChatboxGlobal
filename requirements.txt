@@ -1,0 +1,33 @@
+# --- Núcleo web / ASGI ---
+fastapi==0.141.1
+uvicorn[standard]==0.38.0
+python-multipart==0.0.20
+
+# --- Configuración y validación ---
+pydantic==2.12.3
+pydantic-settings==2.11.0
+
+# --- Persistencia PostgreSQL ---
+SQLAlchemy[asyncio]==2.0.44
+asyncpg==0.30.0
+alembic==1.17.1
+
+# --- Clientes HTTP y seguridad de canales ---
+httpx==0.28.1
+PyJWT[crypto]==2.10.1
+
+# --- Inicio de sesión único (SAML 2.0) de la consola ---
+# Necesita las bibliotecas nativas libxml2/libxmlsec1; ver Dockerfile.
+python3-saml==1.16.0
+
+# --- Motor de IA ---
+anthropic==0.75.0
+
+# --- Horario de atención ---
+# Base de datos de zonas horarias de IANA. En Linux la aporta el sistema, pero
+# en Windows no existe y `zoneinfo` no encontraría ninguna zona: sin esto, las
+# pruebas del horario de atención fallan fuera del contenedor.
+tzdata==2025.2
+
+# --- Observabilidad ---
+structlog==25.4.0

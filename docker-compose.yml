@@ -1,0 +1,80 @@
+# Entorno local completo: PostgreSQL más el orquestador.
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: chatbox-postgres
+    environment:
+      POSTGRES_USER: chatbox
+      POSTGRES_PASSWORD: chatbox
+      POSTGRES_DB: chatbox
+    ports:
+      - "5432:5432"
+    volumes:
+      # Carpeta del host, no un volumen con nombre: algo (todavía sin causa
+      # identificada) vacía de tanto en tanto los volúmenes con nombre de
+      # Docker en este equipo. Una carpeta común del disco no se ve afectada,
+      # así que los datos ya no dependen de la restauración automática para
+      # sobrevivir a eso.
+      - ./pgdata:/var/lib/postgresql/data
+      - ./db/migrations:/docker-entrypoint-initdb.d:ro
+      - ./backups:/backups
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U chatbox -d chatbox"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build: .
+    container_name: chatbox-api
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      # Dentro de la red de Compose el host es el nombre del servicio.
+      DATABASE_URL: postgresql+asyncpg://chatbox:chatbox@postgres:5432/chatbox
+    volumes:
+      # Sin este volumen, reconstruir la imagen borraría las imágenes subidas.
+      - uploads-data:/app/uploads
+    ports:
+      # Con el proxy inverso delante (perfil `tls`), cambie esto por
+      # "127.0.0.1:8000:8000": el equipo entra por HTTPS y nadie de la red
+      # puede saltarse el certificado hablando HTTP directo con la API.
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://localhost:8000/health')\""]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  # Terminación TLS. No arranca con `docker compose up`: pertenece al perfil
+  # `tls` y hay que pedirlo, porque el arranque en red local por HTTP sigue
+  # siendo válido. Con certificado:
+  #   docker compose --profile tls up -d
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: chatbox-nginx
+    profiles:
+      - tls
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      # Este fichero tiene que existir en el host antes de arrancar. Si no,
+      # Docker crea una CARPETA con su nombre y el contenedor no llega a
+      # arrancar: "not a directory: Are you trying to mount a directory onto
+      # a file". Borre entonces esa carpeta y copie el fichero de verdad.
+      - ./docker/nginx/chatbox.conf:/etc/nginx/conf.d/default.conf:ro
+      # Genere el par con scripts/generate_tls_cert.ps1, o deje aquí el
+      # certificado que emita su propia autoridad interna. Sin él, nginx
+      # arranca y se detiene solo: "cannot load certificate".
+      - ./docker/nginx/certs:/etc/nginx/certs:ro
+    restart: unless-stopped
+
+volumes:
+  uploads-data:

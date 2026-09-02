@@ -1,0 +1,25 @@
+.venv/
+__pycache__/
+*.py[cod]
+.env
+*.env
+!example.env
+.pytest_cache/
+.ruff_cache/
+*.sqlite3
+# Artefactos de ejecución. Nunca al repositorio: `uploads/` guarda ficheros de
+# clientes, `backups/` volcados completos de la base y `pgdata/` los ficheros
+# nativos de Postgres, los tres con datos personales; `.tools/` son binarios
+# descargados. `docker/certs/` sí se versiona: es configuración necesaria para
+# el arranque.
+uploads/
+backups/
+pgdata/
+.tools/
+*.sqlite3-wal
+*.sqlite3-shm
+
+# Certificado y clave del proxy inverso. La clave privada nunca al repositorio;
+# la carpeta sí se versiona (con .gitkeep) porque docker-compose.yml la monta.
+docker/nginx/certs/*
+!docker/nginx/certs/.gitkeep

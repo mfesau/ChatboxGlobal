@@ -1,0 +1,480 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Depuración de WebSockets</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #0f1115;
+        --panel: #171a21;
+        --border: #2a2f3a;
+        --text: #e6e9ef;
+        --muted: #8b93a3;
+        --accent: #4f8cff;
+        --ok: #37b56e;
+        --err: #e5534b;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+        background: var(--bg);
+        color: var(--text);
+      }
+      header {
+        padding: 12px 20px;
+        border-bottom: 1px solid var(--border);
+      }
+      header h1 { font-size: 16px; margin: 0 0 4px; }
+      header p { margin: 0; color: var(--muted); font-size: 13px; }
+      main {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 16px;
+        padding: 16px;
+      }
+      @media (min-width: 980px) {
+        main { grid-template-columns: 1fr 1fr 1fr; align-items: start; }
+      }
+      section.panel {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 14px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      section.panel h2 { font-size: 14px; margin: 0; }
+      .row { display: flex; gap: 6px; flex-wrap: wrap; }
+      label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); flex: 1; min-width: 110px; }
+      input, textarea, button {
+        font: inherit;
+        background: #0f1218;
+        color: var(--text);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 6px 8px;
+      }
+      textarea { resize: vertical; min-height: 34px; }
+      button {
+        cursor: pointer;
+        background: #1f2430;
+        border-color: var(--border);
+      }
+      button:hover:not(:disabled) { border-color: var(--accent); }
+      button:disabled { opacity: 0.5; cursor: not-allowed; }
+      button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+      .status { font-size: 12px; display: flex; align-items: center; gap: 6px; }
+      .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); display: inline-block; }
+      .dot.on { background: var(--ok); }
+      .dot.off { background: var(--err); }
+      .log {
+        flex: 1;
+        min-height: 220px;
+        max-height: 420px;
+        overflow-y: auto;
+        background: #0b0d12;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 8px;
+        font-family: ui-monospace, Consolas, monospace;
+        font-size: 11.5px;
+      }
+      .log .entry { margin-bottom: 6px; padding-bottom: 6px; border-bottom: 1px dashed var(--border); }
+      .log .entry:last-child { border-bottom: none; }
+      .log .meta { color: var(--muted); }
+      .badge {
+        display: inline-block;
+        padding: 1px 6px;
+        border-radius: 999px;
+        font-size: 10px;
+        margin-right: 6px;
+        background: #262c3a;
+        color: var(--accent);
+      }
+      .badge.err { background: #3a2323; color: var(--err); }
+      .badge.out { background: #23342a; color: var(--ok); }
+      pre { margin: 4px 0 0; white-space: pre-wrap; word-break: break-word; }
+      .stream {
+        font-family: ui-monospace, Consolas, monospace;
+        font-size: 12px;
+        background: #0b0d12;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 8px;
+        min-height: 40px;
+        white-space: pre-wrap;
+      }
+      small.hint { color: var(--muted); }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Depuración de WebSockets — /ws/chat y /ws/inbox</h1>
+      <p>
+        Herramienta de desarrollo. Sirve para probar los canales sin usar la
+        interfaz completa. Se sirve en el mismo origen que la aplicación, así
+        que la cookie de sesión de "Iniciar sesión" también autentica el socket
+        de la consola.
+      </p>
+    </header>
+    <main>
+      <!-- Sesión ------------------------------------------------------- -->
+      <section class="panel" id="panel-auth">
+        <h2>Sesión de agente</h2>
+        <div class="row">
+          <label>Correo
+            <input type="email" id="auth-email" placeholder="ana@empresa.local" />
+          </label>
+          <label>Contraseña
+            <input type="password" id="auth-password" />
+          </label>
+        </div>
+        <label>Tenant (opcional)
+          <input type="text" id="auth-tenant" placeholder="por omisión del servidor" />
+        </label>
+        <div class="row">
+          <button class="primary" id="auth-login">Iniciar sesión</button>
+          <button id="auth-logout">Cerrar sesión</button>
+          <button id="auth-whoami">/api/auth/me</button>
+        </div>
+        <div class="status"><span class="dot" id="auth-dot"></span><span id="auth-status">Sin comprobar</span></div>
+        <div class="log" id="auth-log"></div>
+      </section>
+
+      <!-- /ws/chat ------------------------------------------------------ -->
+      <section class="panel" id="panel-chat">
+        <h2>/ws/chat — chatbox</h2>
+        <div class="row">
+          <label>session_id
+            <input type="text" id="chat-session" />
+          </label>
+          <button id="chat-new-session" title="Generar un session_id nuevo">Nuevo</button>
+        </div>
+        <div class="row">
+          <label>tenant
+            <input type="text" id="chat-tenant" placeholder="opcional" />
+          </label>
+          <label>display_name
+            <input type="text" id="chat-display" placeholder="opcional" />
+          </label>
+        </div>
+        <div class="row">
+          <button class="primary" id="chat-connect">Conectar</button>
+          <button id="chat-disconnect" disabled>Desconectar</button>
+          <button id="chat-ping" disabled>ping</button>
+        </div>
+        <div class="status"><span class="dot" id="chat-dot"></span><span id="chat-status">Desconectado</span></div>
+        <label>Texto en curso (delta)
+          <div class="stream" id="chat-stream"></div>
+        </label>
+        <div class="row">
+          <textarea id="chat-text" placeholder="Mensaje para el asistente…" rows="2"></textarea>
+        </div>
+        <div class="row">
+          <button class="primary" id="chat-send" disabled>Enviar mensaje</button>
+          <label style="flex: 0 0 auto;">action
+            <input type="text" id="chat-action" placeholder="opcional" style="width: 110px;" />
+          </label>
+        </div>
+        <div class="log" id="chat-log"></div>
+      </section>
+
+      <!-- /ws/inbox ------------------------------------------------------ -->
+      <section class="panel" id="panel-inbox">
+        <h2>/ws/inbox — consola</h2>
+        <div class="row">
+          <label>tenant
+            <input type="text" id="inbox-tenant" placeholder="opcional" />
+          </label>
+          <label>api_key
+            <input type="text" id="inbox-key" placeholder="solo si no hay sesión de agente" />
+          </label>
+        </div>
+        <small class="hint">
+          Con sesión de agente activa (panel de la izquierda) no hace falta
+          api_key: la cookie autentica el socket.
+        </small>
+        <div class="row">
+          <button class="primary" id="inbox-connect">Conectar</button>
+          <button id="inbox-disconnect" disabled>Desconectar</button>
+        </div>
+        <div class="status"><span class="dot" id="inbox-dot"></span><span id="inbox-status">Desconectado</span></div>
+        <div class="log" id="inbox-log"></div>
+      </section>
+    </main>
+
+    <script>
+      const $ = (id) => document.getElementById(id);
+
+      function timestamp() {
+        const d = new Date();
+        return d.toTimeString().slice(0, 8);
+      }
+
+      function logTo(containerId, direction, payload) {
+        const el = $(containerId);
+        const entry = document.createElement("div");
+        entry.className = "entry";
+        const badgeClass = direction === "out" ? "out" : direction === "error" ? "err" : "";
+        const type = (payload && payload.type) || direction;
+        entry.innerHTML =
+          `<span class="meta">${timestamp()}</span> ` +
+          `<span class="badge ${badgeClass}">${direction} · ${type}</span>` +
+          `<pre>${escapeHtml(JSON.stringify(payload, null, 2))}</pre>`;
+        el.appendChild(entry);
+        el.scrollTop = el.scrollHeight;
+      }
+
+      function logText(containerId, direction, text) {
+        const el = $(containerId);
+        const entry = document.createElement("div");
+        entry.className = "entry";
+        const badgeClass = direction === "error" ? "err" : "";
+        entry.innerHTML =
+          `<span class="meta">${timestamp()}</span> ` +
+          `<span class="badge ${badgeClass}">${direction}</span> ${escapeHtml(text)}`;
+        el.appendChild(entry);
+        el.scrollTop = el.scrollHeight;
+      }
+
+      function escapeHtml(str) {
+        return str
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;");
+      }
+
+      function setDot(dotId, on) {
+        const dot = $(dotId);
+        dot.classList.remove("on", "off");
+        dot.classList.add(on ? "on" : "off");
+      }
+
+      function randomId(prefix) {
+        return `${prefix}-${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`;
+      }
+
+      // ----------------------------------------------------------- Sesión --
+      $("chat-session").value = randomId("debug");
+
+      $("auth-login").addEventListener("click", async () => {
+        try {
+          const res = await fetch("/api/auth/login", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "include",
+            body: JSON.stringify({
+              email: $("auth-email").value.trim(),
+              password: $("auth-password").value,
+              tenant: $("auth-tenant").value.trim() || undefined,
+            }),
+          });
+          const body = await res.json();
+          logTo("auth-log", res.ok ? "in" : "error", body);
+          if (res.ok) {
+            $("auth-status").textContent = `Conectado como ${body.agent.email} (${body.agent.role})`;
+            setDot("auth-dot", true);
+          } else {
+            $("auth-status").textContent = "Credenciales rechazadas";
+            setDot("auth-dot", false);
+          }
+        } catch (err) {
+          logText("auth-log", "error", String(err));
+        }
+      });
+
+      $("auth-logout").addEventListener("click", async () => {
+        try {
+          const res = await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
+          const body = await res.json();
+          logTo("auth-log", res.ok ? "in" : "error", body);
+          $("auth-status").textContent = "Sesión cerrada";
+          setDot("auth-dot", false);
+        } catch (err) {
+          logText("auth-log", "error", String(err));
+        }
+      });
+
+      $("auth-whoami").addEventListener("click", async () => {
+        try {
+          const res = await fetch("/api/auth/me", { credentials: "include" });
+          const body = await res.json();
+          logTo("auth-log", "in", body);
+          if (body.agent) {
+            $("auth-status").textContent = `Conectado como ${body.agent.email} (${body.role})`;
+            setDot("auth-dot", true);
+          } else {
+            $("auth-status").textContent = `Sin sesión de agente (rol efectivo: ${body.role})`;
+            setDot("auth-dot", false);
+          }
+        } catch (err) {
+          logText("auth-log", "error", String(err));
+        }
+      });
+
+      // ----------------------------------------------------------- /ws/chat
+      let chatSocket = null;
+
+      $("chat-new-session").addEventListener("click", () => {
+        $("chat-session").value = randomId("debug");
+      });
+
+      $("chat-connect").addEventListener("click", () => {
+        if (chatSocket) return;
+        const sessionId = $("chat-session").value.trim();
+        if (sessionId.length < 8) {
+          logText("chat-log", "error", "session_id debe tener al menos 8 caracteres");
+          return;
+        }
+        const params = new URLSearchParams({ session_id: sessionId });
+        const tenant = $("chat-tenant").value.trim();
+        const display = $("chat-display").value.trim();
+        if (tenant) params.set("tenant", tenant);
+        if (display) params.set("display_name", display);
+
+        const scheme = location.protocol === "https:" ? "wss" : "ws";
+        const url = `${scheme}://${location.host}/ws/chat?${params.toString()}`;
+        chatSocket = new WebSocket(url);
+
+        chatSocket.addEventListener("open", () => {
+          $("chat-status").textContent = "Conectado";
+          setDot("chat-dot", true);
+          $("chat-disconnect").disabled = false;
+          $("chat-ping").disabled = false;
+          $("chat-send").disabled = false;
+          $("chat-connect").disabled = true;
+        });
+
+        chatSocket.addEventListener("message", (evt) => {
+          let data;
+          try {
+            data = JSON.parse(evt.data);
+          } catch {
+            logText("chat-log", "in", evt.data);
+            return;
+          }
+          logTo("chat-log", "in", data);
+          if (data.type === "delta") {
+            $("chat-stream").textContent += data.text || "";
+          }
+          if (data.type === "message" || data.type === "ack") {
+            $("chat-stream").textContent = "";
+          }
+        });
+
+        chatSocket.addEventListener("close", (evt) => {
+          logText("chat-log", "error", `cerrado (código ${evt.code})`);
+          resetChatUi();
+        });
+
+        chatSocket.addEventListener("error", () => {
+          logText("chat-log", "error", "error de socket");
+        });
+      });
+
+      function resetChatUi() {
+        chatSocket = null;
+        $("chat-status").textContent = "Desconectado";
+        setDot("chat-dot", false);
+        $("chat-disconnect").disabled = true;
+        $("chat-ping").disabled = true;
+        $("chat-send").disabled = true;
+        $("chat-connect").disabled = false;
+      }
+
+      $("chat-disconnect").addEventListener("click", () => {
+        if (chatSocket) chatSocket.close(1000, "cierre manual");
+      });
+
+      $("chat-ping").addEventListener("click", () => {
+        if (!chatSocket) return;
+        const payload = { type: "ping" };
+        chatSocket.send(JSON.stringify(payload));
+        logTo("chat-log", "out", payload);
+      });
+
+      $("chat-send").addEventListener("click", () => {
+        if (!chatSocket) return;
+        const text = $("chat-text").value;
+        if (!text.trim()) return;
+        const payload = {
+          type: "message",
+          text,
+          client_message_id: randomId("msg"),
+          action: $("chat-action").value.trim() || undefined,
+          display_name: $("chat-display").value.trim() || undefined,
+        };
+        chatSocket.send(JSON.stringify(payload));
+        logTo("chat-log", "out", payload);
+        $("chat-text").value = "";
+      });
+
+      $("chat-text").addEventListener("keydown", (evt) => {
+        if (evt.key === "Enter" && !evt.shiftKey) {
+          evt.preventDefault();
+          $("chat-send").click();
+        }
+      });
+
+      // ---------------------------------------------------------- /ws/inbox
+      let inboxSocket = null;
+
+      $("inbox-connect").addEventListener("click", () => {
+        if (inboxSocket) return;
+        const params = new URLSearchParams();
+        const tenant = $("inbox-tenant").value.trim();
+        const key = $("inbox-key").value.trim();
+        if (tenant) params.set("tenant", tenant);
+        if (key) params.set("api_key", key);
+
+        const scheme = location.protocol === "https:" ? "wss" : "ws";
+        const qs = params.toString();
+        const url = `${scheme}://${location.host}/ws/inbox${qs ? `?${qs}` : ""}`;
+        inboxSocket = new WebSocket(url);
+
+        inboxSocket.addEventListener("open", () => {
+          $("inbox-status").textContent = "Conectado";
+          setDot("inbox-dot", true);
+          $("inbox-disconnect").disabled = false;
+          $("inbox-connect").disabled = true;
+        });
+
+        inboxSocket.addEventListener("message", (evt) => {
+          let data;
+          try {
+            data = JSON.parse(evt.data);
+          } catch {
+            logText("inbox-log", "in", evt.data);
+            return;
+          }
+          logTo("inbox-log", "in", data);
+        });
+
+        inboxSocket.addEventListener("close", (evt) => {
+          logText("inbox-log", "error", `cerrado (código ${evt.code})`);
+          resetInboxUi();
+        });
+
+        inboxSocket.addEventListener("error", () => {
+          logText("inbox-log", "error", "error de socket");
+        });
+      });
+
+      function resetInboxUi() {
+        inboxSocket = null;
+        $("inbox-status").textContent = "Desconectado";
+        setDot("inbox-dot", false);
+        $("inbox-disconnect").disabled = true;
+        $("inbox-connect").disabled = false;
+      }
+
+      $("inbox-disconnect").addEventListener("click", () => {
+        if (inboxSocket) inboxSocket.close(1000, "cierre manual");
+      });
+    </script>
+  </body>
+</html>

@@ -1,0 +1,8 @@
+# Los contenedores Linux ejecutan estos scripts vía shebang; con CRLF
+# (el valor por defecto de Git en Windows) el intérprete no arranca y
+# Postgres falla con "exited (126)" al inicializar el volumen.
+*.sh text eol=lf
+
+# La configuración del proxy se monta dentro del contenedor de nginx: se
+# versiona con LF, como todo lo que lee un Linux.
+docker/nginx/*.conf text eol=lf
