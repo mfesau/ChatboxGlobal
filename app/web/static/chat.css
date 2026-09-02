@@ -1,0 +1,653 @@
+/* Chatbox amplio. Paleta declarada en :root y redefinida para tema oscuro. */
+:root {
+  color-scheme: light dark;
+  --bg: #f4f5f7;
+  --surface: #ffffff;
+  --surface-alt: #f0f1f4;
+  --border: #dcdfe5;
+  --text: #16181d;
+  --text-muted: #5f6672;
+  --accent: #2f5bd7;
+  --accent-contrast: #ffffff;
+  /* El mismo acento, pero garantizado legible como texto sobre `--surface`.
+     Se separa de `--accent` porque son dos papeles opuestos: uno es el
+     relleno de un boton y el otro la tinta de un enlace, y un color de
+     marca claro puede servir para el primero y desaparecer en el segundo.
+     Sin color de marca elegido valen lo mismo y no se nota la diferencia;
+     al elegirlo, el servidor redefine los dos (ver app/core/branding.py). */
+  --accent-ink: var(--accent);
+  --inbound: #eef1f7;
+  --outbound: #2f5bd7;
+  --outbound-text: #ffffff;
+  --ok: #1f9254;
+  --warn: #b7791f;
+  --danger: #c0392b;
+  --radius: 14px;
+  --shadow: 0 1px 2px rgb(16 18 24 / 6%), 0 8px 24px rgb(16 18 24 / 6%);
+  --font: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  /* Botón de Google, variante clara. Estos tres valores los fija Google en sus
+     normas de marca y por eso no se derivan de la paleta ni del color del
+     inquilino: el botón tiene que reconocerse igual en cualquier sitio. */
+  --google-bg: #ffffff;
+  --google-border: #747775;
+  --google-text: #1f1f1f;
+}
+
+/* El tema oscuro se aplica en dos casos, y por eso la lista de colores figura
+   dos veces: cuando lo pide el sistema y nadie eligió lo contrario, y cuando
+   se eligió oscuro a mano. Lo que elige la persona manda siempre sobre lo que
+   dice el sistema; sin el `:not([data-theme="light"])`, quien tuviera el
+   equipo en oscuro no podría forzar el tema claro. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #0f1115;
+    --surface: #171a20;
+    --surface-alt: #1e222a;
+    --border: #2b303a;
+    --text: #e8eaee;
+    --text-muted: #99a1af;
+    --accent: #6f95f5;
+    --accent-contrast: #0f1115;
+    --inbound: #222732;
+    --outbound: #3b62d9;
+    --outbound-text: #ffffff;
+    /* Algo más claro que en modo claro: sobre fondo oscuro, el rojo original
+       queda demasiado apagado para leerse de un vistazo. */
+    --danger: #e05a4c;
+    --shadow: 0 1px 2px rgb(0 0 0 / 40%), 0 12px 32px rgb(0 0 0 / 35%);
+    /* Variante oscura del botón de Google, también de sus normas. */
+    --google-bg: #131314;
+    --google-border: #8e918f;
+    --google-text: #e3e3e3;
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0f1115;
+  --surface: #171a20;
+  --surface-alt: #1e222a;
+  --border: #2b303a;
+  --text: #e8eaee;
+  --text-muted: #99a1af;
+  --accent: #6f95f5;
+  --accent-contrast: #0f1115;
+  --inbound: #222732;
+  --outbound: #3b62d9;
+  --outbound-text: #ffffff;
+  --danger: #e05a4c;
+  --shadow: 0 1px 2px rgb(0 0 0 / 40%), 0 12px 32px rgb(0 0 0 / 35%);
+  --google-bg: #131314;
+  --google-border: #8e918f;
+  --google-text: #e3e3e3;
+}
+
+/* Elegir claro con el sistema en oscuro: se fija el esquema para que también
+   los controles del navegador —desplegables, campos— salgan claros. */
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/* El atributo `hidden` solo implica `display: none` por hoja de estilo del
+   navegador, de modo que cualquier `display` explícito lo anula. Sin esta regla,
+   los contenedores con `display: flex` o `grid` —el acceso, el panel de
+   supervisión, el indicador de escritura— seguirían visibles al ocultarlos. */
+[hidden] {
+  display: none !important;
+}
+
+/* La página nunca necesita scroll propio: ocupa exactamente la pantalla y el
+   desbordamiento se resuelve dentro de cada contenedor (el hilo, la lista de
+   conversaciones, los paneles). Lo único que se despliega más allá de ese
+   marco fijo son los elementos de borde —desplegables, el cajón «Equipo», los
+   paneles de administración y supervisión—, que ya usan `position: fixed`.
+   `100dvh` en vez de `100%`: en el celular, al abrirse el teclado para
+   escribir, `100%`/`100vh` no se achican con él en la mayoría de los
+   navegadores, y el redactor —anclado abajo de esa caja— queda tapado justo
+   cuando hace falta. La altura dinámica sí sigue al teclado; el navegador que
+   no la reconozca descarta la línea entera y se queda con el `100%` de más
+   arriba. */
+html,
+body {
+  height: 100%;
+  height: 100dvh;
+  margin: 0;
+  overflow: hidden;
+}
+
+body {
+  display: flex;
+  justify-content: center;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 15px;
+  line-height: 1.55;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+/* --- Acceso: registro y login obligatorios antes de chatear --- */
+.gate {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  width: 100%;
+  padding: 24px;
+  overflow-y: auto;
+}
+
+.gate__card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: 100%;
+  max-width: 380px;
+  padding: 28px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.gate__card h1 {
+  margin: 0;
+  font-size: 20px;
+}
+
+.gate__hint {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+
+.gate__card label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+
+.gate__card input {
+  padding: 10px 12px;
+  font: inherit;
+  color: var(--text);
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.gate__error {
+  margin: 0;
+  padding: 9px 12px;
+  font-size: 13px;
+  color: #fff;
+  background: #c0392b;
+  border-radius: 10px;
+}
+
+.gate__switch {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.gate__separator {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+#sso-button {
+  display: block;
+  width: 100%;
+  height: 44px;
+  box-sizing: border-box;
+  text-align: center;
+  line-height: 44px;
+  text-decoration: none;
+}
+
+/* Botón «Iniciar sesión con Google».
+   Antes era un enlace corriente con la clase `ghost-button`: se veía como
+   texto subrayado y no como el botón que la gente ya sabe reconocer. Google
+   publica cómo debe presentarse —logotipo a la izquierda, fondo blanco o
+   negro según el tema, borde gris, texto de 14px— y esto lo sigue, porque
+   el valor del botón está justamente en que se vea igual en todas partes.
+
+   Alto y radio sí se toman de la página (44px, `--radius`) para que quede
+   alineado con «Entrar», que es el botón de encima; Google admite ajustar el
+   radio y esta es la variación que menos desentona. */
+.google-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+  height: 44px;
+  padding: 0 12px;
+  box-sizing: border-box;
+  font-family: Roboto, var(--font);
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--google-text);
+  background: var(--google-bg);
+  border: 1px solid var(--google-border);
+  border-radius: var(--radius);
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.google-button:hover {
+  /* Google pide un realce discreto al pasar por encima. Se resuelve con una
+     sombra y no aclarando el fondo: el fondo es parte de la marca. */
+  box-shadow: 0 1px 2px rgb(60 64 67 / 30%), 0 1px 3px 1px rgb(60 64 67 / 15%);
+}
+
+.google-button:focus-visible {
+  outline: 2px solid var(--accent-ink);
+  outline-offset: 2px;
+}
+
+.google-button__logo {
+  flex: none;
+  width: 18px;
+  height: 18px;
+}
+
+.link-button {
+  padding: 0;
+  font: inherit;
+  color: var(--accent-ink);
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.gate__card input:focus-visible,
+.link-button:focus-visible {
+  outline: 2px solid var(--accent-ink);
+  outline-offset: 1px;
+}
+
+/* --- Contenedor: tres anchos, de acotado a pantalla completa --- */
+.shell {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  background: var(--surface);
+  transition: max-width 0.25s ease;
+}
+
+.shell[data-width="comfortable"] {
+  max-width: 900px;
+  border-inline: 1px solid var(--border);
+}
+
+.shell[data-width="wide"] {
+  max-width: 1400px;
+  border-inline: 1px solid var(--border);
+}
+
+.shell[data-width="full"] {
+  max-width: none;
+}
+
+/* --- Cabecera --- */
+/* Con el selector de idioma sumado a los tres botones, en pantalla estrecha
+   ya no entra todo en una fila: se deja saltar en vez de desbordar. */
+.shell__header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 16px;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.identity {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.identity__dot {
+  width: 10px;
+  height: 10px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--warn);
+}
+
+.identity__dot[data-state="online"] {
+  background: var(--ok);
+}
+
+.identity__dot[data-state="offline"] {
+  background: #c0392b;
+}
+
+.identity__name {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.identity__state {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+
+.header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.ghost-button {
+  padding: 7px 13px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.ghost-button:hover {
+  color: var(--text);
+  background: var(--surface-alt);
+}
+
+.attach-button {
+  flex: none;
+  height: 44px;
+  padding: 0 14px;
+  font-size: 17px;
+}
+
+/* Conmutador del tema: redondo y del tamaño de un botón, para que el símbolo
+   quede centrado y no se estire con el texto como haría un botón normal. */
+.theme-toggle {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  font-size: 15px;
+  line-height: 1;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.theme-toggle:hover {
+  background: var(--surface-alt);
+}
+
+/* Selector de idioma: comparte aspecto con los botones de la cabecera. */
+.lang-select {
+  flex: none;
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.attach-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* --- Hilo de mensajes --- */
+.thread {
+  flex: 1;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 22px 20px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.bubble {
+  max-width: min(72ch, 82%);
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  box-shadow: var(--shadow);
+}
+
+.bubble--inbound {
+  align-self: flex-end;
+  background: var(--outbound);
+  color: var(--outbound-text);
+  border-bottom-right-radius: 4px;
+}
+
+.bubble--outbound {
+  align-self: flex-start;
+  background: var(--inbound);
+  color: var(--text);
+  border-bottom-left-radius: 4px;
+}
+
+.bubble--system {
+  align-self: center;
+  max-width: 60ch;
+  font-size: 13px;
+  color: var(--text-muted);
+  background: transparent;
+  box-shadow: none;
+  text-align: center;
+}
+
+.bubble__meta {
+  display: block;
+  margin-top: 4px;
+  font-size: 11px;
+  opacity: 0.72;
+}
+
+.bubble img {
+  display: block;
+  max-width: 240px;
+  max-height: 240px;
+  margin-top: 6px;
+  border-radius: 10px;
+}
+
+/* --- Estado inicial --- */
+.empty-state {
+  margin: auto;
+  max-width: 56ch;
+  text-align: center;
+  color: var(--text-muted);
+}
+
+.empty-state h2 {
+  margin: 0 0 8px;
+  font-size: 20px;
+  color: var(--text);
+}
+
+.empty-state p {
+  margin: 0 0 18px;
+}
+
+.suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
+
+.suggestions button,
+.quick-replies button {
+  padding: 8px 14px;
+  font: inherit;
+  font-size: 13.5px;
+  color: var(--accent-ink);
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.suggestions button:hover,
+.quick-replies button:hover {
+  color: var(--accent-contrast);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.quick-replies {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0 20px 10px;
+}
+
+/* --- Indicador de escritura --- */
+.typing {
+  display: flex;
+  gap: 5px;
+  padding: 0 26px 10px;
+}
+
+.typing span {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  animation: bounce 1.2s infinite ease-in-out;
+}
+
+.typing span:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.typing span:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+@keyframes bounce {
+  0%,
+  60%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.45;
+  }
+  30% {
+    transform: translateY(-5px);
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .typing span {
+    animation: none;
+  }
+  .shell {
+    transition: none;
+  }
+}
+
+/* --- Redactor: crece con el contenido --- */
+.composer {
+  padding: 12px 20px 16px;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.composer__form {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.composer__input {
+  flex: 1;
+  /* Crece hasta diez líneas y a partir de ahí desplaza. */
+  min-height: 44px;
+  max-height: 240px;
+  padding: 11px 14px;
+  font: inherit;
+  color: var(--text);
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  resize: none;
+  overflow-y: auto;
+}
+
+.composer__input:focus-visible {
+  outline: 2px solid var(--accent-ink);
+  outline-offset: 1px;
+}
+
+.send-button {
+  flex: none;
+  height: 44px;
+  padding: 0 20px;
+  font: inherit;
+  font-weight: 600;
+  color: var(--accent-contrast);
+  background: var(--accent);
+  border: none;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.send-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.composer__meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 8px 2px 0;
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+
+@media (max-width: 600px) {
+  .composer__hint,
+  .header-actions .ghost-button:first-child {
+    display: none;
+  }
+
+  .bubble {
+    max-width: 90%;
+  }
+}

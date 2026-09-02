@@ -1,0 +1,723 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ChatboxGlobal — Consola del equipo</title>
+    <link rel="stylesheet" href="/static/chat.css?v=__ASSET_VERSION__" />
+    <link rel="stylesheet" href="/static/console.css?v=__ASSET_VERSION__" />
+    <!-- Color de marca del inquilino, resuelto en el servidor. Va aqui, y no
+         en una peticion que la pagina lance al cargarse, por lo mismo que el
+         tema: si llegara despues se veria un instante el azul de la hoja
+         antes de repintarse con el color propio. Vacio cuando nadie eligio
+         color (ver app/core/branding.py). -->
+    <style id="brand-style">__BRAND_STYLE__</style>
+    <script src="/static/i18n.js?v=__ASSET_VERSION__"></script>
+    <script src="/static/theme.js?v=__ASSET_VERSION__"></script>
+  </head>
+  <body class="console-body">
+    <!-- Sin acceso propio: "/" es la entrada única (ver console.js, showGate()). -->
+
+    <!-- Aplicación --------------------------------------------------------- -->
+    <div class="console" id="app" hidden>
+      <aside class="console__sidebar">
+        <header class="console__sidebar-header">
+          <div class="console__identity">
+            <div>
+              <strong id="who">—</strong>
+              <p class="console__muted" id="who-role"></p>
+            </div>
+            <button type="button" class="ghost-button" id="contacts-button" data-i18n="nav.contacts" hidden>
+              Contactos
+            </button>
+            <button type="button" class="ghost-button" id="logout-button" data-i18n="nav.logout">Salir</button>
+            <select id="lang-select" class="lang-select" data-i18n-aria="lang.label"></select>
+            <button type="button" id="theme-toggle" class="theme-toggle"></button>
+          </div>
+
+          <nav class="console__tabs" role="tablist" data-i18n-aria="nav.inboxes">
+            <button type="button" role="tab" data-scope="unassigned" aria-selected="true">
+              <span data-i18n="tabs.unassigned">Cola común</span> <span class="console__count" id="count-unassigned">0</span>
+            </button>
+            <button type="button" role="tab" data-scope="mine" aria-selected="false">
+              <span data-i18n="tabs.mine">Mis chats</span> <span class="console__count" id="count-mine">0</span>
+            </button>
+            <button
+              type="button"
+              role="tab"
+              data-scope="all"
+              aria-selected="false"
+              id="tab-all"
+              hidden
+            >
+              <span data-i18n="tabs.all">Todos</span> <span class="console__count" id="count-all">0</span>
+            </button>
+          </nav>
+
+          <div class="console__filters">
+            <select id="status-filter" data-i18n-aria="filter.status">
+              <option value="open,in_progress" data-i18n="filter.status.unresolved">Sin resolver</option>
+              <option value="open" data-i18n="filter.status.pending">Pendientes</option>
+              <option value="in_progress" data-i18n="filter.status.inProgress">En proceso</option>
+              <option value="closed" data-i18n="filter.status.solved">Solucionadas</option>
+              <option value="" data-i18n="filter.status.all">Todas</option>
+            </select>
+            <select id="channel-filter" data-i18n-aria="filter.channel">
+              <option value="" data-i18n="filter.channel.all">Todos los canales</option>
+              <option value="whatsapp">WhatsApp</option>
+              <option value="msbot">Microsoft</option>
+              <option value="web">Web</option>
+            </select>
+            <select id="department-filter" data-i18n-aria="filter.department">
+              <option value="">Todos los departamentos</option>
+            </select>
+            <select id="label-filter" data-i18n-aria="filter.label">
+              <option value="">Todas las etiquetas</option>
+            </select>
+          </div>
+
+          <div class="console__views">
+            <div class="console__views-list" id="saved-views"></div>
+            <button type="button" class="console__views-save" id="save-view-button" data-i18n="views.save">
+              + Guardar vista
+            </button>
+            <form class="console__views-form" id="save-view-form" hidden>
+              <label class="visually-hidden" for="save-view-name" data-i18n="views.name">Nombre de la vista</label>
+              <input type="text" id="save-view-name" maxlength="40" autocomplete="off" />
+              <label class="console__views-shared" id="save-view-shared-field" hidden>
+                <input type="checkbox" id="save-view-shared" />
+                <span data-i18n="views.shared">Para todo el equipo</span>
+              </label>
+            </form>
+          </div>
+
+          <!-- Escribir primero solo vale para WhatsApp; el chatbox web no
+               permite abordar a nadie y Teams tampoco. Se oculta si no hay
+               ninguna cuenta de WhatsApp activa (ver console.js). -->
+          <button type="button" class="console__start" id="start-button" data-i18n="start.open" hidden>
+            + Nueva conversación
+          </button>
+        </header>
+
+        <ul class="console__list" id="conversation-list"></ul>
+
+        <footer class="console__sidebar-footer">
+          <button type="button" class="ghost-button" id="admin-button" data-i18n="nav.admin" hidden>
+            Administrar usuarios
+          </button>
+          <button type="button" class="ghost-button" id="supervisor-button" data-i18n="nav.supervisor" hidden>
+            Panel de supervisión
+          </button>
+        </footer>
+      </aside>
+
+      <main class="console__main">
+        <header class="console__thread-header">
+          <div class="console__thread-title">
+            <h2 id="thread-title" data-i18n="thread.selectOne">Seleccione una conversación</h2>
+            <p id="thread-subtitle" class="console__muted"></p>
+          </div>
+          <div class="header-actions" id="thread-actions" hidden>
+            <button type="button" class="ghost-button" id="aside-toggle" data-i18n="thread.team">Equipo</button>
+            <button type="button" class="ghost-button" id="claim-button" data-i18n="thread.claim">Atender yo</button>
+            <button type="button" class="ghost-button" id="release-button" data-i18n="thread.release">
+              Devolver a la cola
+            </button>
+            <div class="state-switch" role="group" data-i18n-aria="state.group">
+              <button type="button" data-state="pending" data-i18n="state.pending">Pendiente</button>
+              <button type="button" data-state="in_progress" data-i18n="state.inProgress">En proceso</button>
+              <button type="button" data-state="solved" data-i18n="state.solved">Solucionado</button>
+            </div>
+          </div>
+        </header>
+
+        <section class="thread" id="console-thread">
+          <p class="console__empty" data-i18n="thread.empty">
+            La cola común reúne todo lo que entra por WhatsApp, Microsoft Teams y el
+            chatbox web. Tome una conversación o revise las suyas.
+          </p>
+        </section>
+
+        <footer class="composer">
+          <ul class="composer__suggestions" id="canned-suggestions" hidden></ul>
+          <form id="console-form" class="composer__form">
+            <label class="visually-hidden" for="console-input" data-i18n="composer.answer">Respuesta</label>
+            <textarea
+              id="console-input"
+              class="composer__input"
+              rows="1"
+              data-i18n-placeholder="composer.placeholder"
+              disabled
+            ></textarea>
+            <button
+              type="button"
+              class="ghost-button attach-button"
+              id="console-attach-button"
+              data-i18n-title="composer.attach"
+              data-i18n-aria="composer.attach"
+              disabled
+            >
+              📎
+            </button>
+            <input type="file" id="console-attach-input" accept="image/*" hidden />
+            <button type="submit" class="send-button" id="console-send" data-i18n="composer.send" disabled>
+              Responder
+            </button>
+          </form>
+          <p class="composer__meta">
+            <span id="console-status" data-i18n="composer.noSelection">Sin conversación seleccionada</span>
+            <span class="composer__hint" data-i18n="composer.hint">La respuesta sale por el canal de origen</span>
+          </p>
+        </footer>
+      </main>
+
+      <!-- Panel lateral: derivación, notas e historial -------------------- -->
+      <aside class="console__aside" id="aside" hidden>
+<section class="panel">
+          <h3 data-i18n="aside.contact">Datos del cliente</h3>
+          <p class="console__muted">
+            <span data-i18n="aside.contactHint">Editar queda reservado a supervisión y administración.</span>
+          </p>
+          <label class="panel__field">
+            <span data-i18n="aside.name">Nombre</span>
+            <input type="text" id="contact-name" maxlength="160" disabled />
+          </label>
+          <label class="panel__field">
+            <span data-i18n="aside.phone">Teléfono</span>
+            <input type="text" id="contact-phone" maxlength="32" disabled />
+          </label>
+          <label class="panel__field">
+            <span data-i18n="aside.email">Correo</span>
+            <input type="email" id="contact-email" maxlength="254" disabled />
+          </label>
+          <button type="button" class="send-button" id="contact-save" data-i18n="aside.save" hidden>
+            Guardar
+          </button>
+          <p class="gate__error" id="contact-error" hidden></p>
+
+          <h4 data-i18n="aside.internalComments">Comentarios internos</h4>
+          <ul class="panel__list" id="contact-comments"></ul>
+          <form id="contact-comment-form" class="panel__inline-form" hidden>
+            <textarea
+              id="contact-comment-body"
+              rows="2"
+              data-i18n-placeholder="aside.commentPlaceholder"
+            ></textarea>
+            <button type="submit" class="ghost-button" data-i18n="aside.commentSave">Guardar comentario</button>
+          </form>
+        </section>
+
+<section class="panel">
+          <h3 data-i18n="aside.transferSection">Derivación</h3>
+          <p class="console__muted">
+            <span data-i18n="aside.transferHint">La conversación conserva todo su historial; solo cambia el responsable.</span>
+          </p>
+          <label class="panel__field">
+            <span data-i18n="aside.colleague">Compañero</span>
+            <select id="transfer-target"><option value="">— Elegir —</option></select>
+          </label>
+          <label class="panel__field">
+            <span data-i18n="aside.orDepartment">o departamento (vuelve a la cola, sin dueño)</span>
+            <select id="transfer-department"><option value="">— Elegir —</option></select>
+          </label>
+          <label class="panel__field">
+            <span data-i18n="aside.reason">Motivo (se guarda como nota interna)</span>
+            <textarea id="transfer-note" rows="2" data-i18n-placeholder="aside.reasonPlaceholder"></textarea>
+          </label>
+          <button type="button" class="send-button" id="transfer-button" data-i18n="aside.transferButton" disabled>
+            Derivar
+          </button>
+
+          <h4 data-i18n="aside.history">Historial de derivaciones</h4>
+          <ol class="panel__timeline" id="assignment-list"></ol>
+        </section>
+
+<section class="panel">
+          <h3 data-i18n="aside.labels">Etiquetas</h3>
+          <p class="console__muted" data-i18n="aside.labelsHint">Clasifica la conversación para filtrarla luego.</p>
+          <div class="label-toggle-list" id="conversation-label-toggles"></div>
+        </section>
+
+        <section class="panel" id="macro-panel" hidden>
+          <h3 data-i18n="aside.macros">Macros</h3>
+          <p class="console__muted" data-i18n="aside.macrosHint">Aplica varias acciones de una sola vez.</p>
+          <div class="macro-run-list" id="macro-buttons"></div>
+        </section>
+
+<section class="panel">
+          <h3 data-i18n="aside.notes">Notas internas</h3>
+          <p class="console__muted" data-i18n="aside.notesHint">Visibles solo para el equipo. El cliente no las recibe.</p>
+          <ul class="panel__list" id="notes-list"></ul>
+          <form id="note-form" class="panel__inline-form">
+            <textarea id="note-body" rows="2" data-i18n-placeholder="aside.notePlaceholder"></textarea>
+            <button type="submit" class="ghost-button" data-i18n="aside.noteSave">Guardar nota</button>
+          </form>
+        </section>
+      </aside>
+
+      <!-- Panel de supervisión ------------------------------------------- -->
+      <div class="overlay" id="admin-panel" hidden>
+        <div class="overlay__card">
+          <header class="overlay__header">
+            <h2 data-i18n="admin.title">Administración de usuarios</h2>
+            <button type="button" class="ghost-button" id="admin-close" data-i18n="common.close">Cerrar</button>
+          </header>
+          <nav class="admin-tabs" role="tablist" data-i18n-aria="admin.sections">
+            <button type="button" role="tab" data-admin-tab="users" aria-selected="true"
+                    data-i18n="admin.tab.users">Usuarios</button>
+            <button type="button" role="tab" data-admin-tab="channels" aria-selected="false"
+                    data-i18n="admin.tab.channels">Canales</button>
+            <button type="button" role="tab" data-admin-tab="labels" aria-selected="false"
+                    data-i18n="admin.tab.labels">Etiquetas</button>
+            <button type="button" role="tab" data-admin-tab="messages" aria-selected="false"
+                    data-i18n="admin.tab.messages">Saludos y mensajes</button>
+            <button type="button" role="tab" data-admin-tab="appearance" aria-selected="false"
+                    data-i18n="admin.tab.appearance">Apariencia</button>
+          </nav>
+          <p class="gate__error" id="admin-error" hidden></p>
+          <div class="admin-tab-panel" id="admin-tab-users">
+<section class="admin-grid">
+            <form class="panel" id="create-user-form">
+              <h3 data-i18n="admin.createUser">Crear usuario</h3>
+              <label class="panel__field"><span data-i18n="table.email">Correo</span><input type="email" id="new-user-email" autocomplete="email" required /></label>
+              <label class="panel__field"><span data-i18n="admin.displayName">Nombre visible</span><input type="text" id="new-user-name" maxlength="160" /></label>
+              <label class="panel__field"><span data-i18n="admin.role">Rol</span><select id="new-user-role"><option value="agent">Agente</option><option value="supervisor">Supervisor</option><option value="admin">Administrador</option></select></label>
+              <label class="panel__field"><span data-i18n="admin.mainDepartment">Departamento principal</span><select id="new-user-department"><option value="">Sin departamento</option></select></label>
+              <label class="panel__field" id="new-user-password-field"><span data-i18n="admin.initialPassword">Contraseña inicial</span><input type="password" id="new-user-password" minlength="8" autocomplete="new-password" required /></label>
+              <p class="console__muted" id="new-user-password-hint" data-i18n="admin.passwordHint" hidden>
+                Supervisión y administración reciben una contraseña generada
+                automáticamente, enviada por correo de invitación.
+              </p>
+              <button type="submit" class="send-button" data-i18n="admin.createUser">Crear usuario</button>
+            </form>
+            <form class="panel" id="create-department-form">
+              <h3 data-i18n="admin.departments">Departamentos</h3>
+              <label class="panel__field"><span data-i18n="table.name">Nombre</span><input type="text" id="new-department-name" maxlength="120" required /></label>
+              <button type="submit" class="send-button" data-i18n="admin.createDepartment">Crear departamento</button>
+              <ul class="panel__list" id="department-list"></ul>
+            </form>
+          </section>
+<section class="panel">
+            <h3 data-i18n="admin.registeredUsers">Usuarios registrados</h3>
+            <p class="console__muted" data-i18n="admin.usersTableHint">
+              El nombre, el departamento principal, los adicionales y la
+              contraseña se guardan juntos con un solo «Guardar» por fila.
+              Dejar la contraseña en blanco la conserva sin cambios.
+            </p>
+            <div class="table-scroll">
+              <table class="data-table" id="admin-users-table">
+                <thead>
+                  <tr>
+                    <th data-i18n="table.name">Nombre</th>
+                    <th data-i18n="table.email">Correo</th>
+                    <th data-i18n="table.role">Rol</th>
+                    <th data-i18n="table.status">Estado</th>
+                    <th data-i18n="table.mainDepartment">Departamento principal</th>
+                    <th data-i18n="table.extraDepartments">Adicionales</th>
+                    <th data-i18n="table.newPassword">Nueva contraseña</th>
+                    <th data-i18n="table.actions">Acciones</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </section>
+          </div>
+          <div class="admin-tab-panel" id="admin-tab-channels" hidden>
+<section class="panel">
+            <h3 data-i18n="accounts.title">Cuentas de canal</h3>
+            <p class="console__muted" data-i18n="accounts.hint">
+              Conecte tantos números de WhatsApp, páginas de Facebook o
+              equipos de Teams como necesite. Con departamento asignado, una
+              conversación nueva de esa cuenta cae directo en su cola, sin que
+              nadie tenga que derivarla a mano; sin departamento, sigue en la
+              cola común como hasta ahora.
+            </p>
+            <form id="create-channel-account-form">
+              <label class="panel__field">
+                <span data-i18n="table.channel">Canal</span>
+                <select id="new-account-channel">
+                  <option value="whatsapp">WhatsApp</option>
+                  <option value="facebook">Facebook</option>
+                  <option value="msbot">Teams</option>
+                </select>
+              </label>
+              <label class="panel__field">
+                <span>Identificador</span>
+                <input type="text" id="new-account-external-id" maxlength="128" required
+                       autocomplete="off" />
+              </label>
+              <label class="panel__field">
+                <span>Nombre visible</span>
+                <input type="text" id="new-account-name" maxlength="160" autocomplete="off" />
+              </label>
+              <label class="panel__field">
+                <span>Departamento</span>
+                <select id="new-account-department"><option value="">Sin departamento</option></select>
+              </label>
+              <label class="panel__field">
+                <span data-i18n="accounts.accessToken">Token de acceso</span>
+                <input type="password" id="new-account-token" maxlength="4096"
+                       autocomplete="new-password" />
+              </label>
+              <!-- Los dos que faltaban para no tener que tocar el .env: el
+                   token del reto de alta del webhook y la clave con la que Meta
+                   firma el cuerpo. Se ocultan en Teams, que no usa ninguno. -->
+              <label class="panel__field" data-meta-only>
+                <span data-i18n="accounts.verifyToken">Token de verificación del webhook</span>
+                <input type="password" id="new-account-verify-token" maxlength="512"
+                       autocomplete="new-password" />
+              </label>
+              <label class="panel__field" data-meta-only>
+                <span data-i18n="accounts.appSecret">Clave secreta de la app</span>
+                <input type="password" id="new-account-app-secret" maxlength="512"
+                       autocomplete="new-password" />
+              </label>
+              <button type="submit" class="send-button" data-i18n="accounts.connect">Conectar cuenta</button>
+            </form>
+            <p class="console__muted" id="new-account-hint" data-i18n-html="accounts.idHint">
+              El identificador es el <code>phone_number_id</code> en WhatsApp,
+              el id de la página en Facebook, o el id del equipo en Teams (se
+              ve solo tras el primer mensaje de ese equipo). El token es
+              obligatorio en Facebook; en WhatsApp, si falta, se usa el token
+              global de <code>.env</code>; en Teams no hace falta ninguno.
+            </p>
+            <div class="table-scroll">
+              <table class="data-table" id="channel-accounts-table">
+                <thead>
+                  <tr>
+                    <th data-i18n="table.channel">Canal</th>
+                    <th data-i18n="table.identifier">Identificador</th>
+                    <th data-i18n="table.name">Nombre</th>
+                    <th data-i18n="table.department">Departamento</th>
+                    <th data-i18n="table.newToken">Nuevo token</th>
+                    <th data-i18n="table.status">Estado</th>
+                    <th data-i18n="table.actions">Acciones</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </section>
+          </div>
+          <div class="admin-tab-panel" id="admin-tab-labels" hidden>
+<section class="admin-grid">
+            <form class="panel" id="create-label-form">
+              <h3 data-i18n="admin.labels">Etiquetas</h3>
+              <label class="panel__field"><span data-i18n="aside.name">Nombre</span><input type="text" id="new-label-name" maxlength="80" required /></label>
+              <label class="panel__field"><span data-i18n="admin.color">Color</span><input type="color" id="new-label-color" value="#6b7280" /></label>
+              <button type="submit" class="send-button" data-i18n="admin.createLabel">Crear etiqueta</button>
+              <ul class="panel__list" id="label-list"></ul>
+            </form>
+            <form class="panel" id="create-canned-response-form">
+              <h3 data-i18n="admin.cannedResponses">Respuestas guardadas</h3>
+              <label class="panel__field"><span data-i18n="admin.shortcode">Atajo</span><input type="text" id="new-canned-shortcode" maxlength="40" pattern="[a-z0-9_\-]+" placeholder="p-ej. saludo" required /></label>
+              <label class="panel__field"><span data-i18n="admin.title2">Título</span><input type="text" id="new-canned-title" maxlength="160" required /></label>
+              <label class="panel__field"><span data-i18n="admin.text">Texto</span><textarea id="new-canned-body" rows="3" maxlength="4000" required></textarea></label>
+              <button type="submit" class="send-button" data-i18n="admin.createCanned">Crear respuesta</button>
+              <ul class="panel__list" id="canned-response-list"></ul>
+            </form>
+          </section>
+<form class="panel" id="create-macro-form">
+            <h3 data-i18n="macro.title">Macros</h3>
+            <p class="console__muted" data-i18n="macro.hint">
+              Una secuencia de acciones que el equipo aplica de un clic sobre
+              una conversación. Si un paso falla no se aplica ninguno.
+            </p>
+            <label class="panel__field">
+              <span data-i18n="aside.name">Nombre</span>
+              <input type="text" id="new-macro-name" maxlength="80" required />
+            </label>
+            <label class="panel__field">
+              <span data-i18n="macro.addStep">Añadir paso</span>
+              <select id="macro-step-action">
+                <option value="label" data-i18n="macro.action.label">Etiquetar</option>
+                <option value="reply" data-i18n="macro.action.reply">Responder con una plantilla</option>
+                <option value="note" data-i18n="macro.action.note">Dejar una nota interna</option>
+                <option value="transfer_department" data-i18n="macro.action.transfer">Derivar a un departamento</option>
+                <option value="close" data-i18n="macro.action.close">Cerrar la conversación</option>
+              </select>
+            </label>
+            <label class="panel__field" id="macro-step-target-field">
+              <span id="macro-step-target-label">Etiqueta</span>
+              <select id="macro-step-target"></select>
+            </label>
+            <label class="panel__field" id="macro-step-body-field" hidden>
+              <span data-i18n="admin.text">Texto</span>
+              <textarea id="macro-step-body" rows="2" maxlength="2000"></textarea>
+            </label>
+            <button type="button" class="ghost-button" id="macro-step-add" data-i18n="macro.addStepButton">+ Añadir paso</button>
+            <ol class="panel__list" id="macro-steps"></ol>
+            <button type="submit" class="send-button" data-i18n="macro.create">Crear macro</button>
+            <ul class="panel__list" id="macro-list"></ul>
+          </form>
+          </div>
+          <div class="admin-tab-panel" id="admin-tab-messages" hidden>
+<form class="panel" id="auto-reply-form">
+            <h3 data-i18n="admin.autoReply">Respuesta automática</h3>
+            <p class="console__muted" data-i18n="admin.autoReplyHint">
+              Se envía una sola vez, en el primer mensaje que el asistente no
+              logra resolver.
+            </p>
+            <label class="panel__field">
+              <span data-i18n="admin.text">Texto</span>
+              <textarea id="auto-reply-text" rows="3" maxlength="2000" required></textarea>
+            </label>
+            <button type="submit" class="send-button" data-i18n="admin.autoReplySave">Guardar respuesta automática</button>
+          </form>
+<section class="panel">
+            <h3 data-i18n="hours.title">Horario de atención</h3>
+            <p class="console__muted" data-i18n="hours.hint">
+              Fuera de este horario el asistente deja de responder: el mensaje
+              del cliente se recibe igual y queda en la cola. Un departamento
+              sin horario atiende a toda hora.
+            </p>
+            <label class="panel__field">
+              <span data-i18n="hours.department">Departamento</span>
+              <select id="hours-department">
+                <option value="">— Elegir —</option>
+                <option value="__defaults__" data-i18n="hours.defaults">Toda la empresa (y cola común)</option>
+              </select>
+            </label>
+            <p class="console__muted" id="hours-defaults-hint" data-i18n="hours.defaultsHint" hidden>
+              Rige la cola común —lo que todavía no se derivó— y todo
+              departamento que no fije lo suyo.
+            </p>
+            <div id="hours-editor" hidden>
+              <label class="panel__field">
+                <span data-i18n="hours.timezone">Zona horaria</span>
+                <input type="text" id="hours-timezone" maxlength="64" list="hours-timezone-list"
+                       placeholder="America/Argentina/Buenos_Aires" />
+                <datalist id="hours-timezone-list">
+                  <option value="America/Argentina/Buenos_Aires"></option>
+                  <option value="America/Asuncion"></option>
+                  <option value="America/Montevideo"></option>
+                  <option value="America/Santiago"></option>
+                  <option value="America/Sao_Paulo"></option>
+                  <option value="Europe/Madrid"></option>
+                  <option value="UTC"></option>
+                </datalist>
+              </label>
+              <label class="panel__field">
+                <span data-i18n="hours.message">Aviso al cliente fuera de horario (vacío = no se le avisa)</span>
+                <textarea id="hours-message" rows="2" maxlength="2000"
+                          data-i18n-placeholder="hours.messagePlaceholder"></textarea>
+              </label>
+              <table class="hours-table">
+                <thead>
+                  <tr>
+                    <th rowspan="2" data-i18n="hours.day">Día</th>
+                    <th colspan="2" class="hours-table__group" data-i18n="hours.morning">Mañana</th>
+                    <th colspan="2" class="hours-table__group" data-i18n="hours.afternoon">Tarde</th>
+                  </tr>
+                  <tr>
+                    <th data-i18n="hours.opens">Abre</th>
+                    <th data-i18n="hours.closes">Cierra</th>
+                    <th data-i18n="hours.opens">Abre</th>
+                    <th data-i18n="hours.closes">Cierra</th>
+                  </tr>
+                </thead>
+                <tbody id="hours-days"></tbody>
+              </table>
+              <p class="console__muted" data-i18n="hours.splitHint">
+                La segunda franja es para el turno partido; déjela vacía si no
+                lo usa.
+              </p>
+              <label class="panel__field">
+                <span data-i18n="hours.slaTarget">Objetivo de primera respuesta, en minutos (vacío = sin objetivo)</span>
+                <input type="number" id="hours-sla-target" min="1" max="100000" placeholder="p-ej. 60" />
+              </label>
+              <p class="console__muted" data-i18n="hours.slaHint">
+                Se cuentan minutos de atención: con horario configurado, el
+                reloj se detiene de noche y los fines de semana. Solo lo
+                detiene la respuesta de una persona, no la del asistente.
+              </p>
+              <button type="button" class="send-button" id="hours-save" data-i18n="hours.save">Guardar horario</button>
+            </div>
+          </section>
+          </div>
+          <div class="admin-tab-panel" id="admin-tab-appearance" hidden>
+            <section class="panel">
+              <h3 data-i18n="brand.title">Color de la marca</h3>
+              <p class="console__muted" data-i18n="brand.hint">
+                Un solo color, el de su marca. De él salen los botones, los
+                enlaces y las burbujas, en tema claro y oscuro, con el
+                contraste comprobado para que todo siga leyéndose.
+              </p>
+              <label class="panel__field brand-picker">
+                <span data-i18n="brand.color">Color</span>
+                <span class="brand-picker__controls">
+                  <input type="color" id="brand-color" value="#2f5bd7" />
+                  <input type="text" id="brand-hex" maxlength="7" spellcheck="false"
+                         pattern="#[0-9a-fA-F]{6}" class="brand-picker__hex" />
+                </span>
+              </label>
+              <div class="brand-presets" id="brand-presets" role="group"
+                   data-i18n-aria="brand.presets"></div>
+
+              <!-- La vista previa enseña los dos temas a la vez y sobre los
+                   mismos fondos con los que el servidor calculó el contraste.
+                   Sin esto habría que guardar, cambiar de tema y volver, tres
+                   veces, para saber si el color elegido sirve. -->
+              <p class="console__muted" data-i18n="brand.previewTitle">Vista previa</p>
+              <div class="brand-preview" id="brand-preview">
+                <div class="brand-preview__card" data-brand-preview="light">
+                  <span class="brand-preview__theme" data-i18n="theme.light">Claro</span>
+                  <span class="brand-preview__bubble" data-i18n="brand.sampleBubble">Buenos días</span>
+                  <span class="brand-preview__button" data-i18n="brand.sampleButton">Enviar</span>
+                  <span class="brand-preview__link" data-i18n="brand.sampleLink">Ver la conversación</span>
+                </div>
+                <div class="brand-preview__card" data-brand-preview="dark">
+                  <span class="brand-preview__theme" data-i18n="theme.dark">Oscuro</span>
+                  <span class="brand-preview__bubble" data-i18n="brand.sampleBubble">Buenos días</span>
+                  <span class="brand-preview__button" data-i18n="brand.sampleButton">Enviar</span>
+                  <span class="brand-preview__link" data-i18n="brand.sampleLink">Ver la conversación</span>
+                </div>
+              </div>
+
+              <div class="brand-actions">
+                <button type="button" class="send-button" id="brand-save"
+                        data-i18n="brand.save">Guardar color</button>
+                <button type="button" class="ghost-button" id="brand-reset"
+                        data-i18n="brand.reset">Volver al color de partida</button>
+              </div>
+            </section>
+          </div>
+        </div>
+      </div>
+
+      <div class="overlay" id="supervisor-panel" hidden>
+        <div class="overlay__card">
+          <header class="overlay__header">
+            <h2>Panel de supervisión</h2>
+            <button type="button" class="ghost-button" id="supervisor-close" data-i18n="common.close">Cerrar</button>
+          </header>
+          <section>
+            <h3>Carga por agente</h3>
+            <div class="table-scroll">
+              <table class="data-table" id="workload-table">
+                <thead>
+                  <tr>
+                    <th data-i18n="table.agent">Agente</th>
+                    <th data-i18n="table.role">Rol</th>
+                    <th data-i18n="table.presence">Presencia</th>
+                    <th data-i18n="table.open">Abiertas</th>
+                    <th data-i18n="table.unread">Sin leer</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </section>
+          <section>
+            <h3>Últimas derivaciones</h3>
+            <ol class="panel__timeline" id="transfer-activity"></ol>
+          </section>
+        </div>
+      </div>
+
+      <!-- Directorio de contactos: solo supervisión y administración ------ -->
+      <div class="overlay" id="start-panel" hidden>
+        <div class="overlay__card overlay__card--narrow">
+          <header class="overlay__header">
+            <h2 data-i18n="start.title">Nueva conversación de WhatsApp</h2>
+            <button type="button" class="ghost-button" id="start-close" data-i18n="common.close">Cerrar</button>
+          </header>
+
+          <p class="console__muted" data-i18n="start.hint">
+            WhatsApp no permite escribir texto libre a quien no ha escrito en
+            las últimas 24 horas. Por eso se empieza con una plantilla
+            aprobada; en cuanto la persona conteste, podrá responderle
+            normalmente desde el hilo.
+          </p>
+          <p class="gate__error" id="start-error" hidden></p>
+
+          <form id="start-form">
+            <label class="panel__field">
+              <span data-i18n="start.number">Número con prefijo de país</span>
+              <input type="tel" id="start-to" placeholder="+595981234567"
+                     autocomplete="off" required />
+            </label>
+            <label class="panel__field">
+              <span data-i18n="start.template">Plantilla</span>
+              <select id="start-template"></select>
+            </label>
+            <p class="start-preview" id="start-preview"></p>
+            <div id="start-variables"></div>
+            <button type="submit" class="send-button" id="start-send" data-i18n="start.send">
+              Enviar y abrir la conversación
+            </button>
+          </form>
+        </div>
+      </div>
+
+      <div class="overlay" id="contacts-panel" hidden>
+        <div class="overlay__card">
+          <header class="overlay__header">
+            <h2>Contactos</h2>
+            <button type="button" class="ghost-button" id="contacts-close" data-i18n="common.close">Cerrar</button>
+          </header>
+
+          <label class="panel__field">
+            <span>Buscar</span>
+            <input
+              type="search"
+              id="contacts-search"
+              placeholder="Nombre, teléfono o correo"
+            />
+          </label>
+
+          <div class="table-scroll">
+            <table class="data-table" id="contacts-table">
+              <thead>
+                <tr>
+                  <th data-i18n="table.name">Nombre</th>
+                  <th data-i18n="table.phone">Teléfono</th>
+                  <th data-i18n="table.email">Correo</th>
+                  <th data-i18n="table.conversations">Conversaciones</th>
+                  <th data-i18n="table.lastActivity">Última actividad</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+
+          <section class="panel" id="contact-profile" hidden>
+            <h3 id="contact-profile-title">Ficha del contacto</h3>
+            <label class="panel__field">
+              <span>Nombre</span>
+              <input type="text" id="profile-name" maxlength="160" />
+            </label>
+            <label class="panel__field">
+              <span>Teléfono</span>
+              <input type="text" id="profile-phone" maxlength="32" />
+            </label>
+            <label class="panel__field">
+              <span>Correo</span>
+              <input type="email" id="profile-email" maxlength="254" />
+            </label>
+            <button type="button" class="send-button" id="profile-save" data-i18n="common.save">Guardar</button>
+            <p class="gate__error" id="profile-error" hidden></p>
+
+            <h4 data-i18n="aside.comments">Comentarios</h4>
+            <ul class="panel__list" id="profile-comments"></ul>
+            <form id="profile-comment-form" class="panel__inline-form">
+              <textarea
+                id="profile-comment-body"
+                rows="2"
+                placeholder="Añadir un comentario…"
+              ></textarea>
+              <button type="submit" class="ghost-button" data-i18n="aside.commentSave">Guardar comentario</button>
+            </form>
+
+            <h4 data-i18n="table.conversations">Conversaciones</h4>
+            <ul class="panel__list" id="profile-conversations"></ul>
+          </section>
+        </div>
+      </div>
+    </div>
+
+    <script src="/static/console.js?v=__ASSET_VERSION__"></script>
+  </body>
+</html>

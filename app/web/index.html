@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ChatboxGlobal — Asistente</title>
+    <link rel="stylesheet" href="/static/chat.css?v=__ASSET_VERSION__" />
+    <!-- Color de marca del inquilino, resuelto en el servidor. Va aqui, y no
+         en una peticion que la pagina lance al cargarse, por lo mismo que el
+         tema: si llegara despues se veria un instante el azul de la hoja
+         antes de repintarse con el color propio. Vacio cuando nadie eligio
+         color (ver app/core/branding.py). -->
+    <style id="brand-style">__BRAND_STYLE__</style>
+    <script src="/static/i18n.js?v=__ASSET_VERSION__"></script>
+    <script src="/static/theme.js?v=__ASSET_VERSION__"></script>
+  </head>
+  <body>
+    <!-- Acceso ------------------------------------------------------------- -->
+    <div class="gate" id="gate">
+      <form class="gate__card" id="login-form">
+        <h1>ChatboxGlobal</h1>
+        <p class="gate__hint" data-i18n="gate.subtitle">Inicie sesión para continuar la conversación.</p>
+        <label>
+          <span data-i18n="gate.email">Correo</span>
+          <input type="email" id="login-email" autocomplete="username" required />
+        </label>
+        <label>
+          <span data-i18n="gate.password">Contraseña</span>
+          <input
+            type="password"
+            id="login-password"
+            autocomplete="current-password"
+            required
+          />
+        </label>
+        <p class="gate__error" id="login-error" hidden></p>
+        <button type="submit" class="send-button" id="login-button" data-i18n="gate.enter">Entrar</button>
+        <p class="gate__separator" id="sso-separator" data-i18n="gate.or" hidden>o</p>
+        <a class="ghost-button" id="sso-button" href="/saml/login?next=/console" data-i18n="gate.sso" hidden>
+          Iniciar sesión con SSO (equipo)
+        </a>
+        <a class="google-button" id="google-sso-button" href="/auth/google/login?next=/console" hidden>
+          <!-- Logotipo oficial de Google. Va incrustado y no como imagen suelta
+               para que no dependa de una descarga aparte: si tardara o fallara,
+               el botón aparecería sin la marca justo cuando hay que reconocerla. -->
+          <svg class="google-button__logo" viewBox="0 0 48 48" aria-hidden="true" focusable="false">
+            <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/>
+            <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/>
+            <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/>
+            <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/>
+          </svg>
+          <span data-i18n="gate.google">Iniciar sesión con Google</span>
+        </a>
+        <p class="gate__separator" id="sso-note" data-i18n="gate.staffOnly" hidden>
+          Acceso del personal del equipo
+        </p>
+        <p class="gate__switch">
+          <span data-i18n="gate.noAccount">¿No tiene cuenta?</span>
+          <button type="button" class="link-button" id="show-register" data-i18n="gate.register">Regístrese</button>
+        </p>
+      </form>
+
+      <form class="gate__card" id="register-form" hidden>
+        <h1 data-i18n="chat.createAccount">Crear una cuenta</h1>
+        <p class="gate__hint" data-i18n="gate.registerTitle">Regístrese con su correo para empezar a chatear.</p>
+        <label>
+          <span data-i18n="aside.name">Nombre</span>
+          <input type="text" id="register-name" autocomplete="name" maxlength="160" />
+        </label>
+        <label>
+          <span data-i18n="gate.email">Correo</span>
+          <input type="email" id="register-email" autocomplete="username" required />
+        </label>
+        <label>
+          <span data-i18n="gate.password">Contraseña</span>
+          <input
+            type="password"
+            id="register-password"
+            autocomplete="new-password"
+            minlength="8"
+            required
+          />
+        </label>
+        <p class="gate__error" id="register-error" hidden></p>
+        <button type="submit" class="send-button" id="register-button" data-i18n="chat.registerButton">Registrarme</button>
+        <p class="gate__switch">
+          <span data-i18n="gate.haveAccount">¿Ya tiene cuenta?</span>
+          <button type="button" class="link-button" id="show-login" data-i18n="gate.login">Inicie sesión</button>
+        </p>
+      </form>
+    </div>
+
+    <!-- Aplicación ----------------------------------------------------------- -->
+    <main class="shell" id="shell" data-width="comfortable" hidden>
+      <header class="shell__header">
+        <div class="identity">
+          <span class="identity__dot" id="status-dot" aria-hidden="true"></span>
+          <div>
+            <h1 class="identity__name" id="identity-name">ChatboxGlobal</h1>
+            <p class="identity__state" id="status-text" data-i18n="chat.connecting">Conectando…</p>
+          </div>
+        </div>
+        <div class="header-actions">
+          <button
+            type="button"
+            class="ghost-button"
+            id="width-toggle"
+            data-i18n-title="chat.widthTitle"
+            data-i18n-aria="chat.widthTitle"
+            data-i18n="chat.width"
+          >
+            Ancho
+          </button>
+          <button
+            type="button"
+            class="ghost-button"
+            id="reset-button"
+            data-i18n-title="chat.refreshTitle"
+            data-i18n="chat.refresh"
+          >
+            Actualizar
+          </button>
+          <button type="button" class="ghost-button" id="logout-button" data-i18n-title="chat.logout" data-i18n="chat.logout">
+            Cerrar sesión
+          </button>
+          <select id="lang-select" class="lang-select" data-i18n-aria="lang.label"></select>
+            <button type="button" id="theme-toggle" class="theme-toggle"></button>
+        </div>
+      </header>
+
+      <section
+        class="thread"
+        id="thread"
+        role="log"
+        aria-live="polite"
+        data-i18n-aria="chat.threadLabel"
+      >
+        <div class="empty-state" id="empty-state">
+          <h2 data-i18n="chat.emptyTitle">¿En qué podemos ayudarle?</h2>
+          <p data-i18n="chat.emptyBody">
+            Escriba su consulta. Este chatbox comparte la misma capa de
+            orquestación que WhatsApp y Microsoft Teams, de modo que la
+            conversación continúa allí donde la deje.
+          </p>
+          <div class="suggestions" id="suggestions">
+            <button type="button" data-suggestion="¿Cuál es el estado de mi pedido?" data-i18n="chat.suggestion.order">
+              Estado de mi pedido
+            </button>
+            <button type="button" data-suggestion="Necesito una factura." data-i18n="chat.suggestion.invoice">
+              Solicitar una factura
+            </button>
+            <button type="button" data-suggestion="/agente" data-i18n="chat.suggestion.human">
+              Hablar con una persona
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <div class="typing" id="typing" hidden>
+        <span></span><span></span><span></span>
+      </div>
+
+      <div class="quick-replies" id="quick-replies" hidden></div>
+
+      <footer class="composer">
+        <form id="composer-form" class="composer__form">
+          <label class="visually-hidden" for="composer-input" data-i18n="chat.messageLabel">Mensaje</label>
+          <textarea
+            id="composer-input"
+            class="composer__input"
+            rows="1"
+            maxlength="4000"
+            data-i18n-placeholder="chat.composerPlaceholder"
+            autocomplete="off"
+          ></textarea>
+          <button
+            type="button"
+            class="ghost-button attach-button"
+            id="attach-button"
+            data-i18n-title="chat.attach"
+            data-i18n-aria="chat.attach"
+          >
+            📎
+          </button>
+          <input type="file" id="attach-input" accept="image/*" hidden />
+          <button type="submit" class="send-button" id="send-button" data-i18n="chat.send" disabled>
+            Enviar
+          </button>
+        </form>
+        <p class="composer__meta">
+          <span id="char-count">0 / 4000</span>
+          <span class="composer__hint" data-i18n="chat.hint">Intro envía · Mayús + Intro salta de línea</span>
+        </p>
+      </footer>
+    </main>
+
+    <script src="/static/chat.js?v=__ASSET_VERSION__"></script>
+  </body>
+</html>
