@@ -485,6 +485,35 @@ body {
   border-radius: 10px;
 }
 
+/* Vídeo y audio comparten medida con la imagen para que el hilo no dé saltos
+   de ancho según lo que llegue. El audio no necesita alto: su reproductor ya
+   trae el suyo, y forzarlo lo deforma en algunos navegadores. */
+.bubble__media {
+  display: block;
+  width: 240px;
+  max-width: 100%;
+  margin-top: 6px;
+  border-radius: 10px;
+}
+
+video.bubble__media {
+  max-height: 320px;
+  background: #000;
+}
+
+audio.bubble__media {
+  border-radius: 999px;
+}
+
+/* Un documento no se puede previsualizar; se ofrece como enlace con su
+   nombre, que es lo único que dice de qué se trata antes de abrirlo. */
+.bubble__file {
+  display: inline-block;
+  margin-top: 6px;
+  color: inherit;
+  word-break: break-all;
+}
+
 /* --- Estado inicial --- */
 .empty-state {
   margin: auto;

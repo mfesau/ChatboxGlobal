@@ -91,6 +91,41 @@
     return response.status === 204 ? null : response.json();
   }
 
+  /* Un adjunto se muestra según lo que sea. Antes solo se contemplaba la
+     imagen, de modo que un vídeo o un audio dejaban la burbuja vacía y no había
+     ni forma de descargarlos. El documento no se puede previsualizar, así que
+     al menos se ofrece como enlace con su nombre. */
+  function renderAttachment(attachment) {
+    if (!attachment.url) {
+      return null;
+    }
+    if (attachment.content_type === "image") {
+      const img = document.createElement("img");
+      img.src = attachment.url;
+      img.alt = attachment.filename || "Imagen adjunta";
+      return img;
+    }
+    if (attachment.content_type === "video" || attachment.content_type === "audio") {
+      const media = document.createElement(
+        attachment.content_type === "video" ? "video" : "audio",
+      );
+      media.src = attachment.url;
+      media.controls = true;
+      // Sin `preload` el navegador se descarga cada adjunto del hilo al
+      // abrirlo; con los metadatos basta para pintar la barra de reproducción.
+      media.preload = "metadata";
+      media.className = "bubble__media";
+      return media;
+    }
+    const link = document.createElement("a");
+    link.href = attachment.url;
+    link.textContent = attachment.filename || "Archivo adjunto";
+    link.className = "bubble__file";
+    link.target = "_blank";
+    link.rel = "noopener";
+    return link;
+  }
+
   function extractDetail(body, status, fallback) {
     try {
       return JSON.parse(body).detail || fallback || `Error ${status}`;
@@ -284,11 +319,9 @@
     bubble.className = `bubble bubble--${direction}`;
     bubble.textContent = text || "";
     (attachments || []).forEach((attachment) => {
-      if (attachment.content_type === "image" && attachment.url) {
-        const img = document.createElement("img");
-        img.src = attachment.url;
-        img.alt = attachment.filename || "Imagen adjunta";
-        bubble.appendChild(img);
+      const nodo = renderAttachment(attachment);
+      if (nodo) {
+        bubble.appendChild(nodo);
       }
     });
     if (meta) {

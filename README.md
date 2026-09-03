@@ -457,6 +457,26 @@ El compositor admite adjuntar una imagen (📎), tanto en el chatbox del cliente
 como en la respuesta del agente; se sube a `/uploads` y se muestra como burbuja
 de imagen en ambos lados.
 
+**Lo que llega de fuera es más variado, y se guarda igual.** WhatsApp no manda
+el fichero en el webhook, solo un identificador con el que hay que ir a
+buscarlo, autenticado; y lo que hay al otro lado desaparece a los pocos días.
+Por eso el adjunto se descarga en el momento de recibirlo y se guarda aquí:
+esperar a que alguien abra la conversación deja media bandeja sin ficheros. En
+el hilo, la imagen se ve, el vídeo y el audio se reproducen con sus controles, y
+lo que no se puede previsualizar —un PDF— se ofrece como enlace con su nombre.
+
+Los límites son distintos a propósito: al **subir** se admiten solo imágenes
+(`UPLOAD_MAX_BYTES`, 8 MB), porque es lo único que la interfaz sabe componer;
+al **recibir** se admite además vídeo, audio y PDF, con un tope propio
+(`INBOUND_MEDIA_MAX_BYTES`, 16 MB) que cubre el máximo que permite WhatsApp.
+Nadie elige lo que le mandan, y un vídeo descartado por un límite ajeno se
+pierde para siempre.
+
+Para salir, el camino es el inverso: el fichero se sube antes a Meta y se manda
+su identificador. Mandarlo como enlace no funciona —la dirección guardada es
+relativa, y aunque se compusiera la pública entera, `/uploads` exige sesión y
+quien la descargaría es un servidor de Meta, sin ninguna.
+
 Escribiendo `/` en el compositor aparecen las **respuestas guardadas**: textos
 frecuentes con un atajo (`/saludo`, `/horario`) que se insertan sin salir del
 teclado. Son texto, y quien responde puede retocarlo antes de enviar.

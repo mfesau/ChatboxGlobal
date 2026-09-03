@@ -43,6 +43,7 @@ from app.core.hub import Hub
 from app.core.localized import normalize_locale
 from app.core.localized import pick as pick_localized
 from app.core.pipeline import Handler, NextFn, Pipeline
+from app.core.storage import save_incoming_media
 
 
 # --------------------------------------------------------------------------- #
@@ -582,3 +583,36 @@ def test_the_generated_css_covers_the_three_theme_selectors():
     assert "@media (prefers-color-scheme:dark)" in css
     assert ':root[data-theme="dark"]' in css
     assert css.count("--accent-ink:") == 3
+
+
+# --------------------------------------------------------------------------- #
+# Adjuntos entrantes
+# --------------------------------------------------------------------------- #
+def test_incoming_media_accepts_what_a_customer_can_actually_send(tmp_path):
+    """Más amplio que lo que se admite al subir: nadie elige lo que le mandan."""
+    settings = SimpleNamespace(uploads_dir=str(tmp_path), inbound_media_max_bytes=1_000_000)
+    for mime, esperado in [
+        ("video/mp4", ContentType.VIDEO),
+        ("audio/ogg; codecs=opus", ContentType.AUDIO),
+        ("image/jpeg", ContentType.IMAGE),
+        ("application/pdf", ContentType.DOCUMENT),
+    ]:
+        guardado = save_incoming_media(
+            b"datos", mime_type=mime, namespace="inquilino", settings=settings
+        )
+        assert guardado is not None, mime
+        assert guardado.content_type is esperado
+        assert guardado.url.startswith("/uploads/inquilino/")
+
+
+def test_what_cannot_be_stored_is_dropped_instead_of_raising(tmp_path):
+    """Un adjunto imposible no puede tumbar el webhook: Meta lo reintentaría."""
+    settings = SimpleNamespace(uploads_dir=str(tmp_path), inbound_media_max_bytes=10)
+    assert save_incoming_media(b"x", mime_type="application/x-msdownload",
+                               namespace="t", settings=settings) is None
+    assert save_incoming_media(b"", mime_type="video/mp4",
+                               namespace="t", settings=settings) is None
+    assert save_incoming_media(b"demasiado-grande", mime_type="video/mp4",
+                               namespace="t", settings=settings) is None
+    assert save_incoming_media(b"x", mime_type=None,
+                               namespace="t", settings=settings) is None

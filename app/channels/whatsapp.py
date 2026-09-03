@@ -11,6 +11,7 @@ import hmac
 import re
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -350,6 +351,12 @@ class WhatsAppAdapter(ChannelAdapter):
                 "Faltan WHATSAPP_ACCESS_TOKEN o el identificador de número emisor",
             )
 
+        # Los adjuntos propios se suben antes a Meta y se mandan por su
+        # identificador. Ver `_ensure_media_ids` para el porqué.
+        fallo = await self._ensure_media_ids(phone_number_id, token, message)
+        if fallo is not None:
+            return fallo
+
         last: DeliveryReceipt | None = None
         for body in self._build_payloads(ref.channel_conversation_id, message):
             last = await self._post(phone_number_id, token, body)
@@ -465,6 +472,127 @@ class WhatsAppAdapter(ChannelAdapter):
                 },
             }
         }
+
+    async def fetch_media(
+        self, *, attachment: Attachment, ref: ConversationRef
+    ) -> tuple[bytes, str | None] | None:
+        """Descarga un adjunto entrante de WhatsApp.
+
+        Son dos pasos y no uno: primero se pide la ficha del medio, que
+        responde con una dirección temporal, y luego se descarga esa dirección
+        con el mismo token. La dirección caduca en minutos y el fichero
+        desaparece del lado de Meta a los pocos días, así que se guarda aquí en
+        cuanto llega; si se dejara para cuando alguien abra la conversación,
+        buena parte de los adjuntos ya no estarían.
+        """
+        if not attachment.provider_media_id:
+            return None
+        token = self._resolve_token(ref)
+        if token is None:
+            return None
+        cabeceras = {"Authorization": f"Bearer {token}"}
+        try:
+            ficha = await self._client.get(f"/{attachment.provider_media_id}", headers=cabeceras)
+            if ficha.status_code >= 400:
+                log.warning(
+                    "whatsapp_media_lookup_failed",
+                    media_id=attachment.provider_media_id,
+                    status=ficha.status_code,
+                )
+                return None
+            datos = ficha.json()
+            enlace = datos.get("url")
+            if not enlace:
+                return None
+            # La dirección es absoluta y de otro dominio (`lookaside.fbsbx.com`),
+            # así que no puede ir por el cliente, que lleva la base de la Graph API.
+            async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=10.0)) as cliente:
+                descarga = await cliente.get(enlace, headers=cabeceras)
+            if descarga.status_code >= 400:
+                log.warning(
+                    "whatsapp_media_download_failed",
+                    media_id=attachment.provider_media_id,
+                    status=descarga.status_code,
+                )
+                return None
+        except httpx.HTTPError as exc:
+            log.warning("whatsapp_media_error", error=str(exc))
+            return None
+        return descarga.content, datos.get("mime_type") or attachment.mime_type
+
+    async def _ensure_media_ids(
+        self, phone_number_id: str, token: str, message: OutboundMessage
+    ) -> DeliveryReceipt | None:
+        """Sube a Meta los adjuntos guardados aquí y les pone su identificador.
+
+        La Graph API admite dos formas de mandar una imagen: un ``link`` que
+        ella misma descarga, o el ``id`` de un fichero subido antes. El enlace
+        no sirve para los adjuntos propios, por dos motivos independientes:
+
+        1. La ``url`` que guarda el sistema es relativa —``/uploads/...``—, y
+           Meta no tiene forma de resolverla.
+        2. Aunque se compusiera la dirección pública completa, esa ruta exige
+           sesión desde que los adjuntos dejaron de servirse como estáticos
+           (ver ``app/api/attachments.py``). Quien descarga es un servidor de
+           Meta, sin sesión: recibiría un 401.
+
+        Por eso se sube el fichero y se manda por ``id``. Devuelve ``None`` si
+        todo fue bien, o el acuse de fallo que corresponda.
+        """
+        for attachment in message.attachments:
+            if attachment.provider_media_id or not attachment.url:
+                continue
+            # Un adjunto con dirección absoluta viene de fuera y Meta sí puede
+            # descargarlo; se deja como enlace.
+            if not attachment.url.startswith("/uploads/"):
+                continue
+
+            ruta = self._local_path(attachment.url)
+            if ruta is None or not ruta.is_file():
+                return DeliveryReceipt.failed(
+                    "missing_attachment",
+                    f"No se encontró el fichero del adjunto: {attachment.url}",
+                )
+            try:
+                with ruta.open("rb") as fichero:
+                    response = await self._client.post(
+                        f"/{phone_number_id}/media",
+                        data={"messaging_product": "whatsapp"},
+                        files={
+                            "file": (
+                                ruta.name,
+                                fichero,
+                                attachment.mime_type or "application/octet-stream",
+                            )
+                        },
+                        headers={"Authorization": f"Bearer {token}"},
+                    )
+            except (httpx.HTTPError, OSError) as exc:
+                return DeliveryReceipt.failed("media_upload_error", str(exc), retryable=True)
+
+            if response.status_code >= 400:
+                retryable = response.status_code == 429 or response.status_code >= 500
+                return DeliveryReceipt.failed(
+                    f"media_http_{response.status_code}",
+                    response.text[:500],
+                    retryable=retryable,
+                )
+            attachment.provider_media_id = response.json().get("id")
+        return None
+
+    def _local_path(self, url: str) -> Path | None:
+        """Traduce ``/uploads/{inquilino}/{fichero}`` a su ruta en disco.
+
+        Se exige exactamente esa forma y se rechaza cualquier segmento raro: la
+        dirección sale de la base, pero componer una ruta a partir de texto sin
+        comprobarlo es como se llega a leer ficheros de fuera del directorio.
+        """
+        partes = url.split("/")
+        if len(partes) != 4 or partes[0] != "" or partes[1] != "uploads":
+            return None
+        if any(parte in ("", ".", "..") or "\\" in parte for parte in partes[2:]):
+            return None
+        return Path(self.settings.uploads_dir) / partes[2] / partes[3]
 
     async def _post(
         self, phone_number_id: str, token: str, body: dict[str, Any]

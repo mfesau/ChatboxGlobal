@@ -302,3 +302,180 @@ async def test_send_without_credentials_reports_configuration_error():
     assert receipt.ok is False
     assert receipt.error_code == "not_configured"
     await adapter.aclose()
+
+
+# --------------------------------------------------------------------------- #
+# Adjuntos
+# --------------------------------------------------------------------------- #
+async def test_an_attachment_is_uploaded_to_meta_and_sent_by_id(tmp_path):
+    """Una imagen propia no puede mandarse como enlace, y este es el motivo.
+
+    La ``url`` guardada es relativa, y aunque se compusiera la pública entera,
+    esa ruta exige sesión desde que los adjuntos dejaron de servirse como
+    estáticos: el servidor de Meta que la descargaría no tiene ninguna. Así que
+    el fichero se sube antes y viaja su identificador.
+    """
+    imagen = tmp_path / "1234" / "foto.jpg"
+    imagen.parent.mkdir(parents=True)
+    imagen.write_bytes(b"\xff\xd8\xff-imagen-de-prueba")
+
+    adapter = make_adapter(uploads_dir=str(tmp_path))
+    llamadas: list[tuple[str, dict]] = []
+
+    class RespuestaFalsa:
+        def __init__(self, cuerpo):
+            self.status_code = 200
+            self._cuerpo = cuerpo
+            self.text = json.dumps(cuerpo)
+
+        def json(self):
+            return self._cuerpo
+
+    async def post_falso(ruta, **kwargs):
+        llamadas.append((ruta, kwargs))
+        if ruta.endswith("/media"):
+            return RespuestaFalsa({"id": "MEDIA-123"})
+        return RespuestaFalsa({"messages": [{"id": "wamid.XYZ"}]})
+
+    adapter._client.post = post_falso
+    recibo = await adapter.send(
+        ref=ConversationRef(
+            channel=ChannelKind.WHATSAPP,
+            channel_conversation_id="595981123456",
+            channel_account_id="1234567890",
+        ),
+        message=OutboundMessage(
+            content_type=ContentType.IMAGE,
+            attachments=[
+                Attachment(
+                    content_type=ContentType.IMAGE,
+                    url="/uploads/1234/foto.jpg",
+                    mime_type="image/jpeg",
+                    filename="foto.jpg",
+                )
+            ],
+        ),
+    )
+    await adapter.aclose()
+
+    assert recibo.ok is True
+    # Primero la subida, después el envío.
+    assert llamadas[0][0] == "/1234567890/media"
+    assert llamadas[0][1]["data"] == {"messaging_product": "whatsapp"}
+    # Y lo que viaja es el identificador, nunca la ruta local.
+    cuerpo = llamadas[1][1]["json"]
+    assert cuerpo["image"] == {"id": "MEDIA-123"}
+    assert "link" not in cuerpo["image"]
+
+
+async def test_an_external_image_still_travels_as_a_link():
+    """Lo que ya está publicado fuera no hace falta subirlo."""
+    adapter = make_adapter()
+    cuerpos = []
+
+    class RespuestaFalsa:
+        status_code = 200
+        text = "{}"
+
+        def json(self):
+            return {"messages": [{"id": "wamid.XYZ"}]}
+
+    async def post_falso(ruta, **kwargs):
+        cuerpos.append((ruta, kwargs.get("json")))
+        return RespuestaFalsa()
+
+    adapter._client.post = post_falso
+    await adapter.send(
+        ref=ConversationRef(
+            channel=ChannelKind.WHATSAPP, channel_conversation_id="595981123456"
+        ),
+        message=OutboundMessage(
+            content_type=ContentType.IMAGE,
+            attachments=[
+                Attachment(
+                    content_type=ContentType.IMAGE,
+                    url="https://ejemplo.test/foto.jpg",
+                    mime_type="image/jpeg",
+                )
+            ],
+        ),
+    )
+    await adapter.aclose()
+
+    assert len(cuerpos) == 1  # sin subida previa
+    assert cuerpos[0][1]["image"] == {"link": "https://ejemplo.test/foto.jpg"}
+
+
+async def test_a_missing_attachment_file_is_reported_instead_of_sent(tmp_path):
+    adapter = make_adapter(uploads_dir=str(tmp_path))
+    recibo = await adapter.send(
+        ref=ConversationRef(
+            channel=ChannelKind.WHATSAPP, channel_conversation_id="595981123456"
+        ),
+        message=OutboundMessage(
+            content_type=ContentType.IMAGE,
+            attachments=[
+                Attachment(content_type=ContentType.IMAGE, url="/uploads/1234/no-existe.jpg")
+            ],
+        ),
+    )
+    await adapter.aclose()
+    assert recibo.ok is False
+    assert recibo.error_code == "missing_attachment"
+
+
+async def test_incoming_media_is_fetched_from_meta_in_two_steps(tmp_path):
+    """WhatsApp no manda el fichero, solo un identificador.
+
+    Primero se pide la ficha del medio, que responde con una dirección
+    temporal, y luego se descarga esa dirección con el mismo token. Sin este
+    paso, un vídeo llegaba como adjunto sin dirección: burbuja vacía en la
+    conversación y fichero perdido a los pocos días.
+    """
+    adapter = make_adapter(uploads_dir=str(tmp_path))
+    pedidos: list[str] = []
+
+    class FichaFalsa:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"url": "https://lookaside.fbsbx.com/v/t1/xyz", "mime_type": "video/mp4"}
+
+    async def get_falso(ruta, **kwargs):
+        pedidos.append(ruta)
+        return FichaFalsa()
+
+    class DescargaFalsa:
+        status_code = 200
+        content = b"contenido-de-video"
+
+    class ClienteFalso:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def get(self, url, **kwargs):
+            pedidos.append(url)
+            return DescargaFalsa()
+
+    adapter._client.get = get_falso
+    import app.channels.whatsapp as modulo
+
+    original = modulo.httpx.AsyncClient
+    modulo.httpx.AsyncClient = lambda **kwargs: ClienteFalso()
+    try:
+        resultado = await adapter.fetch_media(
+            attachment=Attachment(content_type=ContentType.VIDEO, provider_media_id="MEDIA-9"),
+            ref=ConversationRef(
+                channel=ChannelKind.WHATSAPP, channel_conversation_id="595981123456"
+            ),
+        )
+    finally:
+        modulo.httpx.AsyncClient = original
+        await adapter.aclose()
+
+    assert resultado == (b"contenido-de-video", "video/mp4")
+    assert pedidos == ["/MEDIA-9", "https://lookaside.fbsbx.com/v/t1/xyz"]

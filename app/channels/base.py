@@ -48,6 +48,18 @@ class ChannelAdapter(abc.ABC):
         self.settings = settings
 
     # ------------------------------------------------------------- entrada
+    async def fetch_media(
+        self, *, attachment: Any, ref: Any
+    ) -> tuple[bytes, str | None] | None:
+        """Descarga un adjunto que el proveedor guarda en su lado.
+
+        WhatsApp y Teams no mandan el fichero en el webhook, solo un
+        identificador con el que hay que ir a buscarlo, autenticado y en un
+        plazo corto. Devuelve el contenido y su tipo MIME, o ``None`` si el
+        canal no aloja ficheros (el chatbox web ya los guarda al subirlos).
+        """
+        return None
+
     async def verify_request(
         self,
         *,

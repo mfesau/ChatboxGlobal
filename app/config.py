@@ -169,6 +169,11 @@ class Settings(BaseSettings):
     #: consola. Relativo al directorio de trabajo del proceso.
     uploads_dir: str = "uploads"
     upload_max_bytes: int = 8_388_608
+    #: Máximo de un adjunto que **llega** de un canal externo. Mayor que el
+    #: de subida porque no se elige lo que manda el cliente: WhatsApp admite
+    #: vídeos de hasta 16 MB, y con el límite de subida se descartarían en
+    #: silencio justo los que más importa conservar.
+    inbound_media_max_bytes: int = 16 * 1024 * 1024
 
     @model_validator(mode="before")
     @classmethod

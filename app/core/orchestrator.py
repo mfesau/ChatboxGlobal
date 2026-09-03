@@ -28,6 +28,7 @@ from app.core.envelope import (
 )
 from app.core.hub import conversation_topic, hub, inbox_topic
 from app.core.pipeline import Pipeline, TurnContext
+from app.core.storage import save_incoming_media
 from app.db import repositories as repo
 from app.db.engine import session_scope
 from app.logging_setup import get_logger
@@ -142,6 +143,11 @@ class Orchestrator:
                 contact_id=contact.id,
                 channel_account=channel_account,
             )
+            # Los adjuntos se traen antes de guardar el mensaje: así el hilo
+            # queda con la dirección del fichero ya puesta y no hace falta una
+            # segunda pasada más tarde, cuando el original ya no exista.
+            await self._store_inbound_media(inbound, adapter=adapter, namespace=str(tenant.id))
+
             stored = await repo.record_inbound(
                 session,
                 conversation=conversation,
@@ -188,6 +194,48 @@ class Orchestrator:
         if enqueued and self.on_enqueued is not None:
             await self.on_enqueued()
         return True
+
+    async def _store_inbound_media(
+        self, inbound: InboundMessage, *, adapter: ChannelAdapter, namespace: str
+    ) -> None:
+        """Descarga y guarda los adjuntos que el canal aloja en su lado.
+
+        Sin esto, un vídeo o un audio de WhatsApp llegaba como un adjunto sin
+        dirección: la conversación mostraba una burbuja vacía y el fichero se
+        perdía a los pocos días, cuando Meta lo borra.
+
+        Un adjunto que no se pueda traer o guardar no interrumpe nada: el
+        mensaje entra igual, con su texto si lo tenía. Es preferible un hilo
+        con un adjunto de menos que un webhook que falla y que Meta reintenta
+        una y otra vez.
+        """
+        for attachment in inbound.attachments:
+            if attachment.url or not attachment.provider_media_id:
+                continue
+            descargado = await adapter.fetch_media(
+                attachment=attachment, ref=inbound.conversation
+            )
+            if descargado is None:
+                continue
+            body, mime = descargado
+            guardado = save_incoming_media(
+                body,
+                mime_type=mime,
+                namespace=namespace,
+                settings=self.settings,
+                filename=attachment.filename,
+            )
+            if guardado is None:
+                log.warning(
+                    "inbound_media_discarded",
+                    channel=str(inbound.channel),
+                    mime_type=mime,
+                    size=len(body),
+                )
+                continue
+            attachment.url = guardado.url
+            attachment.mime_type = guardado.mime_type
+            attachment.size_bytes = guardado.size_bytes
 
     async def _apply_system_event(self, session: Any, inbound: InboundMessage) -> None:
         """Aplica acuses de recibo y avisos del canal."""

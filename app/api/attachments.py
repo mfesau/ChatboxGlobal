@@ -29,6 +29,7 @@ from app.api.deps import (
     SettingsDep,
 )
 from app.core.security import hash_token
+from app.core.storage import INBOUND_EXTENSION_MIMES
 from app.db import repositories as repo
 from app.db.models import Agent, Contact
 from app.logging_setup import get_logger
@@ -36,17 +37,20 @@ from app.logging_setup import get_logger
 log = get_logger(__name__)
 router = APIRouter(tags=["adjuntos"])
 
-#: Nombre tal y como lo genera ``save_upload``: 32 dígitos hexadecimales más
-#: extensión conocida. Validarlo con este patrón descarta de raíz el recorrido
-#: de rutas: ni «..», ni separadores, ni nombres arbitrarios.
-STORED_NAME = re.compile(r"^[0-9a-f]{32}\.(?:jpg|png|webp|gif)$")
+#: Qué se sabe servir. Sale de ``app/core/storage.py`` y no de una lista propia:
+#: escritas por separado, esta se quedó corta —solo imágenes— y un vídeo que sí
+#: se había guardado se descargaba con un 404, sin más pista que esa.
+MEDIA_TYPES = INBOUND_EXTENSION_MIMES
 
-MEDIA_TYPES = {
-    ".jpg": "image/jpeg",
-    ".png": "image/png",
-    ".webp": "image/webp",
-    ".gif": "image/gif",
-}
+#: Nombre tal y como lo generan ``save_upload`` y ``save_incoming_media``: 32
+#: dígitos hexadecimales más una extensión conocida. Validarlo con este patrón
+#: descarta de raíz el recorrido de rutas: ni «..», ni separadores, ni nombres
+#: arbitrarios.
+STORED_NAME = re.compile(
+    r"^[0-9a-f]{32}\.(?:"
+    + "|".join(re.escape(extension.lstrip(".")) for extension in sorted(MEDIA_TYPES))
+    + r")$"
+)
 
 
 @router.get("/uploads/{namespace}/{filename}", include_in_schema=False)
