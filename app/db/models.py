@@ -15,13 +15,14 @@ Convenciones aplicadas:
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 from sqlalchemy import (
     JSON,
     Boolean,
     CheckConstraint,
+    Date,
     DateTime,
     ForeignKey,
     Index,
@@ -245,6 +246,15 @@ class Department(Base, TimestampMixin):
     #: Minutos **hábiles** para la primera respuesta humana. Nulo = sin
     #: objetivo, que es como venía funcionando antes de este campo.
     first_response_target_minutes: Mapped[int | None] = mapped_column(Integer)
+
+    #: Módulos de negocio propios de esta rama (p. ej. reservas de hotel),
+    #: como ``{"hotel_booking": {"enabled": true}}``. Vacío = ningún módulo
+    #: extra, que es como venía funcionando antes de este campo. Permite que
+    #: departamentos distintos del mismo inquilino —la Cooperativa— tengan
+    #: funcionalidades completamente distintas sin afectarse entre sí.
+    enabled_modules: Mapped[dict[str, Any]] = mapped_column(
+        JSONBType, default=dict, nullable=False
+    )
 
 
 class CannedResponse(Base, TimestampMixin):
@@ -830,3 +840,169 @@ class ContactComment(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, server_default=func.now(), nullable=False
     )
+
+
+# --------------------------------------------------------------------------- #
+# Módulo Hotel: habitaciones y reservas
+# --------------------------------------------------------------------------- #
+#
+# Activo solo para los departamentos que lo declaran en
+# ``Department.enabled_modules["hotel_booking"]``: la Cooperativa puede tener
+# otras ramas de negocio en el mismo inquilino que nunca ven estas tablas.
+# Todo queda acotado por ``department_id`` además de ``tenant_id``, igual que
+# el resto del esquema multiempresa.
+#
+# La protección contra la doble reserva de una misma habitación no vive aquí:
+# SQLAlchemy no representa de forma portable la restricción de exclusión de
+# PostgreSQL (``EXCLUDE USING gist``), y este esquema debe seguir creándose
+# igual sobre SQLite para la batería de pruebas (ver ``tests/conftest.py``).
+# Esa restricción se añade solo en ``db/migrations/0013_hotel_module.sql``,
+# sobre PostgreSQL; en SQLite la comprobación de solapamiento queda a cargo de
+# la capa de repositorio.
+class HotelRoomType(Base, TimestampMixin):
+    """Categoría de habitación del departamento (Individual, Doble, Suite…)."""
+
+    __tablename__ = "hotel_room_types"
+    __table_args__ = (
+        UniqueConstraint("department_id", "name", name="uq_hotel_room_type_name"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=new_id)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False
+    )
+    department_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("departments.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    capacity: Mapped[int] = mapped_column(Integer, default=2, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+
+class HotelRoom(Base, TimestampMixin):
+    """Habitación física, con su categoría y su estado de mantenimiento."""
+
+    __tablename__ = "hotel_rooms"
+    __table_args__ = (
+        UniqueConstraint("department_id", "code", name="uq_hotel_room_code"),
+        CheckConstraint(
+            "status IN ('available', 'maintenance', 'out_of_service')",
+            name="ck_hotel_room_status",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=new_id)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False
+    )
+    department_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("departments.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    room_type_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("hotel_room_types.id", ondelete="CASCADE"), nullable=False
+    )
+    #: Número o nombre visible de la habitación (p. ej. «204»).
+    code: Mapped[str] = mapped_column(String(20), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), default="available", nullable=False)
+    notes: Mapped[str | None] = mapped_column(Text)
+
+    room_type: Mapped[HotelRoomType] = relationship()
+
+
+class HotelRatePlan(Base, TimestampMixin):
+    """Precio por noche de una categoría, vigente en un rango de fechas.
+
+    ``starts_on`` y ``ends_on`` nulos cubren todo el calendario: es la tarifa
+    por omisión de la categoría mientras no haya una temporada específica.
+    """
+
+    __tablename__ = "hotel_rate_plans"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=new_id)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False
+    )
+    department_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("departments.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    room_type_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("hotel_room_types.id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    starts_on: Mapped[date | None] = mapped_column(Date)
+    ends_on: Mapped[date | None] = mapped_column(Date)
+    #: En centavos, para no arrastrar errores de redondeo de coma flotante.
+    nightly_price_cents: Mapped[int] = mapped_column(Integer, nullable=False)
+    #: Código ISO 4217. Configurable por si la Cooperativa cobra en más de una
+    #: moneda según la rama de negocio.
+    currency: Mapped[str] = mapped_column(String(3), default="USD", nullable=False)
+
+    room_type: Mapped[HotelRoomType] = relationship()
+
+
+class HotelReservation(Base, TimestampMixin):
+    """Reserva de una habitación para un rango de fechas.
+
+    Puede nacer de una conversación —autoservicio por chat— o cargarla un
+    agente a mano; ``conversation_id`` queda nulo en ese segundo caso. El
+    huésped se guarda también en texto plano (``guest_name`` y similares)
+    porque quien se aloja no siempre coincide con el contacto que escribió por
+    el canal: por ejemplo, alguien reserva para un tercero.
+    """
+
+    __tablename__ = "hotel_reservations"
+    __table_args__ = (
+        CheckConstraint("check_out > check_in", name="ck_hotel_reservation_dates"),
+        CheckConstraint(
+            "status IN ('pending', 'confirmed', 'checked_in', 'checked_out', "
+            "'cancelled', 'no_show')",
+            name="ck_hotel_reservation_status",
+        ),
+        Index("ix_hotel_reservations_room_dates", "room_id", "check_in", "check_out"),
+        Index("ix_hotel_reservations_department_status", "department_id", "status"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=new_id)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False
+    )
+    department_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("departments.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    #: Sin ``ondelete``: una habitación con reservas no puede borrarse, solo
+    #: desactivarse (``HotelRoom.status``). Perder la referencia en silencio
+    #: dejaría reservas —pasadas o futuras— sin habitación asociada.
+    room_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("hotel_rooms.id"), nullable=False)
+    contact_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("contacts.id", ondelete="SET NULL")
+    )
+    conversation_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("conversations.id", ondelete="SET NULL")
+    )
+    #: Nulo cuando la reserva la creó el propio bot en autoservicio.
+    created_by_agent_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("agents.id", ondelete="SET NULL")
+    )
+
+    guest_name: Mapped[str] = mapped_column(String(160), nullable=False)
+    guest_phone: Mapped[str | None] = mapped_column(String(32))
+    guest_email: Mapped[str | None] = mapped_column(String(254))
+
+    check_in: Mapped[date] = mapped_column(Date, nullable=False)
+    check_out: Mapped[date] = mapped_column(Date, nullable=False)
+    guests: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    #: ``pending`` | ``confirmed`` | ``checked_in`` | ``checked_out`` |
+    #: ``cancelled`` | ``no_show``
+    status: Mapped[str] = mapped_column(String(16), default="pending", nullable=False)
+
+    #: Precio pactado al reservar, copiado de la tarifa vigente en ese
+    #: momento: si la tarifa cambia después, la reserva ya hecha no se ve
+    #: afectada.
+    nightly_price_cents: Mapped[int | None] = mapped_column(Integer)
+    currency: Mapped[str] = mapped_column(String(3), default="USD", nullable=False)
+    notes: Mapped[str | None] = mapped_column(Text)
+
+    room: Mapped[HotelRoom] = relationship()
+    contact: Mapped[Contact | None] = relationship()
+    conversation: Mapped[Conversation | None] = relationship()

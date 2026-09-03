@@ -88,6 +88,7 @@ CREATE TABLE departments (
 	timezone VARCHAR(64), 
 	out_of_hours_message TEXT, 
 	first_response_target_minutes INTEGER, 
+	enabled_modules JSONB NOT NULL, 
 	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
 	updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
 	PRIMARY KEY (id), 
@@ -202,6 +203,25 @@ CREATE TABLE contact_sessions (
 );
 CREATE INDEX ix_contact_sessions_contact ON contact_sessions (contact_id, expires_at);
 
+-- hotel_room_types
+CREATE TABLE hotel_room_types (
+	id UUID NOT NULL, 
+	tenant_id UUID NOT NULL, 
+	department_id UUID NOT NULL, 
+	name VARCHAR(120) NOT NULL, 
+	description TEXT, 
+	capacity INTEGER NOT NULL, 
+	is_active BOOLEAN NOT NULL, 
+	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
+	updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
+	PRIMARY KEY (id), 
+	CONSTRAINT uq_hotel_room_type_name UNIQUE (department_id, name), 
+	FOREIGN KEY(tenant_id) REFERENCES tenants (id) ON DELETE CASCADE, 
+	FOREIGN KEY(department_id) REFERENCES departments (id) ON DELETE CASCADE
+);
+CREATE INDEX ix_hotel_room_types_created_at ON hotel_room_types (created_at);
+CREATE INDEX ix_hotel_room_types_department_id ON hotel_room_types (department_id);
+
 -- agent_departments
 CREATE TABLE agent_departments (
 	agent_id UUID NOT NULL, 
@@ -278,6 +298,48 @@ CREATE INDEX ix_conversations_created_at ON conversations (created_at);
 CREATE INDEX ix_conversations_department_id ON conversations (department_id);
 CREATE INDEX ix_conversations_inbox ON conversations (tenant_id, status, last_message_at);
 
+-- hotel_rate_plans
+CREATE TABLE hotel_rate_plans (
+	id UUID NOT NULL, 
+	tenant_id UUID NOT NULL, 
+	department_id UUID NOT NULL, 
+	room_type_id UUID NOT NULL, 
+	name VARCHAR(120) NOT NULL, 
+	starts_on DATE, 
+	ends_on DATE, 
+	nightly_price_cents INTEGER NOT NULL, 
+	currency VARCHAR(3) NOT NULL, 
+	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
+	updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
+	PRIMARY KEY (id), 
+	FOREIGN KEY(tenant_id) REFERENCES tenants (id) ON DELETE CASCADE, 
+	FOREIGN KEY(department_id) REFERENCES departments (id) ON DELETE CASCADE, 
+	FOREIGN KEY(room_type_id) REFERENCES hotel_room_types (id) ON DELETE CASCADE
+);
+CREATE INDEX ix_hotel_rate_plans_created_at ON hotel_rate_plans (created_at);
+CREATE INDEX ix_hotel_rate_plans_department_id ON hotel_rate_plans (department_id);
+
+-- hotel_rooms
+CREATE TABLE hotel_rooms (
+	id UUID NOT NULL, 
+	tenant_id UUID NOT NULL, 
+	department_id UUID NOT NULL, 
+	room_type_id UUID NOT NULL, 
+	code VARCHAR(20) NOT NULL, 
+	status VARCHAR(16) NOT NULL, 
+	notes TEXT, 
+	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
+	updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
+	PRIMARY KEY (id), 
+	CONSTRAINT uq_hotel_room_code UNIQUE (department_id, code), 
+	CONSTRAINT ck_hotel_room_status CHECK (status IN ('available', 'maintenance', 'out_of_service')), 
+	FOREIGN KEY(tenant_id) REFERENCES tenants (id) ON DELETE CASCADE, 
+	FOREIGN KEY(department_id) REFERENCES departments (id) ON DELETE CASCADE, 
+	FOREIGN KEY(room_type_id) REFERENCES hotel_room_types (id) ON DELETE CASCADE
+);
+CREATE INDEX ix_hotel_rooms_created_at ON hotel_rooms (created_at);
+CREATE INDEX ix_hotel_rooms_department_id ON hotel_rooms (department_id);
+
 -- saved_views
 CREATE TABLE saved_views (
 	id UUID NOT NULL, 
@@ -326,6 +388,42 @@ CREATE TABLE conversation_labels (
 	FOREIGN KEY(conversation_id) REFERENCES conversations (id) ON DELETE CASCADE, 
 	FOREIGN KEY(label_id) REFERENCES labels (id) ON DELETE CASCADE
 );
+
+-- hotel_reservations
+CREATE TABLE hotel_reservations (
+	id UUID NOT NULL, 
+	tenant_id UUID NOT NULL, 
+	department_id UUID NOT NULL, 
+	room_id UUID NOT NULL, 
+	contact_id UUID, 
+	conversation_id UUID, 
+	created_by_agent_id UUID, 
+	guest_name VARCHAR(160) NOT NULL, 
+	guest_phone VARCHAR(32), 
+	guest_email VARCHAR(254), 
+	check_in DATE NOT NULL, 
+	check_out DATE NOT NULL, 
+	guests INTEGER NOT NULL, 
+	status VARCHAR(16) NOT NULL, 
+	nightly_price_cents INTEGER, 
+	currency VARCHAR(3) NOT NULL, 
+	notes TEXT, 
+	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
+	updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
+	PRIMARY KEY (id), 
+	CONSTRAINT ck_hotel_reservation_dates CHECK (check_out > check_in), 
+	CONSTRAINT ck_hotel_reservation_status CHECK (status IN ('pending', 'confirmed', 'checked_in', 'checked_out', 'cancelled', 'no_show')), 
+	FOREIGN KEY(tenant_id) REFERENCES tenants (id) ON DELETE CASCADE, 
+	FOREIGN KEY(department_id) REFERENCES departments (id) ON DELETE CASCADE, 
+	FOREIGN KEY(room_id) REFERENCES hotel_rooms (id), 
+	FOREIGN KEY(contact_id) REFERENCES contacts (id) ON DELETE SET NULL, 
+	FOREIGN KEY(conversation_id) REFERENCES conversations (id) ON DELETE SET NULL, 
+	FOREIGN KEY(created_by_agent_id) REFERENCES agents (id) ON DELETE SET NULL
+);
+CREATE INDEX ix_hotel_reservations_created_at ON hotel_reservations (created_at);
+CREATE INDEX ix_hotel_reservations_department_id ON hotel_reservations (department_id);
+CREATE INDEX ix_hotel_reservations_department_status ON hotel_reservations (department_id, status);
+CREATE INDEX ix_hotel_reservations_room_dates ON hotel_reservations (room_id, check_in, check_out);
 
 -- internal_notes
 CREATE TABLE internal_notes (
