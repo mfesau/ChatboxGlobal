@@ -1802,6 +1802,39 @@ async def test_google_callback_rejects_an_unknown_state(anonymous, monkeypatch):
     assert response.status_code == 401
 
 
+async def test_a_successful_google_callback_actually_opens_the_session(
+    anonymous, monkeypatch
+):
+    """Entrar con Google tiene que dejar la cookie de sesión, no solo la cuenta.
+
+    Sin ella el alta funciona —el agente queda creado— pero la vuelta a
+    ``/console`` llega sin sesión y rebota al acceso: parecía que se podía
+    registrar y no iniciar sesión.
+    """
+    import app.api.google_auth as google_auth
+
+    _configure_google(monkeypatch, get_settings())
+
+    async def perfil_falso(**kwargs):
+        return {"email": "persona.google@empresa.local", "display_name": "Persona Google"}
+
+    monkeypatch.setattr(google_auth, "exchange_code_for_userinfo", perfil_falso)
+
+    inicio = await anonymous.get("/auth/google/login?next=/console", follow_redirects=False)
+    cookie = inicio.cookies["chatbox_google_state"].strip('"')
+    state, _, _ = cookie.partition(":")
+
+    respuesta = await anonymous.get(
+        f"/auth/google/callback?code=abc&state={state}", follow_redirects=False
+    )
+    assert respuesta.status_code == 303
+    assert respuesta.headers["location"] == "/console"
+    assert "chatbox_session" in respuesta.cookies
+
+    # Y esa cookie vale de verdad para la consola.
+    assert (await anonymous.get("/api/auth/me")).status_code == 200
+
+
 async def test_login_or_provision_agent_creates_a_new_agent_with_the_basic_role(team):
     async with session_scope() as session:
         agent, created = await login_or_provision_agent(

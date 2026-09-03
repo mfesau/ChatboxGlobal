@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import secrets
 
-from fastapi import APIRouter, HTTPException, Request, Response, status
+from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
 
 from app.api.auth import issue_session
@@ -58,13 +58,15 @@ def _redirect_uri(settings: Settings) -> str:
 
 @router.get("/login", include_in_schema=False)
 async def login(
-    response: Response, settings: SettingsDep, next: str | None = None
+    settings: SettingsDep, next: str | None = None
 ) -> RedirectResponse:
     """Arranca el inicio de sesión: redirige a Google con la solicitud OAuth."""
     _require_google(settings)
     state = secrets.token_urlsafe(24)
     redirect = RedirectResponse(
-        build_authorization_url(settings=settings, redirect_uri=_redirect_uri(settings), state=state),
+        build_authorization_url(
+            settings=settings, redirect_uri=_redirect_uri(settings), state=state
+        ),
         status_code=status.HTTP_302_FOUND,
     )
     # El estado viaja también en una cookie propia de esta visita: al volver,
@@ -85,7 +87,6 @@ async def login(
 @router.get("/callback", include_in_schema=False)
 async def callback(
     request: Request,
-    response: Response,
     session: SessionDep,
     settings: SettingsDep,
     code: str | None = None,
@@ -132,8 +133,15 @@ async def callback(
             status_code=status.HTTP_403_FORBIDDEN, detail="La cuenta está desactivada"
         ) from exc
 
+    # La cookie se pone sobre la respuesta que de verdad se devuelve, y no
+    # sobre la que inyecta FastAPI: al devolver un `Response` propio, FastAPI
+    # entrega ese objeto tal cual y descarta las cabeceras de la inyectada. Con
+    # la sesión escrita en la que se descarta, la cuenta se creaba y el
+    # navegador volvía a `/console` sin sesión, de modo que registrarse
+    # funcionaba y entrar no.
+    target = RedirectResponse(_safe_relay(relay), status_code=status.HTTP_303_SEE_OTHER)
     await issue_session(
-        agent=agent, tenant=tenant, request=request, response=response,
+        agent=agent, tenant=tenant, request=request, response=target,
         session=session, settings=settings,
     )
     await repo.record_audit(
@@ -147,6 +155,5 @@ async def callback(
     )
     log.info("google_login_ok", agent=agent.email, role=agent.role, provisioned=is_new)
 
-    target = RedirectResponse(_safe_relay(relay), status_code=status.HTTP_303_SEE_OTHER)
     target.delete_cookie(STATE_COOKIE, path="/auth/google")
     return target

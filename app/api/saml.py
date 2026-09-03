@@ -70,7 +70,7 @@ async def login(
 
 @router.post("/acs", include_in_schema=False)
 async def assertion_consumer_service(
-    request: Request, response: Response, session: SessionDep, settings: SettingsDep
+    request: Request, session: SessionDep, settings: SettingsDep
 ) -> RedirectResponse:
     """Recibe la aserción del IdP, valida su firma y abre la sesión."""
     _require_saml(settings)
@@ -109,8 +109,18 @@ async def assertion_consumer_service(
             status_code=status.HTTP_403_FORBIDDEN, detail="La cuenta está desactivada"
         ) from exc
 
+    # El enlace de retorno viaja como `RelayState` en el mismo POST del IdP
+    # (encuadre HTTP-POST): es el valor que `login()` fijó al enviar a la
+    # persona al proveedor de identidad.
+    form = await request.form()
+    target = RedirectResponse(
+        _safe_relay(str(form.get("RelayState") or "")), status_code=status.HTTP_303_SEE_OTHER
+    )
+    # La cookie va sobre la respuesta que se devuelve, no sobre la que inyecta
+    # FastAPI: al devolver un `Response` propio, FastAPI descarta las cabeceras
+    # de la inyectada y la sesión se perdía por el camino.
     await issue_session(
-        agent=agent, tenant=tenant, request=request, response=response,
+        agent=agent, tenant=tenant, request=request, response=target,
         session=session, settings=settings,
     )
     await repo.record_audit(
@@ -124,9 +134,4 @@ async def assertion_consumer_service(
     )
     log.info("saml_login_ok", agent=agent.email, role=agent.role, provisioned=is_new)
 
-    # El enlace de retorno viaja como `RelayState` en el mismo POST del IdP
-    # (encuadre HTTP-POST): es el valor que `login()` fijó al enviar a la
-    # persona al proveedor de identidad.
-    form = await request.form()
-    target = _safe_relay(str(form.get("RelayState") or ""))
-    return RedirectResponse(target, status_code=status.HTTP_303_SEE_OTHER)
+    return target
