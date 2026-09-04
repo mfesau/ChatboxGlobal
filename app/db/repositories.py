@@ -7,7 +7,7 @@ quien orquesta, no el repositorio.
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import Text, cast, delete, func, or_, select, update
@@ -45,6 +45,10 @@ from app.db.models import (
     Conversation,
     ConversationLabel,
     Department,
+    HotelRatePlan,
+    HotelReservation,
+    HotelRoom,
+    HotelRoomType,
     InboundDedupe,
     InternalNote,
     Label,
@@ -1394,6 +1398,342 @@ async def set_agent_departments(
         session.add(AgentDepartment(agent_id=agent.id, department_id=department_id))
     await session.flush()
     await session.refresh(agent, attribute_names=["granted_departments"])
+
+
+# --------------------------------------------------------------------------- #
+# Módulo Hotel: habitaciones y reservas
+# --------------------------------------------------------------------------- #
+def hotel_module_enabled(department: Department) -> bool:
+    """Si el departamento tiene activo el módulo de reservas de hotel."""
+    return bool((department.enabled_modules or {}).get("hotel_booking", {}).get("enabled"))
+
+
+async def set_hotel_module_enabled(
+    session: AsyncSession, *, department: Department, enabled: bool
+) -> Department:
+    modules = dict(department.enabled_modules or {})
+    modules["hotel_booking"] = {**modules.get("hotel_booking", {}), "enabled": enabled}
+    department.enabled_modules = modules
+    await session.flush()
+    return department
+
+
+# -- Tipos de habitación ------------------------------------------------------
+async def create_hotel_room_type(
+    session: AsyncSession,
+    *,
+    tenant_id: uuid.UUID,
+    department_id: uuid.UUID,
+    name: str,
+    description: str | None,
+    capacity: int,
+) -> HotelRoomType:
+    room_type = HotelRoomType(
+        tenant_id=tenant_id,
+        department_id=department_id,
+        name=name.strip(),
+        description=description,
+        capacity=capacity,
+    )
+    session.add(room_type)
+    await session.flush()
+    return room_type
+
+
+async def get_hotel_room_type(
+    session: AsyncSession, room_type_id: uuid.UUID
+) -> HotelRoomType | None:
+    return await session.get(HotelRoomType, room_type_id)
+
+
+async def find_hotel_room_type_by_name(
+    session: AsyncSession, *, department_id: uuid.UUID, name: str
+) -> HotelRoomType | None:
+    return (
+        await session.execute(
+            select(HotelRoomType).where(
+                HotelRoomType.department_id == department_id,
+                func.lower(HotelRoomType.name) == name.strip().lower(),
+            )
+        )
+    ).scalar_one_or_none()
+
+
+async def list_hotel_room_types(
+    session: AsyncSession, *, department_id: uuid.UUID, only_active: bool = False
+) -> list[HotelRoomType]:
+    stmt = select(HotelRoomType).where(HotelRoomType.department_id == department_id)
+    if only_active:
+        stmt = stmt.where(HotelRoomType.is_active.is_(True))
+    return list((await session.execute(stmt.order_by(HotelRoomType.name))).scalars())
+
+
+# -- Habitaciones ---------------------------------------------------------------
+async def create_hotel_room(
+    session: AsyncSession,
+    *,
+    tenant_id: uuid.UUID,
+    department_id: uuid.UUID,
+    room_type_id: uuid.UUID,
+    code: str,
+    notes: str | None = None,
+) -> HotelRoom:
+    room = HotelRoom(
+        tenant_id=tenant_id,
+        department_id=department_id,
+        room_type_id=room_type_id,
+        code=code.strip(),
+        notes=notes,
+    )
+    session.add(room)
+    await session.flush()
+    return room
+
+
+async def get_hotel_room(session: AsyncSession, room_id: uuid.UUID) -> HotelRoom | None:
+    return (
+        await session.execute(
+            select(HotelRoom)
+            .where(HotelRoom.id == room_id)
+            .options(selectinload(HotelRoom.room_type))
+        )
+    ).scalar_one_or_none()
+
+
+async def find_hotel_room_by_code(
+    session: AsyncSession, *, department_id: uuid.UUID, code: str
+) -> HotelRoom | None:
+    return (
+        await session.execute(
+            select(HotelRoom).where(
+                HotelRoom.department_id == department_id,
+                func.lower(HotelRoom.code) == code.strip().lower(),
+            )
+        )
+    ).scalar_one_or_none()
+
+
+async def list_hotel_rooms(
+    session: AsyncSession, *, department_id: uuid.UUID, room_type_id: uuid.UUID | None = None
+) -> list[HotelRoom]:
+    stmt = (
+        select(HotelRoom)
+        .where(HotelRoom.department_id == department_id)
+        .options(selectinload(HotelRoom.room_type))
+    )
+    if room_type_id is not None:
+        stmt = stmt.where(HotelRoom.room_type_id == room_type_id)
+    return list((await session.execute(stmt.order_by(HotelRoom.code))).scalars())
+
+
+# -- Tarifas ----------------------------------------------------------------------
+async def create_hotel_rate_plan(
+    session: AsyncSession,
+    *,
+    tenant_id: uuid.UUID,
+    department_id: uuid.UUID,
+    room_type_id: uuid.UUID,
+    name: str,
+    starts_on: date | None,
+    ends_on: date | None,
+    nightly_price_cents: int,
+    currency: str,
+) -> HotelRatePlan:
+    rate_plan = HotelRatePlan(
+        tenant_id=tenant_id,
+        department_id=department_id,
+        room_type_id=room_type_id,
+        name=name.strip(),
+        starts_on=starts_on,
+        ends_on=ends_on,
+        nightly_price_cents=nightly_price_cents,
+        currency=currency.upper(),
+    )
+    session.add(rate_plan)
+    await session.flush()
+    return rate_plan
+
+
+async def get_hotel_rate_plan(
+    session: AsyncSession, rate_plan_id: uuid.UUID
+) -> HotelRatePlan | None:
+    return await session.get(HotelRatePlan, rate_plan_id)
+
+
+async def list_hotel_rate_plans(
+    session: AsyncSession, *, department_id: uuid.UUID, room_type_id: uuid.UUID | None = None
+) -> list[HotelRatePlan]:
+    stmt = select(HotelRatePlan).where(HotelRatePlan.department_id == department_id)
+    if room_type_id is not None:
+        stmt = stmt.where(HotelRatePlan.room_type_id == room_type_id)
+    return list((await session.execute(stmt.order_by(HotelRatePlan.name))).scalars())
+
+
+async def delete_hotel_rate_plan(session: AsyncSession, rate_plan: HotelRatePlan) -> None:
+    await session.delete(rate_plan)
+    await session.flush()
+
+
+async def rate_plan_for_stay(
+    session: AsyncSession, *, room_type_id: uuid.UUID, check_in: date
+) -> HotelRatePlan | None:
+    """La tarifa vigente el día de entrada: la de temporada si aplica, si no
+    la que no tiene fechas fijadas (la tarifa por omisión de la categoría)."""
+    stmt = (
+        select(HotelRatePlan)
+        .where(
+            HotelRatePlan.room_type_id == room_type_id,
+            or_(HotelRatePlan.starts_on.is_(None), HotelRatePlan.starts_on <= check_in),
+            or_(HotelRatePlan.ends_on.is_(None), HotelRatePlan.ends_on > check_in),
+        )
+        # Una tarifa de temporada (con fechas) manda sobre la de omisión.
+        .order_by(HotelRatePlan.starts_on.is_(None), HotelRatePlan.starts_on.desc())
+        .limit(1)
+    )
+    return (await session.execute(stmt)).scalars().first()
+
+
+# -- Reservas -----------------------------------------------------------------
+async def hotel_room_has_overlap(
+    session: AsyncSession,
+    *,
+    room_id: uuid.UUID,
+    check_in: date,
+    check_out: date,
+    exclude_reservation_id: uuid.UUID | None = None,
+) -> bool:
+    """Si ya hay una reserva activa que se solapa con ese rango en esa habitación.
+
+    Es la comprobación que da un error legible en el caso común. En PostgreSQL,
+    la restricción de exclusión de la migración es la que de verdad impide la
+    carrera entre dos peticiones simultáneas — ver
+    ``db/migrations/0013_hotel_module.sql``; esta consulta no la sustituye.
+    """
+    stmt = select(HotelReservation.id).where(
+        HotelReservation.room_id == room_id,
+        HotelReservation.status.notin_(("cancelled", "no_show")),
+        HotelReservation.check_in < check_out,
+        HotelReservation.check_out > check_in,
+    )
+    if exclude_reservation_id is not None:
+        stmt = stmt.where(HotelReservation.id != exclude_reservation_id)
+    return (await session.execute(stmt.limit(1))).first() is not None
+
+
+async def list_available_hotel_rooms(
+    session: AsyncSession,
+    *,
+    department_id: uuid.UUID,
+    check_in: date,
+    check_out: date,
+    room_type_id: uuid.UUID | None = None,
+) -> list[HotelRoom]:
+    """Habitaciones sin ninguna reserva activa que se solape con el rango pedido."""
+    overlapping = select(HotelReservation.room_id).where(
+        HotelReservation.department_id == department_id,
+        HotelReservation.status.notin_(("cancelled", "no_show")),
+        HotelReservation.check_in < check_out,
+        HotelReservation.check_out > check_in,
+    )
+    stmt = (
+        select(HotelRoom)
+        .where(
+            HotelRoom.department_id == department_id,
+            HotelRoom.status == "available",
+            HotelRoom.id.notin_(overlapping),
+        )
+        .options(selectinload(HotelRoom.room_type))
+    )
+    if room_type_id is not None:
+        stmt = stmt.where(HotelRoom.room_type_id == room_type_id)
+    return list((await session.execute(stmt.order_by(HotelRoom.code))).scalars())
+
+
+async def create_hotel_reservation(
+    session: AsyncSession,
+    *,
+    tenant_id: uuid.UUID,
+    department_id: uuid.UUID,
+    room_id: uuid.UUID,
+    guest_name: str,
+    guest_phone: str | None,
+    guest_email: str | None,
+    check_in: date,
+    check_out: date,
+    guests: int,
+    contact_id: uuid.UUID | None = None,
+    conversation_id: uuid.UUID | None = None,
+    created_by_agent_id: uuid.UUID | None = None,
+    nightly_price_cents: int | None = None,
+    currency: str = "USD",
+    notes: str | None = None,
+    status: str = "confirmed",
+) -> HotelReservation:
+    reservation = HotelReservation(
+        tenant_id=tenant_id,
+        department_id=department_id,
+        room_id=room_id,
+        guest_name=guest_name.strip(),
+        guest_phone=guest_phone,
+        guest_email=guest_email,
+        check_in=check_in,
+        check_out=check_out,
+        guests=guests,
+        contact_id=contact_id,
+        conversation_id=conversation_id,
+        created_by_agent_id=created_by_agent_id,
+        nightly_price_cents=nightly_price_cents,
+        currency=currency.upper(),
+        notes=notes,
+        status=status,
+    )
+    session.add(reservation)
+    await session.flush()
+    return reservation
+
+
+async def get_hotel_reservation(
+    session: AsyncSession, reservation_id: uuid.UUID
+) -> HotelReservation | None:
+    return (
+        await session.execute(
+            select(HotelReservation)
+            .where(HotelReservation.id == reservation_id)
+            .options(selectinload(HotelReservation.room).selectinload(HotelRoom.room_type))
+        )
+    ).scalar_one_or_none()
+
+
+async def list_hotel_reservations(
+    session: AsyncSession,
+    *,
+    department_id: uuid.UUID,
+    status: str | None = None,
+    from_date: date | None = None,
+    to_date: date | None = None,
+) -> list[HotelReservation]:
+    stmt = (
+        select(HotelReservation)
+        .where(HotelReservation.department_id == department_id)
+        .options(selectinload(HotelReservation.room).selectinload(HotelRoom.room_type))
+    )
+    if status is not None:
+        stmt = stmt.where(HotelReservation.status == status)
+    # Cualquier reserva cuyo rango toque la ventana pedida, no solo la que
+    # empieza dentro de ella.
+    if from_date is not None:
+        stmt = stmt.where(HotelReservation.check_out > from_date)
+    if to_date is not None:
+        stmt = stmt.where(HotelReservation.check_in < to_date)
+    return list((await session.execute(stmt.order_by(HotelReservation.check_in))).scalars())
+
+
+async def set_hotel_reservation_status(
+    session: AsyncSession, *, reservation: HotelReservation, status: str
+) -> HotelReservation:
+    reservation.status = status
+    await session.flush()
+    return reservation
 
 
 # --------------------------------------------------------------------------- #

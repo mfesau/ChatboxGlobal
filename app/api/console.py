@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import re
 import uuid
+from datetime import date
 from typing import Annotated, Any, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -75,6 +76,10 @@ from app.db.models import (
     ChannelAccount,
     Conversation,
     Department,
+    HotelRatePlan,
+    HotelReservation,
+    HotelRoom,
+    HotelRoomType,
     Tenant,
 )
 from app.handlers.builtin import FallbackHandler
@@ -188,6 +193,117 @@ class BusinessHoursIn(BaseModel):
                     if parse_clock(clock) is None:
                         raise ValueError(f"Hora no válida: {clock!r}; use «HH:MM»")
         return value
+
+
+class HotelModuleOut(BaseModel):
+    enabled: bool
+
+
+class HotelModuleIn(BaseModel):
+    enabled: bool
+
+
+class HotelRoomTypeOut(BaseModel):
+    id: uuid.UUID
+    name: str
+    description: str | None
+    capacity: int
+    is_active: bool
+
+
+class HotelRoomTypeIn(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    description: str | None = None
+    capacity: int = Field(default=2, ge=1, le=20)
+
+
+class HotelRoomTypePatchIn(BaseModel):
+    description: str | None = None
+    capacity: int | None = Field(default=None, ge=1, le=20)
+    is_active: bool | None = None
+
+
+class HotelRoomOut(BaseModel):
+    id: uuid.UUID
+    room_type_id: uuid.UUID
+    room_type_name: str
+    code: str
+    status: str
+    notes: str | None
+
+
+class HotelRoomIn(BaseModel):
+    room_type_id: uuid.UUID
+    code: str = Field(min_length=1, max_length=20)
+    notes: str | None = None
+
+
+class HotelRoomPatchIn(BaseModel):
+    status: Literal["available", "maintenance", "out_of_service"] | None = None
+    notes: str | None = None
+
+
+class HotelRatePlanOut(BaseModel):
+    id: uuid.UUID
+    room_type_id: uuid.UUID
+    name: str
+    starts_on: str | None
+    ends_on: str | None
+    nightly_price_cents: int
+    currency: str
+
+
+class HotelRatePlanIn(BaseModel):
+    room_type_id: uuid.UUID
+    name: str = Field(min_length=1, max_length=120)
+    starts_on: date | None = None
+    ends_on: date | None = None
+    nightly_price_cents: int = Field(gt=0)
+    currency: str = Field(default="USD", min_length=3, max_length=3)
+
+
+class HotelReservationOut(BaseModel):
+    id: uuid.UUID
+    room_id: uuid.UUID
+    room_code: str
+    room_type_name: str
+    guest_name: str
+    guest_phone: str | None
+    guest_email: str | None
+    check_in: str
+    check_out: str
+    guests: int
+    status: str
+    nightly_price_cents: int | None
+    currency: str
+    notes: str | None
+    conversation_id: uuid.UUID | None
+
+
+class HotelReservationIn(BaseModel):
+    room_id: uuid.UUID
+    guest_name: str = Field(min_length=1, max_length=160)
+    guest_phone: str | None = None
+    guest_email: str | None = None
+    check_in: date
+    check_out: date
+    guests: int = Field(default=1, ge=1, le=20)
+    #: Nulo = se toma la tarifa vigente de la categoría, si hay alguna cargada.
+    nightly_price_cents: int | None = Field(default=None, gt=0)
+    currency: str = Field(default="USD", min_length=3, max_length=3)
+    notes: str | None = None
+
+    @field_validator("check_out")
+    @classmethod
+    def _check_dates(cls, value: date, info: Any) -> date:
+        check_in = info.data.get("check_in")
+        if check_in is not None and value <= check_in:
+            raise ValueError("La salida debe ser posterior a la entrada")
+        return value
+
+
+class HotelReservationStatusIn(BaseModel):
+    status: Literal["confirmed", "checked_in", "checked_out", "cancelled", "no_show"]
 
 
 SHORTCODE_PATTERN = r"^[a-z0-9_-]+$"
@@ -1763,6 +1879,618 @@ async def set_business_hours(
         detail={"timezone": body.timezone, "days": sorted(body.business_hours)},
     )
     return _department_out(department)
+
+
+# --------------------------------------------------------------------------- #
+# Módulo Hotel: habitaciones y reservas, acotado al departamento que lo activa
+# --------------------------------------------------------------------------- #
+async def _require_hotel_department(
+    session: SessionDep,
+    settings: SettingsDep,
+    principal: Principal,
+    *,
+    department_id: uuid.UUID,
+    tenant: str | None,
+) -> Department:
+    """Departamento válido, accesible para quien pregunta y con el módulo activo.
+
+    Un departamento inexistente y uno sin acceso responden igual —404—, para no
+    filtrar por el código de error qué departamentos existen en el inquilino.
+    """
+    tenant_row = await repo.get_or_create_tenant(session, tenant or settings.default_tenant_slug)
+    department = await repo.get_department(session, department_id)
+    if department is None or department.tenant_id != tenant_row.id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="El departamento no existe"
+        )
+    allowed = principal.department_ids
+    if allowed is not None and department.id not in allowed:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="El departamento no existe"
+        )
+    if not repo.hotel_module_enabled(department):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="El módulo de hotel no está activo para este departamento",
+        )
+    return department
+
+
+@router.get("/departments/{department_id}/hotel/module", response_model=HotelModuleOut)
+async def get_hotel_module(
+    department_id: uuid.UUID,
+    session: SessionDep,
+    settings: SettingsDep,
+    principal: AdminDep,
+    tenant: str | None = None,
+) -> HotelModuleOut:
+    """Si el módulo de hotel está activo para este departamento. Reservado a administración."""
+    tenant_row = await repo.get_or_create_tenant(session, tenant or settings.default_tenant_slug)
+    department = await repo.get_department(session, department_id)
+    if department is None or department.tenant_id != tenant_row.id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="El departamento no existe"
+        )
+    return HotelModuleOut(enabled=repo.hotel_module_enabled(department))
+
+
+@router.put("/departments/{department_id}/hotel/module", response_model=HotelModuleOut)
+async def set_hotel_module(
+    department_id: uuid.UUID,
+    body: HotelModuleIn,
+    session: SessionDep,
+    settings: SettingsDep,
+    principal: AdminDep,
+    tenant: str | None = None,
+) -> HotelModuleOut:
+    """Activa o desactiva el módulo de hotel de un departamento. Reservado a administración.
+
+    El resto de ramas de negocio del inquilino no se ven afectadas: cada
+    departamento activa el módulo por su cuenta.
+    """
+    tenant_row = await repo.get_or_create_tenant(session, tenant or settings.default_tenant_slug)
+    department = await repo.get_department(session, department_id)
+    if department is None or department.tenant_id != tenant_row.id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="El departamento no existe"
+        )
+    await repo.set_hotel_module_enabled(session, department=department, enabled=body.enabled)
+    await repo.record_audit(
+        session,
+        tenant_id=tenant_row.id,
+        actor=principal.audit_actor,
+        action="hotel_module_toggled",
+        subject_type="department",
+        subject_id=str(department.id),
+        detail={"enabled": body.enabled},
+    )
+    return HotelModuleOut(enabled=body.enabled)
+
+
+def _hotel_room_type_out(row: HotelRoomType) -> HotelRoomTypeOut:
+    return HotelRoomTypeOut(
+        id=row.id,
+        name=row.name,
+        description=row.description,
+        capacity=row.capacity,
+        is_active=row.is_active,
+    )
+
+
+@router.get(
+    "/departments/{department_id}/hotel/room-types", response_model=list[HotelRoomTypeOut]
+)
+async def list_hotel_room_types(
+    department_id: uuid.UUID,
+    session: SessionDep,
+    settings: SettingsDep,
+    principal: PrincipalDep,
+    tenant: str | None = None,
+) -> list[HotelRoomTypeOut]:
+    department = await _require_hotel_department(
+        session, settings, principal, department_id=department_id, tenant=tenant
+    )
+    rows = await repo.list_hotel_room_types(session, department_id=department.id)
+    return [_hotel_room_type_out(row) for row in rows]
+
+
+@router.post(
+    "/departments/{department_id}/hotel/room-types",
+    status_code=status.HTTP_201_CREATED,
+    response_model=HotelRoomTypeOut,
+)
+async def create_hotel_room_type(
+    department_id: uuid.UUID,
+    body: HotelRoomTypeIn,
+    session: SessionDep,
+    settings: SettingsDep,
+    principal: AdminDep,
+    tenant: str | None = None,
+) -> HotelRoomTypeOut:
+    """Crea una categoría de habitación (Individual, Doble, Suite…). Reservado a administración."""
+    department = await _require_hotel_department(
+        session, settings, principal, department_id=department_id, tenant=tenant
+    )
+    if await repo.find_hotel_room_type_by_name(
+        session, department_id=department.id, name=body.name
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="Ya existe una categoría con ese nombre"
+        )
+    room_type = await repo.create_hotel_room_type(
+        session,
+        tenant_id=department.tenant_id,
+        department_id=department.id,
+        name=body.name,
+        description=body.description,
+        capacity=body.capacity,
+    )
+    await repo.record_audit(
+        session,
+        tenant_id=department.tenant_id,
+        actor=principal.audit_actor,
+        action="hotel_room_type_created",
+        subject_type="hotel_room_type",
+        subject_id=str(room_type.id),
+        detail={"name": room_type.name},
+    )
+    return _hotel_room_type_out(room_type)
+
+
+@router.patch(
+    "/departments/{department_id}/hotel/room-types/{room_type_id}",
+    response_model=HotelRoomTypeOut,
+)
+async def update_hotel_room_type(
+    department_id: uuid.UUID,
+    room_type_id: uuid.UUID,
+    body: HotelRoomTypePatchIn,
+    session: SessionDep,
+    settings: SettingsDep,
+    principal: AdminDep,
+    tenant: str | None = None,
+) -> HotelRoomTypeOut:
+    """Edita una categoría de habitación. Reservado a administración."""
+    department = await _require_hotel_department(
+        session, settings, principal, department_id=department_id, tenant=tenant
+    )
+    room_type = await repo.get_hotel_room_type(session, room_type_id)
+    if room_type is None or room_type.department_id != department.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="La categoría no existe")
+    if body.description is not None:
+        room_type.description = body.description
+    if body.capacity is not None:
+        room_type.capacity = body.capacity
+    if body.is_active is not None:
+        room_type.is_active = body.is_active
+    await session.flush()
+    return _hotel_room_type_out(room_type)
+
+
+def _hotel_room_out(row: HotelRoom) -> HotelRoomOut:
+    return HotelRoomOut(
+        id=row.id,
+        room_type_id=row.room_type_id,
+        room_type_name=row.room_type.name,
+        code=row.code,
+        status=row.status,
+        notes=row.notes,
+    )
+
+
+@router.get("/departments/{department_id}/hotel/rooms", response_model=list[HotelRoomOut])
+async def list_hotel_rooms(
+    department_id: uuid.UUID,
+    session: SessionDep,
+    settings: SettingsDep,
+    principal: PrincipalDep,
+    tenant: str | None = None,
+    room_type_id: uuid.UUID | None = None,
+) -> list[HotelRoomOut]:
+    department = await _require_hotel_department(
+        session, settings, principal, department_id=department_id, tenant=tenant
+    )
+    rows = await repo.list_hotel_rooms(
+        session, department_id=department.id, room_type_id=room_type_id
+    )
+    return [_hotel_room_out(row) for row in rows]
+
+
+@router.post(
+    "/departments/{department_id}/hotel/rooms",
+    status_code=status.HTTP_201_CREATED,
+    response_model=HotelRoomOut,
+)
+async def create_hotel_room(
+    department_id: uuid.UUID,
+    body: HotelRoomIn,
+    session: SessionDep,
+    settings: SettingsDep,
+    principal: AdminDep,
+    tenant: str | None = None,
+) -> HotelRoomOut:
+    """Da de alta una habitación física. Reservado a administración."""
+    department = await _require_hotel_department(
+        session, settings, principal, department_id=department_id, tenant=tenant
+    )
+    room_type = await repo.get_hotel_room_type(session, body.room_type_id)
+    if room_type is None or room_type.department_id != department.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="La categoría no existe")
+    if await repo.find_hotel_room_by_code(session, department_id=department.id, code=body.code):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="Ya existe una habitación con ese número"
+        )
+    room = await repo.create_hotel_room(
+        session,
+        tenant_id=department.tenant_id,
+        department_id=department.id,
+        room_type_id=room_type.id,
+        code=body.code,
+        notes=body.notes,
+    )
+    await repo.record_audit(
+        session,
+        tenant_id=department.tenant_id,
+        actor=principal.audit_actor,
+        action="hotel_room_created",
+        subject_type="hotel_room",
+        subject_id=str(room.id),
+        detail={"code": room.code},
+    )
+    # Se asigna en Python y no se vuelve a consultar: en una sesión async una
+    # carga perezosa de la relación fallaría fuera del ``await`` que la trajo.
+    room.room_type = room_type
+    return _hotel_room_out(room)
+
+
+@router.patch("/departments/{department_id}/hotel/rooms/{room_id}", response_model=HotelRoomOut)
+async def update_hotel_room(
+    department_id: uuid.UUID,
+    room_id: uuid.UUID,
+    body: HotelRoomPatchIn,
+    session: SessionDep,
+    settings: SettingsDep,
+    principal: AdminDep,
+    tenant: str | None = None,
+) -> HotelRoomOut:
+    """Cambia el estado o las notas de una habitación. Reservado a administración."""
+    department = await _require_hotel_department(
+        session, settings, principal, department_id=department_id, tenant=tenant
+    )
+    room = await repo.get_hotel_room(session, room_id)
+    if room is None or room.department_id != department.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="La habitación no existe")
+    if body.status is not None:
+        room.status = body.status
+    if body.notes is not None:
+        room.notes = body.notes
+    await session.flush()
+    return _hotel_room_out(room)
+
+
+def _hotel_rate_plan_out(row: HotelRatePlan) -> HotelRatePlanOut:
+    return HotelRatePlanOut(
+        id=row.id,
+        room_type_id=row.room_type_id,
+        name=row.name,
+        starts_on=row.starts_on.isoformat() if row.starts_on else None,
+        ends_on=row.ends_on.isoformat() if row.ends_on else None,
+        nightly_price_cents=row.nightly_price_cents,
+        currency=row.currency,
+    )
+
+
+@router.get(
+    "/departments/{department_id}/hotel/rate-plans", response_model=list[HotelRatePlanOut]
+)
+async def list_hotel_rate_plans(
+    department_id: uuid.UUID,
+    session: SessionDep,
+    settings: SettingsDep,
+    principal: PrincipalDep,
+    tenant: str | None = None,
+    room_type_id: uuid.UUID | None = None,
+) -> list[HotelRatePlanOut]:
+    department = await _require_hotel_department(
+        session, settings, principal, department_id=department_id, tenant=tenant
+    )
+    rows = await repo.list_hotel_rate_plans(
+        session, department_id=department.id, room_type_id=room_type_id
+    )
+    return [_hotel_rate_plan_out(row) for row in rows]
+
+
+@router.post(
+    "/departments/{department_id}/hotel/rate-plans",
+    status_code=status.HTTP_201_CREATED,
+    response_model=HotelRatePlanOut,
+)
+async def create_hotel_rate_plan(
+    department_id: uuid.UUID,
+    body: HotelRatePlanIn,
+    session: SessionDep,
+    settings: SettingsDep,
+    principal: AdminDep,
+    tenant: str | None = None,
+) -> HotelRatePlanOut:
+    """Crea una tarifa por noche para una categoría. Reservado a administración."""
+    department = await _require_hotel_department(
+        session, settings, principal, department_id=department_id, tenant=tenant
+    )
+    room_type = await repo.get_hotel_room_type(session, body.room_type_id)
+    if room_type is None or room_type.department_id != department.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="La categoría no existe")
+    if (
+        body.starts_on is not None
+        and body.ends_on is not None
+        and body.ends_on <= body.starts_on
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="La fecha de fin debe ser posterior a la de inicio",
+        )
+    rate_plan = await repo.create_hotel_rate_plan(
+        session,
+        tenant_id=department.tenant_id,
+        department_id=department.id,
+        room_type_id=room_type.id,
+        name=body.name,
+        starts_on=body.starts_on,
+        ends_on=body.ends_on,
+        nightly_price_cents=body.nightly_price_cents,
+        currency=body.currency,
+    )
+    await repo.record_audit(
+        session,
+        tenant_id=department.tenant_id,
+        actor=principal.audit_actor,
+        action="hotel_rate_plan_created",
+        subject_type="hotel_rate_plan",
+        subject_id=str(rate_plan.id),
+        detail={"name": rate_plan.name, "room_type": room_type.name},
+    )
+    return _hotel_rate_plan_out(rate_plan)
+
+
+@router.delete(
+    "/departments/{department_id}/hotel/rate-plans/{rate_plan_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_hotel_rate_plan(
+    department_id: uuid.UUID,
+    rate_plan_id: uuid.UUID,
+    session: SessionDep,
+    settings: SettingsDep,
+    principal: AdminDep,
+    tenant: str | None = None,
+) -> None:
+    """Borra una tarifa. Reservado a administración."""
+    department = await _require_hotel_department(
+        session, settings, principal, department_id=department_id, tenant=tenant
+    )
+    rate_plan = await repo.get_hotel_rate_plan(session, rate_plan_id)
+    if rate_plan is None or rate_plan.department_id != department.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="La tarifa no existe")
+    await repo.delete_hotel_rate_plan(session, rate_plan)
+    await repo.record_audit(
+        session,
+        tenant_id=department.tenant_id,
+        actor=principal.audit_actor,
+        action="hotel_rate_plan_deleted",
+        subject_type="hotel_rate_plan",
+        subject_id=str(rate_plan.id),
+        detail={"name": rate_plan.name},
+    )
+
+
+def _hotel_reservation_out(row: HotelReservation) -> HotelReservationOut:
+    return HotelReservationOut(
+        id=row.id,
+        room_id=row.room_id,
+        room_code=row.room.code,
+        room_type_name=row.room.room_type.name,
+        guest_name=row.guest_name,
+        guest_phone=row.guest_phone,
+        guest_email=row.guest_email,
+        check_in=row.check_in.isoformat(),
+        check_out=row.check_out.isoformat(),
+        guests=row.guests,
+        status=row.status,
+        nightly_price_cents=row.nightly_price_cents,
+        currency=row.currency,
+        notes=row.notes,
+        conversation_id=row.conversation_id,
+    )
+
+
+@router.get(
+    "/departments/{department_id}/hotel/availability", response_model=list[HotelRoomOut]
+)
+async def hotel_availability(
+    department_id: uuid.UUID,
+    check_in: date,
+    check_out: date,
+    session: SessionDep,
+    settings: SettingsDep,
+    principal: PrincipalDep,
+    tenant: str | None = None,
+    room_type_id: uuid.UUID | None = None,
+) -> list[HotelRoomOut]:
+    """Habitaciones libres —sin ninguna reserva activa que se solape— para un rango de fechas."""
+    department = await _require_hotel_department(
+        session, settings, principal, department_id=department_id, tenant=tenant
+    )
+    if check_out <= check_in:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="La salida debe ser posterior a la entrada",
+        )
+    rows = await repo.list_available_hotel_rooms(
+        session,
+        department_id=department.id,
+        check_in=check_in,
+        check_out=check_out,
+        room_type_id=room_type_id,
+    )
+    return [_hotel_room_out(row) for row in rows]
+
+
+@router.get(
+    "/departments/{department_id}/hotel/reservations",
+    response_model=list[HotelReservationOut],
+)
+async def list_hotel_reservations(
+    department_id: uuid.UUID,
+    session: SessionDep,
+    settings: SettingsDep,
+    principal: PrincipalDep,
+    tenant: str | None = None,
+    status_filter: str | None = Query(default=None, alias="status"),
+    from_date: date | None = None,
+    to_date: date | None = None,
+) -> list[HotelReservationOut]:
+    department = await _require_hotel_department(
+        session, settings, principal, department_id=department_id, tenant=tenant
+    )
+    rows = await repo.list_hotel_reservations(
+        session,
+        department_id=department.id,
+        status=status_filter,
+        from_date=from_date,
+        to_date=to_date,
+    )
+    return [_hotel_reservation_out(row) for row in rows]
+
+
+@router.post(
+    "/departments/{department_id}/hotel/reservations",
+    status_code=status.HTTP_201_CREATED,
+    response_model=HotelReservationOut,
+)
+async def create_hotel_reservation(
+    department_id: uuid.UUID,
+    body: HotelReservationIn,
+    session: SessionDep,
+    settings: SettingsDep,
+    principal: PrincipalDep,
+    tenant: str | None = None,
+) -> HotelReservationOut:
+    """Crea una reserva. Cualquier persona con acceso al departamento puede cargarla."""
+    department = await _require_hotel_department(
+        session, settings, principal, department_id=department_id, tenant=tenant
+    )
+    room = await repo.get_hotel_room(session, body.room_id)
+    if room is None or room.department_id != department.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="La habitación no existe")
+    if room.status != "available":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="La habitación no está disponible (en mantenimiento o fuera de servicio)",
+        )
+    if await repo.hotel_room_has_overlap(
+        session, room_id=room.id, check_in=body.check_in, check_out=body.check_out
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="La habitación ya está reservada en esas fechas",
+        )
+
+    price = body.nightly_price_cents
+    currency = body.currency
+    if price is None:
+        rate_plan = await repo.rate_plan_for_stay(
+            session, room_type_id=room.room_type_id, check_in=body.check_in
+        )
+        if rate_plan is not None:
+            price = rate_plan.nightly_price_cents
+            currency = rate_plan.currency
+
+    reservation = await repo.create_hotel_reservation(
+        session,
+        tenant_id=department.tenant_id,
+        department_id=department.id,
+        room_id=room.id,
+        guest_name=body.guest_name,
+        guest_phone=body.guest_phone,
+        guest_email=body.guest_email,
+        check_in=body.check_in,
+        check_out=body.check_out,
+        guests=body.guests,
+        created_by_agent_id=principal.id,
+        nightly_price_cents=price,
+        currency=currency,
+        notes=body.notes,
+    )
+    # Ya se tenía cargada con su categoría; se evita una carga perezosa, que en
+    # una sesión async fallaría al serializar la respuesta.
+    reservation.room = room
+    await repo.record_audit(
+        session,
+        tenant_id=department.tenant_id,
+        actor=principal.audit_actor,
+        action="hotel_reservation_created",
+        subject_type="hotel_reservation",
+        subject_id=str(reservation.id),
+        detail={
+            "room": room.code,
+            "check_in": body.check_in.isoformat(),
+            "check_out": body.check_out.isoformat(),
+        },
+    )
+    return _hotel_reservation_out(reservation)
+
+
+#: A qué estados puede pasar cada estado de una reserva. Un intento de salto no
+#: contemplado —de ``pending`` a ``checked_out`` sin pasar por ``confirmed``,
+#: por ejemplo— recibe un error claro en vez de dejar un dato inconsistente.
+HOTEL_RESERVATION_TRANSITIONS: dict[str, set[str]] = {
+    "pending": {"confirmed", "cancelled"},
+    "confirmed": {"checked_in", "cancelled", "no_show"},
+    "checked_in": {"checked_out"},
+    "checked_out": set(),
+    "cancelled": set(),
+    "no_show": set(),
+}
+
+
+@router.put(
+    "/departments/{department_id}/hotel/reservations/{reservation_id}/status",
+    response_model=HotelReservationOut,
+)
+async def set_hotel_reservation_status(
+    department_id: uuid.UUID,
+    reservation_id: uuid.UUID,
+    body: HotelReservationStatusIn,
+    session: SessionDep,
+    settings: SettingsDep,
+    principal: PrincipalDep,
+    tenant: str | None = None,
+) -> HotelReservationOut:
+    """Cambia el estado de una reserva: confirmar, check-in, check-out, cancelar…"""
+    department = await _require_hotel_department(
+        session, settings, principal, department_id=department_id, tenant=tenant
+    )
+    reservation = await repo.get_hotel_reservation(session, reservation_id)
+    if reservation is None or reservation.department_id != department.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="La reserva no existe")
+    previous_status = reservation.status
+    allowed = HOTEL_RESERVATION_TRANSITIONS.get(previous_status, set())
+    if body.status not in allowed:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"No se puede pasar de «{previous_status}» a «{body.status}»",
+        )
+    await repo.set_hotel_reservation_status(session, reservation=reservation, status=body.status)
+    await repo.record_audit(
+        session,
+        tenant_id=department.tenant_id,
+        actor=principal.audit_actor,
+        action="hotel_reservation_status_changed",
+        subject_type="hotel_reservation",
+        subject_id=str(reservation.id),
+        detail={"from": previous_status, "to": body.status},
+    )
+    return _hotel_reservation_out(reservation)
 
 
 # --------------------------------------------------------------------------- #

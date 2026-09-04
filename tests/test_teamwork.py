@@ -3065,3 +3065,237 @@ async def test_tagging_a_conversation_with_an_unknown_label_fails(anonymous, as_
         json={"label_ids": [str(uuid.uuid4())]},
     )
     assert response.status_code == 404
+
+
+# --------------------------------------------------------------------------- #
+# Módulo Hotel
+# --------------------------------------------------------------------------- #
+async def _hotel_department(admin: httpx.AsyncClient, name: str, *, enabled: bool = True) -> dict:
+    """Departamento nuevo, con el módulo de hotel activo salvo que se pida lo contrario."""
+    department = (await admin.post("/api/departments", json={"name": name})).json()
+    await admin.put(
+        f"/api/departments/{department['id']}/hotel/module", json={"enabled": enabled}
+    )
+    return department
+
+
+async def _hotel_room(
+    admin: httpx.AsyncClient, department_id: str, *, code: str = "101", capacity: int = 2
+) -> dict:
+    """Categoría con capacidad, tarifa base y una habitación, listas para reservar."""
+    room_type = (
+        await admin.post(
+            f"/api/departments/{department_id}/hotel/room-types",
+            json={"name": f"Doble {code}", "capacity": capacity},
+        )
+    ).json()
+    await admin.post(
+        f"/api/departments/{department_id}/hotel/rate-plans",
+        json={
+            "room_type_id": room_type["id"],
+            "name": "Tarifa base",
+            "nightly_price_cents": 5_000,
+            "currency": "USD",
+        },
+    )
+    return (
+        await admin.post(
+            f"/api/departments/{department_id}/hotel/rooms",
+            json={"room_type_id": room_type["id"], "code": code},
+        )
+    ).json()
+
+
+async def test_the_hotel_module_is_off_by_default_and_only_the_admin_turns_it_on(
+    as_agent, team
+):
+    admin = await as_agent(team["admin"]["email"])
+    ana = await as_agent(team["ana"]["email"])
+    department = (await admin.post("/api/departments", json={"name": "Hotel 1"})).json()
+
+    status_before = await admin.get(f"/api/departments/{department['id']}/hotel/module")
+    assert status_before.json() == {"enabled": False}
+
+    # Sin el módulo activo, el resto de la API de hotel responde con conflicto.
+    blocked = await admin.get(f"/api/departments/{department['id']}/hotel/room-types")
+    assert blocked.status_code == 409
+
+    assert (
+        await ana.put(
+            f"/api/departments/{department['id']}/hotel/module", json={"enabled": True}
+        )
+    ).status_code == 403
+
+    turned_on = await admin.put(
+        f"/api/departments/{department['id']}/hotel/module", json={"enabled": True}
+    )
+    assert turned_on.status_code == 200
+    assert turned_on.json() == {"enabled": True}
+    assert (
+        await admin.get(f"/api/departments/{department['id']}/hotel/room-types")
+    ).status_code == 200
+
+
+async def test_only_the_admin_sets_up_room_types_rooms_and_rates(as_agent, team):
+    admin = await as_agent(team["admin"]["email"])
+    ana = await as_agent(team["ana"]["email"])
+    department = await _hotel_department(admin, "Hotel 2")
+
+    assert (
+        await ana.post(
+            f"/api/departments/{department['id']}/hotel/room-types",
+            json={"name": "Suite"},
+        )
+    ).status_code == 403
+
+    room_type = await admin.post(
+        f"/api/departments/{department['id']}/hotel/room-types",
+        json={"name": "Suite", "capacity": 3},
+    )
+    assert room_type.status_code == 201
+
+    assert (
+        await ana.post(
+            f"/api/departments/{department['id']}/hotel/rooms",
+            json={"room_type_id": room_type.json()["id"], "code": "301"},
+        )
+    ).status_code == 403
+    assert (
+        await admin.post(
+            f"/api/departments/{department['id']}/hotel/rooms",
+            json={"room_type_id": room_type.json()["id"], "code": "301"},
+        )
+    ).status_code == 201
+
+
+async def test_booking_a_room_blocks_it_only_for_the_overlapping_dates(as_agent, team):
+    admin = await as_agent(team["admin"]["email"])
+    department = await _hotel_department(admin, "Hotel 3")
+    room = await _hotel_room(admin, department["id"])
+
+    free = await admin.get(
+        f"/api/departments/{department['id']}/hotel/availability",
+        params={"check_in": "2026-10-01", "check_out": "2026-10-05"},
+    )
+    assert room["id"] in ids(free.json())
+
+    booked = await admin.post(
+        f"/api/departments/{department['id']}/hotel/reservations",
+        json={
+            "room_id": room["id"],
+            "guest_name": "Persona Huésped",
+            "check_in": "2026-10-01",
+            "check_out": "2026-10-05",
+        },
+    )
+    assert booked.status_code == 201
+    reservation = booked.json()
+    # Sin precio explícito, toma el de la tarifa cargada para la categoría.
+    assert reservation["nightly_price_cents"] == 5_000
+    assert reservation["status"] == "confirmed"
+
+    # La misma habitación ya no aparece disponible en fechas que se solapan…
+    overlapping = await admin.get(
+        f"/api/departments/{department['id']}/hotel/availability",
+        params={"check_in": "2026-10-03", "check_out": "2026-10-06"},
+    )
+    assert room["id"] not in ids(overlapping.json())
+
+    # …y una segunda reserva para esas fechas se rechaza.
+    conflict = await admin.post(
+        f"/api/departments/{department['id']}/hotel/reservations",
+        json={
+            "room_id": room["id"],
+            "guest_name": "Otra Persona",
+            "check_in": "2026-10-03",
+            "check_out": "2026-10-06",
+        },
+    )
+    assert conflict.status_code == 409
+
+    # Pero sigue libre para fechas que no se tocan con la reserva ya hecha.
+    later = await admin.get(
+        f"/api/departments/{department['id']}/hotel/availability",
+        params={"check_in": "2026-10-05", "check_out": "2026-10-08"},
+    )
+    assert room["id"] in ids(later.json())
+
+
+async def test_a_cancelled_reservation_frees_the_room_again(as_agent, team):
+    admin = await as_agent(team["admin"]["email"])
+    department = await _hotel_department(admin, "Hotel 4")
+    room = await _hotel_room(admin, department["id"])
+
+    reservation = (
+        await admin.post(
+            f"/api/departments/{department['id']}/hotel/reservations",
+            json={
+                "room_id": room["id"],
+                "guest_name": "Persona Huésped",
+                "check_in": "2026-11-01",
+                "check_out": "2026-11-03",
+            },
+        )
+    ).json()
+
+    cancelled = await admin.put(
+        f"/api/departments/{department['id']}/hotel/reservations/{reservation['id']}/status",
+        json={"status": "cancelled"},
+    )
+    assert cancelled.status_code == 200
+
+    free_again = await admin.get(
+        f"/api/departments/{department['id']}/hotel/availability",
+        params={"check_in": "2026-11-01", "check_out": "2026-11-03"},
+    )
+    assert room["id"] in ids(free_again.json())
+
+
+async def test_a_reservation_only_follows_the_allowed_status_transitions(as_agent, team):
+    admin = await as_agent(team["admin"]["email"])
+    department = await _hotel_department(admin, "Hotel 5")
+    room = await _hotel_room(admin, department["id"])
+
+    reservation = (
+        await admin.post(
+            f"/api/departments/{department['id']}/hotel/reservations",
+            json={
+                "room_id": room["id"],
+                "guest_name": "Persona Huésped",
+                "check_in": "2026-12-01",
+                "check_out": "2026-12-03",
+            },
+        )
+    ).json()
+    reservation_url = (
+        f"/api/departments/{department['id']}/hotel/reservations/{reservation['id']}/status"
+    )
+
+    # De "confirmed" no se puede saltar directo a "checked_out".
+    assert (await admin.put(reservation_url, json={"status": "checked_out"})).status_code == 409
+
+    checked_in = await admin.put(reservation_url, json={"status": "checked_in"})
+    assert checked_in.status_code == 200
+
+    # Ya en "checked_in", cancelar tampoco es un salto válido.
+    assert (await admin.put(reservation_url, json={"status": "cancelled"})).status_code == 409
+
+    checked_out = await admin.put(reservation_url, json={"status": "checked_out"})
+    assert checked_out.status_code == 200
+
+
+async def test_an_agent_without_department_access_cannot_use_its_hotel_module(as_agent, team):
+    admin = await as_agent(team["admin"]["email"])
+    department = await _hotel_department(admin, "Hotel 6")
+
+    ana = await as_agent(team["ana"]["email"])
+    response = await ana.get(f"/api/departments/{department['id']}/hotel/room-types")
+    assert response.status_code == 404
+
+    await admin.put(
+        f"/api/agents/{team['ana']['id']}/departments",
+        json={"department_id": department["id"], "extra_department_ids": []},
+    )
+    assert (
+        await ana.get(f"/api/departments/{department['id']}/hotel/room-types")
+    ).status_code == 200
