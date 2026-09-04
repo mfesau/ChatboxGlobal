@@ -235,6 +235,82 @@
   text-overflow: ellipsis;
 }
 
+/* Fila de pestañas de departamento: una franja angosta que se desplaza en
+   horizontal en vez de envolver, porque la barra lateral es estrecha (ver
+   el comentario de ``.console__filters``) y una fila que crece en alto le
+   robaría espacio a la lista de conversaciones. */
+.console__department-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 10px;
+  padding-bottom: 2px;
+  overflow-x: auto;
+}
+
+.department-tab {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 5px;
+  max-width: 140px;
+  padding: 5px 10px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.department-tab span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.department-tab[aria-selected="true"] {
+  color: var(--accent-contrast);
+  background: var(--accent);
+  border-color: transparent;
+}
+
+.department-tab__logo {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  object-fit: cover;
+  border-radius: 4px;
+}
+
+/* --- Fila de departamento en el panel de administración ------------------ */
+.department-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.department-row__logo {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  object-fit: cover;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+}
+
+.department-row__name {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.department-row__logo-picker {
+  flex: none;
+  cursor: pointer;
+}
+
 /* --- Estado de la conversación ------------------------------------------- */
 /* Los tres estados van juntos y no sueltos: son una misma elección, y verlos
    como un grupo deja claro que marcar uno quita el anterior. */

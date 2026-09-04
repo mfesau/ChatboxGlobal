@@ -256,6 +256,13 @@ class Department(Base, TimestampMixin):
         JSONBType, default=dict, nullable=False
     )
 
+    #: Ruta relativa a ``settings.uploads_dir`` del logo del departamento, o
+    #: nulo sin uno. Solo administración lo cambia (ver ``app/api/console.py``);
+    #: se sirve por su propio endpoint, no por ``/uploads/...``, porque ese
+    #: exige que el archivo pertenezca a un mensaje de una conversación
+    #: visible, y un logo no pertenece a ninguna.
+    logo_path: Mapped[str | None] = mapped_column(String(500))
+
 
 class CannedResponse(Base, TimestampMixin):
     """Plantilla de texto que un agente inserta en el composer por su atajo."""

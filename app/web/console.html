@@ -68,13 +68,24 @@
               <option value="msbot">Microsoft</option>
               <option value="web">Web</option>
             </select>
-            <select id="department-filter" data-i18n-aria="filter.department">
+            <!-- Fuente de verdad del filtro de departamento: sigue existiendo,
+                 pero oculta, para no reescribir el resto de la bandeja
+                 (bandeja, vistas guardadas). La fila de pestañas de abajo la
+                 gobierna. -->
+            <select id="department-filter" data-i18n-aria="filter.department" hidden>
               <option value="">Todos los departamentos</option>
             </select>
             <select id="label-filter" data-i18n-aria="filter.label">
               <option value="">Todas las etiquetas</option>
             </select>
           </div>
+
+          <div
+            class="console__department-tabs"
+            id="department-tabs"
+            role="tablist"
+            data-i18n-aria="filter.department"
+          ></div>
 
           <div class="console__views">
             <div class="console__views-list" id="saved-views"></div>

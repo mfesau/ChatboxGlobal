@@ -89,6 +89,7 @@ CREATE TABLE departments (
 	out_of_hours_message TEXT, 
 	first_response_target_minutes INTEGER, 
 	enabled_modules JSONB NOT NULL, 
+	logo_path VARCHAR(500), 
 	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
 	updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
 	PRIMARY KEY (id), 

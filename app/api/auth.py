@@ -160,19 +160,28 @@ async def sso_status(settings: SettingsDep) -> dict[str, bool]:
 
 @router.get("/me")
 async def whoami(principal: PrincipalDep) -> dict[str, Any]:
-    """Identidad efectiva de la petición, usada por la consola al cargar."""
+    """Identidad efectiva de la petición, usada por la consola al cargar.
+
+    ``department_ids`` es ``None`` cuando no hay acotación (administración y
+    la clave de servicio); si no, la consola lo usa para no ofrecer, por
+    ejemplo, un departamento en el filtro que quien pregunta no atiende.
+    """
+    department_ids = principal.department_ids
+    ids_out = [str(d) for d in department_ids] if department_ids is not None else None
     if principal.agent is None:
         return {
             "agent": None,
             "role": principal.role,
             "via": principal.via,
             "is_supervisor": principal.is_supervisor,
+            "department_ids": ids_out,
         }
     return {
         "agent": _serialize(principal.agent),
         "role": principal.role,
         "via": principal.via,
         "is_supervisor": principal.is_supervisor,
+        "department_ids": ids_out,
     }
 
 

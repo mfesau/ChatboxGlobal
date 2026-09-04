@@ -896,7 +896,7 @@ alembic upgrade head
 ```
 
 Sobre una instalación que ya tenía el esquema anterior, aplique en orden los
-ficheros de `db/migrations/`, del `0002` al `0012`:
+ficheros de `db/migrations/`, del `0002` al `0014`:
 
 | | |
 |---|---|
@@ -911,6 +911,8 @@ ficheros de `db/migrations/`, del `0002` al `0012`:
 | `0010_first_response_sla.sql` | Objetivo de primera respuesta y su reloj |
 | `0011_macros.sql` | Macros de varios pasos |
 | `0012_conversation_in_progress.sql` | El estado «en proceso» |
+| `0013_hotel_module.sql` | Módulo de reservas de hotel por departamento |
+| `0014_department_logo.sql` | Logo por departamento |
 
 Lo que se guarda en `Tenant.settings` —la respuesta automática, el horario de
 toda la empresa, el color de marca— no lleva migración: es una columna `JSONB` y

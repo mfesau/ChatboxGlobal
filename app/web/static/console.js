@@ -24,6 +24,7 @@
     statusFilter: document.getElementById("status-filter"),
     channelFilter: document.getElementById("channel-filter"),
     departmentFilter: document.getElementById("department-filter"),
+    departmentTabs: document.getElementById("department-tabs"),
     labelFilter: document.getElementById("label-filter"),
     savedViews: document.getElementById("saved-views"),
     saveViewButton: document.getElementById("save-view-button"),
@@ -1228,6 +1229,7 @@
     reflectFilterTitle(element);
     element.addEventListener("change", async () => {
       reflectFilterTitle(element);
+      syncDepartmentTabs();
       renderSavedViews();
       await loadConversations();
     });
@@ -1377,6 +1379,7 @@
     dom.channelFilter.value = channel || "";
     dom.departmentFilter.value = department || "";
     dom.labelFilter.value = label || "";
+    syncDepartmentTabs();
     renderSavedViews();
     await loadConversations();
   }
@@ -1669,13 +1672,13 @@
       state.departments = [];
     }
 
-    const fillWithPlaceholder = (select, placeholder) => {
+    const fillWithPlaceholder = (select, placeholder, options = state.departments) => {
       select.textContent = "";
       const option = document.createElement("option");
       option.value = "";
       option.textContent = placeholder;
       select.appendChild(option);
-      state.departments.forEach((department) => {
+      options.forEach((department) => {
         const departmentOption = document.createElement("option");
         departmentOption.value = department.id;
         departmentOption.textContent = department.name;
@@ -1683,7 +1686,17 @@
       });
     };
 
-    fillWithPlaceholder(dom.departmentFilter, i18n.t("filter.department.all"));
+    // El filtro de la bandeja solo ofrece los departamentos que quien
+    // pregunta puede atender (``department_ids`` nulo = sin acotación, la
+    // administración). El resto de los desplegables siguen con la lista
+    // completa: derivar, dar de alta o configurar no exige atenderlo uno
+    // mismo.
+    const attendable = state.me?.department_ids
+      ? state.departments.filter((department) => state.me.department_ids.includes(department.id))
+      : state.departments;
+
+    fillWithPlaceholder(dom.departmentFilter, i18n.t("filter.department.all"), attendable);
+    renderDepartmentTabs(attendable);
     fillWithPlaceholder(dom.transferDepartment, i18n.t("aside.choose"));
     fillWithPlaceholder(dom.newUserDepartment, i18n.t("admin.noDepartment"));
     fillWithPlaceholder(dom.newAccountDepartment, i18n.t("admin.noDepartment"));
@@ -1710,11 +1723,133 @@
       dom.departmentList.appendChild(empty);
     } else {
       state.departments.forEach((department) => {
-        const item = document.createElement("li");
-        item.textContent = department.name;
-        dom.departmentList.appendChild(item);
+        dom.departmentList.appendChild(buildDepartmentRow(department));
       });
     }
+  }
+
+  /* El logo lo pone solo administración: el resto del equipo lo ve puesto
+     (en la pestaña de su departamento), pero no tiene el control aquí ni el
+     servidor le acepta la subida si lo forzara a mano. */
+  function buildDepartmentRow(department) {
+    const item = document.createElement("li");
+    item.className = "department-row";
+
+    if (department.logo_url) {
+      const img = document.createElement("img");
+      img.className = "department-row__logo";
+      img.src = department.logo_url;
+      img.alt = "";
+      item.appendChild(img);
+    }
+
+    const name = document.createElement("span");
+    name.className = "department-row__name";
+    name.textContent = department.name;
+    item.appendChild(name);
+
+    if (state.me?.role === "admin") {
+      const picker = document.createElement("label");
+      picker.className = "ghost-button department-row__logo-picker";
+      picker.textContent = i18n.t("admin.departmentLogo");
+      const input = document.createElement("input");
+      input.type = "file";
+      input.accept = "image/png,image/jpeg,image/webp,image/gif";
+      input.hidden = true;
+      input.addEventListener("change", async () => {
+        const file = input.files?.[0];
+        if (file) {
+          await uploadDepartmentLogo(department.id, file);
+        }
+        input.value = "";
+      });
+      picker.appendChild(input);
+      item.appendChild(picker);
+
+      if (department.logo_url) {
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.className = "ghost-button";
+        remove.textContent = i18n.t("admin.departmentLogoRemove");
+        remove.addEventListener("click", () => removeDepartmentLogo(department.id));
+        item.appendChild(remove);
+      }
+    }
+
+    return item;
+  }
+
+  async function uploadDepartmentLogo(departmentId, file) {
+    showAdminError("");
+    const form = new FormData();
+    form.append("file", file);
+    try {
+      await api(`/api/departments/${departmentId}/logo`, {
+        method: "PUT",
+        headers: {},
+        body: form,
+      });
+      await loadDepartments();
+      setStatus(i18n.t("admin.departmentLogoUpdated"));
+    } catch (error) {
+      showAdminError(error.message);
+    }
+  }
+
+  async function removeDepartmentLogo(departmentId) {
+    showAdminError("");
+    try {
+      await api(`/api/departments/${departmentId}/logo`, { method: "DELETE" });
+      await loadDepartments();
+      setStatus(i18n.t("admin.departmentLogoUpdated"));
+    } catch (error) {
+      showAdminError(error.message);
+    }
+  }
+
+  /* -------------------------------------------------- pestañas de departamento */
+
+  function syncDepartmentTabs() {
+    const active = dom.departmentFilter.value;
+    dom.departmentTabs.querySelectorAll(".department-tab").forEach((tab) => {
+      tab.setAttribute("aria-selected", String(tab.dataset.department === active));
+    });
+  }
+
+  function renderDepartmentTabs(options) {
+    dom.departmentTabs.textContent = "";
+
+    const buildTab = (id, name, logoUrl) => {
+      const tab = document.createElement("button");
+      tab.type = "button";
+      tab.className = "department-tab";
+      tab.setAttribute("role", "tab");
+      tab.dataset.department = id;
+      tab.setAttribute("aria-selected", String(dom.departmentFilter.value === id));
+      if (logoUrl) {
+        const img = document.createElement("img");
+        img.className = "department-tab__logo";
+        img.src = logoUrl;
+        img.alt = "";
+        tab.appendChild(img);
+      }
+      const label = document.createElement("span");
+      label.textContent = name;
+      tab.appendChild(label);
+      tab.addEventListener("click", () => {
+        if (dom.departmentFilter.value === id) {
+          return;
+        }
+        dom.departmentFilter.value = id;
+        dom.departmentFilter.dispatchEvent(new Event("change"));
+      });
+      return tab;
+    };
+
+    dom.departmentTabs.appendChild(buildTab("", i18n.t("filter.department.all"), null));
+    options.forEach((department) => {
+      dom.departmentTabs.appendChild(buildTab(department.id, department.name, department.logo_url));
+    });
   }
 
   dom.createDepartmentForm.addEventListener("submit", async (event) => {

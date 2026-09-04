@@ -19,10 +19,12 @@ import asyncio
 import re
 import uuid
 from datetime import date
+from pathlib import Path
 from typing import Annotated, Any, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, status
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, field_validator
 
 from app.api.auth import generate_temporary_password
@@ -154,6 +156,7 @@ class DepartmentOut(BaseModel):
     timezone: str | None = None
     out_of_hours_message: str | dict[str, str] | None = None
     first_response_target_minutes: int | None = None
+    logo_url: str | None = None
 
 
 class DepartmentIn(BaseModel):
@@ -712,7 +715,9 @@ async def inbox_summary(
         "is_supervisor": principal.is_supervisor,
     }
     if principal.is_supervisor:
-        summary["all"] = await repo.count_conversations(session, tenant_id=tenant_row.id)
+        summary["all"] = await repo.count_conversations(
+            session, tenant_id=tenant_row.id, department_ids=principal.department_ids
+        )
     return summary
 
 
@@ -1889,6 +1894,99 @@ async def create_department(
         subject_type="department",
         subject_id=str(department.id),
         detail={"name": department.name},
+    )
+    return _department_out(department)
+
+
+@router.get("/departments/{department_id}/logo", include_in_schema=False)
+async def department_logo(
+    department_id: uuid.UUID,
+    session: SessionDep,
+    settings: SettingsDep,
+    principal: PrincipalDep,
+    tenant: str | None = None,
+) -> FileResponse:
+    """Entrega el logo de un departamento a cualquier persona autenticada.
+
+    A diferencia de un adjunto (``app/api/attachments.py``), un logo no
+    pertenece a ninguna conversación concreta —lo ve cualquiera del
+    inquilino que necesite pintar la pestaña de ese departamento—, así que
+    no se aplica la comprobación de acceso por conversación, solo la de
+    inquilino.
+    """
+    tenant_row = await repo.get_or_create_tenant(session, tenant or settings.default_tenant_slug)
+    department = await repo.get_department(session, department_id)
+    if department is None or department.tenant_id != tenant_row.id or not department.logo_path:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Sin logo")
+    path = Path(settings.uploads_dir) / department.logo_path
+    if not path.is_file():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Sin logo")
+    return FileResponse(
+        path,
+        headers={"Cache-Control": "private, max-age=300", "X-Content-Type-Options": "nosniff"},
+    )
+
+
+@router.put("/departments/{department_id}/logo", response_model=DepartmentOut)
+async def set_department_logo(
+    department_id: uuid.UUID,
+    file: UploadFile,
+    session: SessionDep,
+    settings: SettingsDep,
+    principal: AdminDep,
+    tenant: str | None = None,
+) -> DepartmentOut:
+    """Fija el logo de un departamento. Reservado a administración."""
+    tenant_row = await repo.get_or_create_tenant(session, tenant or settings.default_tenant_slug)
+    department = await repo.get_department(session, department_id)
+    if department is None or department.tenant_id != tenant_row.id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="El departamento no existe"
+        )
+    attachment = await save_upload(file, namespace="departments", settings=settings)
+    previous = department.logo_path
+    department.logo_path = attachment.url.removeprefix("/uploads/")
+    await session.flush()
+    if previous:
+        (Path(settings.uploads_dir) / previous).unlink(missing_ok=True)
+    await repo.record_audit(
+        session,
+        tenant_id=tenant_row.id,
+        actor=principal.audit_actor,
+        action="department_logo_updated",
+        subject_type="department",
+        subject_id=str(department.id),
+    )
+    return _department_out(department)
+
+
+@router.delete("/departments/{department_id}/logo", response_model=DepartmentOut)
+async def delete_department_logo(
+    department_id: uuid.UUID,
+    session: SessionDep,
+    settings: SettingsDep,
+    principal: AdminDep,
+    tenant: str | None = None,
+) -> DepartmentOut:
+    """Quita el logo de un departamento. Reservado a administración."""
+    tenant_row = await repo.get_or_create_tenant(session, tenant or settings.default_tenant_slug)
+    department = await repo.get_department(session, department_id)
+    if department is None or department.tenant_id != tenant_row.id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="El departamento no existe"
+        )
+    previous = department.logo_path
+    department.logo_path = None
+    await session.flush()
+    if previous:
+        (Path(settings.uploads_dir) / previous).unlink(missing_ok=True)
+    await repo.record_audit(
+        session,
+        tenant_id=tenant_row.id,
+        actor=principal.audit_actor,
+        action="department_logo_removed",
+        subject_type="department",
+        subject_id=str(department.id),
     )
     return _department_out(department)
 
@@ -3736,13 +3834,18 @@ async def supervisor_overview(
     principal: SupervisorDep,
     tenant: str | None = None,
 ) -> dict[str, Any]:
-    """Panorama del equipo: carga por agente y últimas derivaciones."""
+    """Panorama del equipo: carga por agente y últimas derivaciones.
+
+    Una supervisión acotada por departamento ve aquí solo lo suyo; la clave
+    de servicio y la administración, sin restricción.
+    """
     tenant_row = await repo.get_or_create_tenant(session, tenant or settings.default_tenant_slug)
     names = await _agent_names(session, tenant_row.id)
+    department_ids = principal.department_ids
     return {
         "tenant": tenant_row.slug,
-        "workload": await repo.workload_by_agent(session, tenant_row.id),
-        "messages_by_channel": await repo.channel_stats(session, tenant_row.id),
+        "workload": await repo.workload_by_agent(session, tenant_row.id, department_ids),
+        "messages_by_channel": await repo.channel_stats(session, tenant_row.id, department_ids),
         "recent_transfers": [
             {
                 "conversation_id": str(entry.conversation_id),
@@ -3753,7 +3856,9 @@ async def supervisor_overview(
                 "note": entry.note,
                 "at": entry.created_at.isoformat(),
             }
-            for entry in await repo.transfer_activity(session, tenant_row.id)
+            for entry in await repo.transfer_activity(
+                session, tenant_row.id, department_ids=department_ids
+            )
         ],
     }
 
@@ -3855,6 +3960,9 @@ def _department_out(row: Department) -> DepartmentOut:
         timezone=row.timezone,
         out_of_hours_message=row.out_of_hours_message,
         first_response_target_minutes=row.first_response_target_minutes,
+        # Se compone aquí y no se guarda: así cambiar el esquema de rutas no
+        # exige tocar una sola fila.
+        logo_url=f"/api/departments/{row.id}/logo" if row.logo_path else None,
     )
 
 

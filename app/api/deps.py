@@ -85,10 +85,11 @@ class Principal:
     def department_ids(self) -> set[uuid.UUID] | None:
         """Departamentos que puede atender. ``None`` = sin restricción.
 
-        Supervisión, administración y la clave de servicio no tienen ninguna
-        acotación por departamento.
+        Administración y la clave de servicio no tienen ninguna acotación
+        por departamento. Supervisión queda acotada a lo otorgado, igual que
+        un agente.
         """
-        if self.agent is None or self.is_supervisor:
+        if self.agent is None or self.is_admin:
             return None
         return repo.agent_department_ids(self.agent)
 

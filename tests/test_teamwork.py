@@ -405,6 +405,24 @@ async def test_the_supervisor_sees_every_thread(anonymous, as_agent, team):
     assert (await marta.get("/api/inbox/summary")).json()["is_supervisor"] is True
 
 
+async def test_the_inbox_summarys_all_count_is_scoped_for_a_supervisor(
+    anonymous, as_agent, team
+):
+    admin = await as_agent(team["admin"]["email"])
+    ajeno = (await admin.post("/api/departments", json={"name": "Resumen ajeno"})).json()
+    await arrive(anonymous, "web-resumen-1")  # sin departamento: cuenta para cualquiera
+    de_otro = await arrive(anonymous, "web-resumen-2")
+    await admin.post(
+        f"/api/conversations/{de_otro}/transfer", json={"to_department_id": ajeno["id"]}
+    )
+
+    marta = await as_agent(team["marta"]["email"])
+    total_marta = (await marta.get("/api/inbox/summary")).json()["all"]
+    total_admin = (await admin.get("/api/inbox/summary")).json()["all"]
+
+    assert total_marta == total_admin - 1
+
+
 async def test_admin_sees_every_thread_and_can_reassign_it(anonymous, as_agent, team):
     conversation_id = await arrive(anonymous, "web-admin-reasigna")
     ana = await as_agent(team["ana"]["email"])
@@ -664,6 +682,47 @@ async def test_supervisor_overview_lists_recent_transfers(anonymous, as_agent, t
     assert transferencias
     assert transferencias[0]["to"] == team["luis"]["name"]
     assert transferencias[0]["note"] == "Especialidad de Luis."
+
+
+async def test_supervisor_overview_is_scoped_to_granted_departments(
+    anonymous, as_agent, team
+):
+    """Una supervisión acotada por departamento no ve en el panel lo ajeno.
+
+    Administración, en cambio, sigue viendo el total: solo supervisión queda
+    acotada por lo otorgado.
+    """
+    admin = await as_agent(team["admin"]["email"])
+    propio = (await admin.post("/api/departments", json={"name": "Reportes A"})).json()
+    ajeno = (await admin.post("/api/departments", json={"name": "Reportes B"})).json()
+    await admin.put(
+        f"/api/agents/{team['marta']['id']}/departments",
+        json={"department_id": propio["id"], "extra_department_ids": []},
+    )
+
+    de_a = await arrive(anonymous, "web-super-scope-a")
+    de_b = await arrive(anonymous, "web-super-scope-b")
+    await admin.post(
+        f"/api/conversations/{de_a}/transfer", json={"to_department_id": propio["id"]}
+    )
+    await admin.post(
+        f"/api/conversations/{de_b}/transfer", json={"to_department_id": ajeno["id"]}
+    )
+
+    marta = await as_agent(team["marta"]["email"])
+    overview = (await marta.get("/api/supervisor/overview")).json()
+    overview_admin = (await admin.get("/api/supervisor/overview")).json()
+
+    cola = next(row for row in overview["workload"] if row["agent_id"] is None)
+    cola_admin = next(row for row in overview_admin["workload"] if row["agent_id"] is None)
+    assert cola["open_conversations"] == 1
+    assert cola_admin["open_conversations"] == 2
+
+    transferidas = {row["conversation_id"] for row in overview["recent_transfers"]}
+    assert de_a in transferidas
+    assert de_b not in transferidas
+
+    assert overview["messages_by_channel"]["web"] < overview_admin["messages_by_channel"]["web"]
 
 
 async def test_an_agent_cannot_open_the_supervisor_panel(as_agent, team):
@@ -1220,6 +1279,91 @@ async def test_only_the_admin_creates_departments(as_agent, team):
     assert "Ventas" in {row["name"] for row in listed.json()}
 
 
+async def test_only_the_admin_sets_a_departments_logo(as_agent, team):
+    admin = await as_agent(team["admin"]["email"])
+    ana = await as_agent(team["ana"]["email"])
+    marta = await as_agent(team["marta"]["email"])
+    department = (await admin.post("/api/departments", json={"name": "Con logo"})).json()
+    assert department["logo_url"] is None
+
+    for client in (ana, marta):
+        rejected = await client.put(
+            f"/api/departments/{department['id']}/logo",
+            files={"file": ("logo.png", _PNG_BYTES, "image/png")},
+        )
+        assert rejected.status_code == 403
+
+    updated = await admin.put(
+        f"/api/departments/{department['id']}/logo",
+        files={"file": ("logo.png", _PNG_BYTES, "image/png")},
+    )
+    assert updated.status_code == 200
+    logo_url = updated.json()["logo_url"]
+    assert logo_url == f"/api/departments/{department['id']}/logo"
+
+    # Cualquiera con sesión lo ve, no solo administración: es la identidad
+    # visual de la pestaña, no un dato privado.
+    for client in (admin, ana, marta):
+        served = await client.get(logo_url)
+        assert served.status_code == 200
+        assert served.content == _PNG_BYTES
+
+    listed = await ana.get("/api/departments")
+    assert next(row for row in listed.json() if row["id"] == department["id"])["logo_url"] == logo_url
+
+
+async def test_replacing_a_departments_logo_discards_the_previous_file(as_agent, team):
+    admin = await as_agent(team["admin"]["email"])
+    department = (await admin.post("/api/departments", json={"name": "Reemplaza logo"})).json()
+
+    first = await admin.put(
+        f"/api/departments/{department['id']}/logo",
+        files={"file": ("uno.png", _PNG_BYTES, "image/png")},
+    )
+    first_url = first.json()["logo_url"]
+
+    second_bytes = _PNG_BYTES + b"\x01"
+    second = await admin.put(
+        f"/api/departments/{department['id']}/logo",
+        files={"file": ("dos.png", second_bytes, "image/png")},
+    )
+    assert second.status_code == 200
+    second_url = second.json()["logo_url"]
+    # La URL pública es la misma —depende del id del departamento, no del
+    # fichero—, pero el contenido servido ya es el nuevo.
+    assert second_url == first_url
+    served = await admin.get(second_url)
+    assert served.content == second_bytes
+
+
+async def test_removing_a_departments_logo_is_admin_only(as_agent, team):
+    admin = await as_agent(team["admin"]["email"])
+    ana = await as_agent(team["ana"]["email"])
+    department = (await admin.post("/api/departments", json={"name": "Se quita el logo"})).json()
+    await admin.put(
+        f"/api/departments/{department['id']}/logo",
+        files={"file": ("logo.png", _PNG_BYTES, "image/png")},
+    )
+
+    assert (await ana.delete(f"/api/departments/{department['id']}/logo")).status_code == 403
+
+    removed = await admin.delete(f"/api/departments/{department['id']}/logo")
+    assert removed.status_code == 200
+    assert removed.json()["logo_url"] is None
+    assert (await admin.get(f"/api/departments/{department['id']}/logo")).status_code == 404
+
+
+async def test_a_department_logo_rejects_a_non_image_type(as_agent, team):
+    admin = await as_agent(team["admin"]["email"])
+    department = (await admin.post("/api/departments", json={"name": "Logo inválido"})).json()
+
+    rejected = await admin.put(
+        f"/api/departments/{department['id']}/logo",
+        files={"file": ("nota.txt", b"hola", "text/plain")},
+    )
+    assert rejected.status_code == 415
+
+
 async def test_admin_grants_extra_departments_to_an_agent(as_agent, team):
     admin = await as_agent(team["admin"]["email"])
     ventas = (await admin.post("/api/departments", json={"name": "Ventas 2"})).json()
@@ -1262,8 +1406,7 @@ async def test_an_agent_without_department_access_does_not_see_that_queue(
     department = (await admin.post("/api/departments", json={"name": "Facturación"})).json()
 
     conversation_id = await arrive(anonymous, "web-depto-2")
-    marta = await as_agent(team["marta"]["email"])
-    await marta.post(
+    await admin.post(
         f"/api/conversations/{conversation_id}/transfer",
         json={"to_department_id": department["id"]},
     )
@@ -1272,8 +1415,52 @@ async def test_an_agent_without_department_access_does_not_see_that_queue(
     queue = (await ana.get("/api/conversations?scope=unassigned")).json()
     assert conversation_id not in ids(queue)
 
-    # Marta es supervisora: ve todo, con o sin departamento.
-    assert conversation_id in ids((await marta.get("/api/conversations?scope=unassigned")).json())
+    # Una supervisión sin ese departamento otorgado tampoco lo ve: queda
+    # acotada igual que un agente, salvo administración.
+    marta = await as_agent(team["marta"]["email"])
+    assert conversation_id not in ids(
+        (await marta.get("/api/conversations?scope=unassigned")).json()
+    )
+    assert conversation_id in ids(
+        (await admin.get("/api/conversations?scope=unassigned")).json()
+    )
+
+
+async def test_a_supervisor_with_department_access_sees_everything_there(
+    anonymous, as_agent, team
+):
+    """Lo nuevo: supervisión ya no ve todo el inquilino sin más.
+
+    Otorgado un departamento, ve tanto la cola común como lo que ya tiene
+    dueño dentro de él —a diferencia de un agente, no necesita que la
+    conversación esté libre—, pero no lo de otros departamentos que no le
+    fueron otorgados.
+    """
+    admin = await as_agent(team["admin"]["email"])
+    propio = (await admin.post("/api/departments", json={"name": "Soporte Marta"})).json()
+    ajeno = (await admin.post("/api/departments", json={"name": "Soporte Ajeno"})).json()
+    await admin.put(
+        f"/api/agents/{team['marta']['id']}/departments",
+        json={"department_id": propio["id"], "extra_department_ids": []},
+    )
+
+    de_su_depto = await arrive(anonymous, "web-super-depto-1")
+    ajena = await arrive(anonymous, "web-super-depto-2")
+    await admin.post(
+        f"/api/conversations/{de_su_depto}/transfer",
+        json={"to_department_id": propio["id"]},
+    )
+    await admin.post(
+        f"/api/conversations/{ajena}/transfer", json={"to_department_id": ajeno["id"]}
+    )
+    luis = await as_agent(team["luis"]["email"])
+    await luis.post(f"/api/conversations/{de_su_depto}/claim")
+
+    marta = await as_agent(team["marta"]["email"])
+    visible = ids((await marta.get("/api/conversations?scope=all")).json())
+
+    assert de_su_depto in visible  # de su departamento, aunque ya tenga dueño
+    assert ajena not in visible    # de un departamento que no le otorgaron
 
 
 async def test_an_agent_with_department_access_sees_that_queue(anonymous, as_agent, team):
@@ -1320,9 +1507,8 @@ async def test_transfer_to_department_releases_the_assignee_and_is_logged(
         assert str(conversation.department_id) == department["id"]
 
     # Ana ya no tiene acceso —el departamento no es el suyo—; se comprueba el
-    # historial con la supervisora, que ve cualquier conversación.
-    marta = await as_agent(team["marta"]["email"])
-    history = (await marta.get(f"/api/conversations/{conversation_id}/assignments")).json()
+    # historial con administración, que ve cualquier conversación.
+    history = (await admin.get(f"/api/conversations/{conversation_id}/assignments")).json()
     assert history[-1]["action"] == "transfer_department"
     assert history[-1]["to_department"] == "Reclamos"
 
@@ -2445,7 +2631,6 @@ async def test_out_of_hours_the_assistant_warns_once_and_then_stays_quiet(
     anonymous, as_agent, team
 ):
     admin = await as_agent(team["admin"]["email"])
-    marta = await as_agent(team["marta"]["email"])
     department = (await admin.post("/api/departments", json={"name": "Horarios 3"})).json()
     await admin.put(
         f"/api/departments/{department['id']}/business-hours",
@@ -2457,13 +2642,13 @@ async def test_out_of_hours_the_assistant_warns_once_and_then_stays_quiet(
     )
 
     conversation_id = await arrive(anonymous, "web-horario-1")
-    await marta.post(
+    await admin.post(
         f"/api/conversations/{conversation_id}/transfer",
         json={"to_department_id": department["id"]},
     )
 
     async def salientes() -> list[str]:
-        mensajes = (await marta.get(f"/api/conversations/{conversation_id}/messages")).json()
+        mensajes = (await admin.get(f"/api/conversations/{conversation_id}/messages")).json()
         return [row["text"] for row in mensajes if row["direction"] == "outbound"]
 
     # El primer turno entró antes de la derivación, cuando el hilo todavía no
@@ -2476,18 +2661,17 @@ async def test_out_of_hours_the_assistant_warns_once_and_then_stays_quiet(
     # Insiste: el mensaje se recibe igual, pero no se repite el aviso.
     await arrive(anonymous, "web-horario-1", "Sigo esperando")
     assert await salientes() == [*base, "Estamos cerrados; le respondemos mañana."]
-    mensajes = (await marta.get(f"/api/conversations/{conversation_id}/messages")).json()
+    mensajes = (await admin.get(f"/api/conversations/{conversation_id}/messages")).json()
     assert "Sigo esperando" in {row["text"] for row in mensajes if row["direction"] == "inbound"}
 
 
 async def test_a_department_without_a_schedule_keeps_answering(anonymous, as_agent, team):
     """Sin horario configurado nada cambia: el asistente sigue respondiendo."""
     admin = await as_agent(team["admin"]["email"])
-    marta = await as_agent(team["marta"]["email"])
     department = (await admin.post("/api/departments", json={"name": "Horarios 4"})).json()
 
     conversation_id = await arrive(anonymous, "web-horario-2")
-    await marta.post(
+    await admin.post(
         f"/api/conversations/{conversation_id}/transfer",
         json={"to_department_id": department["id"]},
     )
@@ -2495,7 +2679,7 @@ async def test_a_department_without_a_schedule_keeps_answering(anonymous, as_age
 
     salientes = [
         row
-        for row in (await marta.get(f"/api/conversations/{conversation_id}/messages")).json()
+        for row in (await admin.get(f"/api/conversations/{conversation_id}/messages")).json()
         if row["direction"] == "outbound"
     ]
     assert salientes, "sin horario configurado el asistente debe seguir contestando"
@@ -2633,7 +2817,6 @@ async def test_a_macro_pointing_at_something_missing_is_rejected(as_agent, team)
 
 async def test_a_macro_applies_every_step_in_order(anonymous, as_agent, team):
     admin = await as_agent(team["admin"]["email"])
-    marta = await as_agent(team["marta"]["email"])
     etiqueta = (await admin.post("/api/labels", json={"name": "Urgente macro"})).json()
     departamento = (await admin.post("/api/departments", json={"name": "Macro destino"})).json()
     plantilla = (
@@ -2659,21 +2842,21 @@ async def test_a_macro_applies_every_step_in_order(anonymous, as_agent, team):
     ).json()
 
     conversation_id = await arrive(anonymous, "web-macro-1")
-    respuesta = await marta.post(f"/api/conversations/{conversation_id}/macros/{macro['id']}")
+    respuesta = await admin.post(f"/api/conversations/{conversation_id}/macros/{macro['id']}")
     assert respuesta.status_code == 200
     assert respuesta.json()["applied"] == ["label", "reply", "note", "transfer_department"]
 
     fila = next(
         row
-        for row in (await marta.get("/api/conversations?status=")).json()
+        for row in (await admin.get("/api/conversations?status=")).json()
         if row["id"] == conversation_id
     )
     assert [row["name"] for row in fila["labels"]] == ["Urgente macro"]
     assert fila["department_name"] == "Macro destino"
 
-    mensajes = (await marta.get(f"/api/conversations/{conversation_id}/messages")).json()
+    mensajes = (await admin.get(f"/api/conversations/{conversation_id}/messages")).json()
     assert "Quedamos a las órdenes." in {row["text"] for row in mensajes}
-    notas = (await marta.get(f"/api/conversations/{conversation_id}/notes")).json()
+    notas = (await admin.get(f"/api/conversations/{conversation_id}/notes")).json()
     assert "Ejecutada por macro" in {row["body"] for row in notas}
 
 
@@ -2772,53 +2955,50 @@ async def test_a_department_without_a_target_does_not_start_the_clock(
     anonymous, as_agent, team
 ):
     admin = await as_agent(team["admin"]["email"])
-    marta = await as_agent(team["marta"]["email"])
     department = (await admin.post("/api/departments", json={"name": "SLA sin objetivo"})).json()
 
     conversation_id = await arrive(anonymous, "web-sla-0")
-    await marta.post(
+    await admin.post(
         f"/api/conversations/{conversation_id}/transfer",
         json={"to_department_id": department["id"]},
     )
     await arrive(anonymous, "web-sla-0", "Hola")
 
-    assert await _sla_of(marta, conversation_id) is None
+    assert await _sla_of(admin, conversation_id) is None
 
 
 async def test_the_clock_starts_when_the_customer_is_left_waiting(
     anonymous, as_agent, team
 ):
     admin = await as_agent(team["admin"]["email"])
-    marta = await as_agent(team["marta"]["email"])
     department = await _department_with_target(admin, "SLA pendiente", 60)
 
     conversation_id = await arrive(anonymous, "web-sla-1")
-    await marta.post(
+    await admin.post(
         f"/api/conversations/{conversation_id}/transfer",
         json={"to_department_id": department["id"]},
     )
     await arrive(anonymous, "web-sla-1", "¿Me ayudan?")
 
-    assert await _sla_of(marta, conversation_id) == "pending"
+    assert await _sla_of(admin, conversation_id) == "pending"
 
 
 async def test_a_human_reply_meets_the_target(anonymous, as_agent, team):
     admin = await as_agent(team["admin"]["email"])
-    marta = await as_agent(team["marta"]["email"])
     department = await _department_with_target(admin, "SLA cumplido", 60)
 
     conversation_id = await arrive(anonymous, "web-sla-2")
-    await marta.post(
+    await admin.post(
         f"/api/conversations/{conversation_id}/transfer",
         json={"to_department_id": department["id"]},
     )
     await arrive(anonymous, "web-sla-2", "¿Me ayudan?")
-    assert await _sla_of(marta, conversation_id) == "pending"
+    assert await _sla_of(admin, conversation_id) == "pending"
 
-    await marta.post(
+    await admin.post(
         f"/api/conversations/{conversation_id}/reply", json={"text": "Le ayudo yo."}
     )
-    assert await _sla_of(marta, conversation_id) == "met"
+    assert await _sla_of(admin, conversation_id) == "met"
 
 
 async def test_the_assistant_reply_does_not_count_as_first_response(
@@ -2827,31 +3007,29 @@ async def test_the_assistant_reply_does_not_count_as_first_response(
     """El eco del asistente contesta al instante; si contara, el objetivo se
     cumpliría siempre y la medición no diría nada del equipo."""
     admin = await as_agent(team["admin"]["email"])
-    marta = await as_agent(team["marta"]["email"])
     department = await _department_with_target(admin, "SLA solo humanos", 60)
 
     conversation_id = await arrive(anonymous, "web-sla-3")
-    await marta.post(
+    await admin.post(
         f"/api/conversations/{conversation_id}/transfer",
         json={"to_department_id": department["id"]},
     )
     # El asistente responde a este turno, pero el objetivo sigue pendiente.
     await arrive(anonymous, "web-sla-3", "¿Hay alguien?")
 
-    mensajes = (await marta.get(f"/api/conversations/{conversation_id}/messages")).json()
+    mensajes = (await admin.get(f"/api/conversations/{conversation_id}/messages")).json()
     assert any(row["author_type"] == "bot" for row in mensajes)
-    assert await _sla_of(marta, conversation_id) == "pending"
+    assert await _sla_of(admin, conversation_id) == "pending"
 
 
 async def test_an_overdue_conversation_shows_as_breached(anonymous, as_agent, team):
     admin = await as_agent(team["admin"]["email"])
-    marta = await as_agent(team["marta"]["email"])
     # Un minuto de objetivo, y luego se atrasa el vencimiento a mano para no
     # tener que esperar en la prueba.
     department = await _department_with_target(admin, "SLA vencido", 1)
 
     conversation_id = await arrive(anonymous, "web-sla-4")
-    await marta.post(
+    await admin.post(
         f"/api/conversations/{conversation_id}/transfer",
         json={"to_department_id": department["id"]},
     )
@@ -2861,7 +3039,7 @@ async def test_an_overdue_conversation_shows_as_breached(anonymous, as_agent, te
         conversation = await session.get(Conversation, uuid.UUID(conversation_id))
         conversation.first_response_due_at = datetime.now(UTC) - timedelta(minutes=5)
 
-    assert await _sla_of(marta, conversation_id) == "breached"
+    assert await _sla_of(admin, conversation_id) == "breached"
 
     # El repaso periódico lo deja anotado en la fila, no solo en la vista.
     async with session_scope() as session:
@@ -2900,7 +3078,6 @@ async def test_deriving_does_not_restart_the_clock_already_running(
     bastaría con pasarse el hilo entre departamentos para no vencer nunca.
     """
     admin = await as_agent(team["admin"]["email"])
-    marta = await as_agent(team["marta"]["email"])
     await admin.put(
         "/api/admin/service-defaults",
         json={"business_hours": {}, "first_response_target_minutes": 600},
@@ -2910,7 +3087,7 @@ async def test_deriving_does_not_restart_the_clock_already_running(
     async def vencimiento() -> str:
         fila = next(
             row
-            for row in (await marta.get("/api/conversations?status=")).json()
+            for row in (await admin.get("/api/conversations?status=")).json()
             if row["id"] == conversation_id
         )
         return fila["sla_due_at"]
@@ -2918,7 +3095,7 @@ async def test_deriving_does_not_restart_the_clock_already_running(
     conversation_id = await arrive(anonymous, "web-sla-herencia")
     original = await vencimiento()
 
-    await marta.post(
+    await admin.post(
         f"/api/conversations/{conversation_id}/transfer",
         json={"to_department_id": department["id"]},
     )
@@ -2948,11 +3125,10 @@ async def test_the_tenant_default_rejects_an_unknown_timezone(as_agent, team):
 async def test_a_second_message_does_not_extend_the_deadline(anonymous, as_agent, team):
     """Que el cliente insista no le regala al equipo un plazo nuevo."""
     admin = await as_agent(team["admin"]["email"])
-    marta = await as_agent(team["marta"]["email"])
     department = await _department_with_target(admin, "SLA sin prórroga", 60)
 
     conversation_id = await arrive(anonymous, "web-sla-5")
-    await marta.post(
+    await admin.post(
         f"/api/conversations/{conversation_id}/transfer",
         json={"to_department_id": department["id"]},
     )
@@ -2961,7 +3137,7 @@ async def test_a_second_message_does_not_extend_the_deadline(anonymous, as_agent
     async def vencimiento() -> str:
         fila = next(
             row
-            for row in (await marta.get("/api/conversations?status=")).json()
+            for row in (await admin.get("/api/conversations?status=")).json()
             if row["id"] == conversation_id
         )
         return fila["sla_due_at"]

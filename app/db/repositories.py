@@ -29,7 +29,7 @@ from app.core.envelope import (
 from app.core.security import hash_password
 from app.db.models import (
     ROLE_ADMIN,
-    SUPERVISOR_ROLES,
+    ROLE_SUPERVISOR,
     Agent,
     AgentDepartment,
     AgentSession,
@@ -727,16 +727,34 @@ def _restrict_to_status(stmt: Any, status: str | None) -> Any:
 def _restrict_to_accessible_departments(stmt: Any, department_ids: set[uuid.UUID] | None) -> Any:
     """Acota la cola —solo ``assignee_id`` nulo— a los departamentos accesibles.
 
-    ``None`` significa sin restricción (supervisión y administración). Una
-    conversación sin departamento sigue visible para cualquiera: acotar por
-    departamento es una restricción adicional sobre la cola, nunca sobre lo
-    que ya tiene dueño.
+    ``None`` significa sin restricción (administración). Una conversación sin
+    departamento sigue visible para cualquiera: acotar por departamento es
+    una restricción adicional sobre la cola, nunca sobre lo que ya tiene
+    dueño (lo propio de un agente, o lo ya asignado que ve supervisión).
     """
     if department_ids is None:
         return stmt
     return stmt.where(
         or_(
             Conversation.assignee_id.is_not(None),
+            Conversation.department_id.is_(None),
+            Conversation.department_id.in_(department_ids),
+        )
+    )
+
+
+def _restrict_to_departments(stmt: Any, department_ids: set[uuid.UUID] | None) -> Any:
+    """Acota a los departamentos accesibles, sin excepción por dueño.
+
+    A diferencia de ``_restrict_to_accessible_departments`` (pensada para no
+    ocultarle a un agente lo que ya es suyo), esta acota la vista ``all`` de
+    supervisión: ver «todo» para una supervisión acotada por departamento
+    significa todo lo de sus departamentos, tenga o no dueño.
+    """
+    if department_ids is None:
+        return stmt
+    return stmt.where(
+        or_(
             Conversation.department_id.is_(None),
             Conversation.department_id.in_(department_ids),
         )
@@ -766,7 +784,7 @@ async def list_conversations(
     * ``mine_or_unassigned`` — su carga de trabajo más lo que puede tomar.
     * ``all`` — la totalidad del inquilino; reservado a supervisión.
 
-    ``department_ids`` acota la cola a los departamentos que puede atender
+    ``department_ids`` acota la vista a los departamentos que puede atender
     quien pregunta (``None`` = sin restricción); ``department`` es un filtro
     de interfaz para ver solo un departamento concreto de entre los propios,
     nunca una forma de ver más de lo que ``department_ids`` ya permite.
@@ -793,6 +811,8 @@ async def list_conversations(
             or_(Conversation.assignee_id == agent_id, Conversation.assignee_id.is_(None))
         )
         stmt = _restrict_to_accessible_departments(stmt, department_ids)
+    else:
+        stmt = _restrict_to_departments(stmt, department_ids)
 
     stmt = (
         stmt.options(
@@ -827,6 +847,8 @@ async def count_conversations(
         stmt = _restrict_to_accessible_departments(stmt, department_ids)
     elif scope == "mine":
         stmt = stmt.where(Conversation.assignee_id == agent_id)
+    else:
+        stmt = _restrict_to_departments(stmt, department_ids)
     return (await session.execute(stmt)).scalar_one()
 
 
@@ -848,20 +870,24 @@ def agent_can_access(
 ) -> bool:
     """Regla de visibilidad de una conversación concreta.
 
-    Supervisión ve todo. Un agente ve lo propio y lo que aún no tiene dueño,
-    porque la cola común es precisamente el punto del que ha de poder tomar
-    trabajo — salvo que esa conversación sin dueño ya quedó derivada a un
-    departamento al que no tiene acceso.
+    Administración ve todo. Supervisión ve todo lo de sus departamentos,
+    tenga o no dueño (a diferencia de un agente, no necesita que la
+    conversación esté libre para verla). Un agente ve lo propio y lo que aún
+    no tiene dueño, porque la cola común es precisamente el punto del que ha
+    de poder tomar trabajo — salvo que esa conversación sin dueño ya quedó
+    derivada a un departamento al que no tiene acceso.
     """
-    if agent.role in SUPERVISOR_ROLES:
+    if agent.role == ROLE_ADMIN:
         return True
+    accessible = department_ids if department_ids is not None else agent_department_ids(agent)
+    if agent.role == ROLE_SUPERVISOR:
+        return conversation.department_id is None or conversation.department_id in accessible
     if conversation.assignee_id not in (None, agent.id):
         return False
     if conversation.assignee_id == agent.id:
         return True
     if conversation.department_id is None:
         return True
-    accessible = department_ids if department_ids is not None else agent_department_ids(agent)
     return conversation.department_id in accessible
 
 
@@ -1180,13 +1206,24 @@ async def record_audit(
     )
 
 
-async def channel_stats(session: AsyncSession, tenant_id: uuid.UUID) -> dict[str, int]:
-    """Recuento de mensajes por canal, para el panel de la consola."""
+async def channel_stats(
+    session: AsyncSession,
+    tenant_id: uuid.UUID,
+    department_ids: set[uuid.UUID] | None = None,
+) -> dict[str, int]:
+    """Recuento de mensajes por canal, para el panel de la consola.
+
+    ``department_ids`` acota a una supervisión restringida por departamento
+    (``None`` = sin restricción, el caso de administración).
+    """
     stmt = (
         select(Message.channel, func.count())
         .where(Message.tenant_id == tenant_id)
         .group_by(Message.channel)
     )
+    if department_ids is not None:
+        stmt = stmt.join(Conversation, Conversation.id == Message.conversation_id)
+        stmt = _restrict_to_departments(stmt, department_ids)
     return {str(channel): total for channel, total in (await session.execute(stmt)).all()}
 
 
@@ -2309,9 +2346,15 @@ async def list_internal_notes(
 # Supervisión
 # --------------------------------------------------------------------------- #
 async def workload_by_agent(
-    session: AsyncSession, tenant_id: uuid.UUID
+    session: AsyncSession,
+    tenant_id: uuid.UUID,
+    department_ids: set[uuid.UUID] | None = None,
 ) -> list[dict[str, Any]]:
-    """Carga abierta por agente, con la cola común como fila sin responsable."""
+    """Carga abierta por agente, con la cola común como fila sin responsable.
+
+    ``department_ids`` acota a una supervisión restringida por departamento
+    (``None`` = sin restricción, el caso de administración).
+    """
     stmt = (
         select(
             Conversation.assignee_id,
@@ -2321,6 +2364,7 @@ async def workload_by_agent(
         .where(Conversation.tenant_id == tenant_id, Conversation.status == "open")
         .group_by(Conversation.assignee_id)
     )
+    stmt = _restrict_to_departments(stmt, department_ids)
     rows = (await session.execute(stmt)).all()
     agents = {agent.id: agent for agent in await list_agents(session, tenant_id=tenant_id)}
     workload: list[dict[str, Any]] = []
@@ -2341,13 +2385,19 @@ async def workload_by_agent(
 
 
 async def transfer_activity(
-    session: AsyncSession, tenant_id: uuid.UUID, limit: int = 50
+    session: AsyncSession,
+    tenant_id: uuid.UUID,
+    limit: int = 50,
+    department_ids: set[uuid.UUID] | None = None,
 ) -> list[Assignment]:
-    """Últimas derivaciones del inquilino, para el panel de supervisión."""
-    stmt = (
-        select(Assignment)
-        .where(Assignment.tenant_id == tenant_id)
-        .order_by(Assignment.created_at.desc())
-        .limit(limit)
-    )
+    """Últimas derivaciones del inquilino, para el panel de supervisión.
+
+    ``department_ids`` acota a una supervisión restringida por departamento
+    (``None`` = sin restricción, el caso de administración).
+    """
+    stmt = select(Assignment).where(Assignment.tenant_id == tenant_id)
+    if department_ids is not None:
+        stmt = stmt.join(Conversation, Conversation.id == Assignment.conversation_id)
+        stmt = _restrict_to_departments(stmt, department_ids)
+    stmt = stmt.order_by(Assignment.created_at.desc()).limit(limit)
     return list((await session.execute(stmt)).scalars())
