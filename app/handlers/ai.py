@@ -17,8 +17,9 @@ from anthropic import (
     RateLimitError,
 )
 
+from app.core import hotel_booking
 from app.core.envelope import Direction
-from app.core.hub import conversation_topic, hub
+from app.core.hub import conversation_topic, hub, inbox_topic
 from app.core.pipeline import Handler, NextFn, TurnContext
 from app.db import repositories as repo
 from app.logging_setup import get_logger
@@ -88,9 +89,10 @@ class AIHandler(Handler):
         started = time.monotonic()
         messages = self._build_messages(ctx)
         system = self._build_system_prompt(ctx)
+        tools = [HANDOFF_TOOL, *await self._available_tools(ctx)]
 
         try:
-            text, usage, stop_reason = await self._converse(ctx, system, messages)
+            text, usage, stop_reason = await self._converse(ctx, system, messages, tools)
         except RateLimitError as exc:
             await self._record_error(ctx, str(exc), started)
             ctx.reply(
@@ -181,6 +183,21 @@ class AIHandler(Handler):
             messages.append({"role": "user", "content": ctx.text or "(sin texto)"})
         return messages
 
+    async def _available_tools(self, ctx: TurnContext) -> list[dict[str, Any]]:
+        """Herramientas adicionales, según qué módulos tenga activos el departamento.
+
+        Sin departamento asignado la conversación todavía está en la cola
+        común: no hay una rama de negocio concreta a la que ofrecer un módulo,
+        así que no se agrega ninguna herramienta extra.
+        """
+        department_id = ctx.conversation.department_id
+        if department_id is None:
+            return []
+        department = await repo.get_department(ctx.session, department_id)
+        if department is None or not repo.hotel_module_enabled(department):
+            return []
+        return hotel_booking.HOTEL_TOOLS
+
     @staticmethod
     def _describe_non_text(row: Any) -> str:
         """Describe en palabras un mensaje sin texto, para no perder el turno."""
@@ -200,6 +217,7 @@ class AIHandler(Handler):
         ctx: TurnContext,
         system: list[dict[str, Any]],
         messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
     ) -> tuple[str, dict[str, int], str | None]:
         """Bucle de herramientas. Devuelve texto, uso de tokens y motivo de parada."""
         assert self._client is not None
@@ -214,7 +232,7 @@ class AIHandler(Handler):
                 max_tokens=self.settings.ai_max_tokens,
                 system=system,
                 messages=messages,
-                tools=[HANDOFF_TOOL],
+                tools=tools,
                 thinking={"type": "adaptive"},
                 output_config={"effort": self.settings.ai_effort},
                 betas=[FALLBACK_BETA],
@@ -288,7 +306,7 @@ class AIHandler(Handler):
                 detail=arguments,
             )
             await hub.publish(
-                f"inbox:{ctx.tenant.slug}",
+                inbox_topic(ctx.tenant.slug),
                 {
                     "type": "handoff_requested",
                     "conversation_id": str(ctx.conversation.id),
@@ -297,6 +315,10 @@ class AIHandler(Handler):
                 },
             )
             return "Derivación registrada. Un agente humano atenderá la conversación."
+
+        hotel_result = await hotel_booking.dispatch(ctx, name, arguments)
+        if hotel_result is not None:
+            return hotel_result
         raise ValueError(f"Herramienta desconocida: {name}")
 
     async def _record_error(self, ctx: TurnContext, error: str, started: float) -> None:

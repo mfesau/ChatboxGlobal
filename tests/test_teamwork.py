@@ -13,6 +13,7 @@ import urllib.parse
 import uuid
 from collections.abc import AsyncIterator, Callable
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from typing import Any, ClassVar
 
 import httpx
@@ -23,6 +24,7 @@ from sqlalchemy import select
 from app.channels.base import ChannelRegistry
 from app.channels.whatsapp import WhatsAppAdapter
 from app.config import get_settings
+from app.core import hotel_booking
 from app.core.envelope import ChannelKind, ConversationRef
 from app.core.orchestrator import Orchestrator
 from app.core.pipeline import Handler, NextFn, Pipeline, TurnContext
@@ -48,6 +50,7 @@ from app.db.models import (
     Message,
     OutboxItem,
 )
+from app.handlers.ai import AIHandler
 from app.handlers.builtin import BusinessHoursHandler, FirstResponseSlaHandler
 from app.main import create_app
 
@@ -3408,3 +3411,163 @@ async def test_hotel_operations_are_rejected_on_an_inactive_department(as_agent,
 
     response = await admin.get(f"/api/departments/{department['id']}/hotel/room-types")
     assert response.status_code == 404
+
+
+# --------------------------------------------------------------------------- #
+# Módulo Hotel: herramientas de IA para autoservicio
+# --------------------------------------------------------------------------- #
+async def _put_conversation_in_department(conversation_id: str, department_id: str) -> None:
+    async with session_scope() as session:
+        conversation = await repo.get_conversation(session, uuid.UUID(conversation_id))
+        conversation.department_id = uuid.UUID(department_id)
+        await session.flush()
+
+
+def _tool_ctx(session: Any, conversation: Any, *, contact: Any = None) -> Any:
+    """Contexto mínimo: hotel_booking.dispatch solo mira estos cuatro campos."""
+    return SimpleNamespace(
+        session=session,
+        tenant=SimpleNamespace(id=conversation.tenant_id, slug="default"),
+        conversation=conversation,
+        contact=contact,
+    )
+
+
+async def test_the_ai_tool_lists_availability_with_price_and_capacity(
+    anonymous, as_agent, team
+):
+    admin = await as_agent(team["admin"]["email"])
+    department = await _hotel_department(admin, "Hotel IA 1")
+    await _hotel_room(admin, department["id"], code="101")
+
+    conversation_id = await arrive(anonymous, "web-hotel-ia-1")
+    await _put_conversation_in_department(conversation_id, department["id"])
+
+    async with session_scope() as session:
+        conversation = await repo.get_conversation(session, uuid.UUID(conversation_id))
+        result = await hotel_booking.dispatch(
+            _tool_ctx(session, conversation),
+            "consultar_disponibilidad_hotel",
+            {"check_in": "2026-10-01", "check_out": "2026-10-03"},
+        )
+    assert "Doble 101" in result
+    assert "1 libres" in result
+    assert "50.00 USD/noche" in result
+
+
+async def test_the_ai_tool_creates_a_pending_reservation_and_blocks_the_room(
+    anonymous, as_agent, team
+):
+    admin = await as_agent(team["admin"]["email"])
+    department = await _hotel_department(admin, "Hotel IA 2")
+    room = await _hotel_room(admin, department["id"], code="201")
+
+    conversation_id = await arrive(anonymous, "web-hotel-ia-2")
+    await _put_conversation_in_department(conversation_id, department["id"])
+
+    async with session_scope() as session:
+        conversation = await repo.get_conversation(session, uuid.UUID(conversation_id))
+        result = await hotel_booking.dispatch(
+            _tool_ctx(session, conversation),
+            "crear_reserva_hotel",
+            {
+                "room_type_name": "Doble 201",
+                "check_in": "2026-10-10",
+                "check_out": "2026-10-12",
+                "guest_name": "Persona Huésped",
+                "guests": 2,
+            },
+        )
+    assert "pendiente" in result.lower()
+
+    async with session_scope() as session:
+        reservations = await repo.list_hotel_reservations(
+            session, department_id=uuid.UUID(department["id"])
+        )
+        assert len(reservations) == 1
+        assert reservations[0].status == "pending"
+        assert reservations[0].nightly_price_cents == 5_000
+        assert reservations[0].conversation_id == uuid.UUID(conversation_id)
+
+    # La reserva pendiente ya bloquea la fecha, también para un agente humano.
+    conflict = await admin.post(
+        f"/api/departments/{department['id']}/hotel/reservations",
+        json={
+            "room_id": room["id"],
+            "guest_name": "Otra Persona",
+            "check_in": "2026-10-10",
+            "check_out": "2026-10-12",
+        },
+    )
+    assert conflict.status_code == 409
+
+
+async def test_the_ai_tool_rejects_an_unknown_room_type(anonymous, as_agent, team):
+    admin = await as_agent(team["admin"]["email"])
+    department = await _hotel_department(admin, "Hotel IA 3")
+
+    conversation_id = await arrive(anonymous, "web-hotel-ia-3")
+    await _put_conversation_in_department(conversation_id, department["id"])
+
+    async with session_scope() as session:
+        conversation = await repo.get_conversation(session, uuid.UUID(conversation_id))
+        result = await hotel_booking.dispatch(
+            _tool_ctx(session, conversation),
+            "crear_reserva_hotel",
+            {
+                "room_type_name": "Categoría Inexistente",
+                "check_in": "2026-10-10",
+                "check_out": "2026-10-12",
+                "guest_name": "Persona Huésped",
+                "guests": 1,
+            },
+        )
+    assert "no existe" in result.lower()
+
+    async with session_scope() as session:
+        reservations = await repo.list_hotel_reservations(
+            session, department_id=uuid.UUID(department["id"])
+        )
+        assert reservations == []
+
+
+async def test_hotel_dispatch_ignores_tools_it_does_not_own(anonymous, as_agent, team):
+    admin = await as_agent(team["admin"]["email"])
+    department = await _hotel_department(admin, "Hotel IA 4")
+    conversation_id = await arrive(anonymous, "web-hotel-ia-4")
+    await _put_conversation_in_department(conversation_id, department["id"])
+
+    async with session_scope() as session:
+        conversation = await repo.get_conversation(session, uuid.UUID(conversation_id))
+        result = await hotel_booking.dispatch(
+            _tool_ctx(session, conversation),
+            "derivar_a_agente",
+            {"motivo": "x", "urgencia": "baja"},
+        )
+    assert result is None
+
+
+async def test_hotel_tools_are_only_offered_once_the_module_is_active(anonymous, as_agent, team):
+    admin = await as_agent(team["admin"]["email"])
+    department = (await admin.post("/api/departments", json={"name": "Hotel IA 5"})).json()
+    conversation_id = await arrive(anonymous, "web-hotel-ia-5")
+    handler = AIHandler(settings=get_settings())
+
+    async with session_scope() as session:
+        conversation = await repo.get_conversation(session, uuid.UUID(conversation_id))
+        # Todavía en la cola común, sin departamento: ninguna herramienta extra.
+        assert await handler._available_tools(_tool_ctx(session, conversation)) == []
+
+        conversation.department_id = uuid.UUID(department["id"])
+        await session.flush()
+        # Con departamento pero sin el módulo activo: tampoco.
+        assert await handler._available_tools(_tool_ctx(session, conversation)) == []
+
+    await admin.put(f"/api/departments/{department['id']}/hotel/module", json={"enabled": True})
+
+    async with session_scope() as session:
+        conversation = await repo.get_conversation(session, uuid.UUID(conversation_id))
+        assert (
+            await handler._available_tools(_tool_ctx(session, conversation))
+            == hotel_booking.HOTEL_TOOLS
+        )
