@@ -1884,6 +1884,28 @@ async def set_business_hours(
 # --------------------------------------------------------------------------- #
 # Módulo Hotel: habitaciones y reservas, acotado al departamento que lo activa
 # --------------------------------------------------------------------------- #
+async def _load_hotel_department(
+    session: SessionDep, settings: SettingsDep, *, department_id: uuid.UUID, tenant: str | None
+) -> Department:
+    """Departamento del inquilino activo, sin comprobar acceso ni módulo.
+
+    Es el paso común a los tres puntos de entrada del módulo: los dos que
+    configuran su activación (que deben funcionar aunque el módulo todavía no
+    esté encendido) y ``_require_hotel_department``, que suma las dos
+    comprobaciones que sí dependen de para qué se use.
+    """
+    tenant_row = await repo.get_or_create_tenant(session, tenant or settings.default_tenant_slug)
+    department = await repo.get_department(session, department_id)
+    if department is None or department.tenant_id != tenant_row.id or not department.is_active:
+        # Mismo criterio que ``_transfer_to_department``: un departamento
+        # inactivo no admite operaciones nuevas, sean conversaciones u hotel.
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="El departamento no existe o está inactivo",
+        )
+    return department
+
+
 async def _require_hotel_department(
     session: SessionDep,
     settings: SettingsDep,
@@ -1897,12 +1919,9 @@ async def _require_hotel_department(
     Un departamento inexistente y uno sin acceso responden igual —404—, para no
     filtrar por el código de error qué departamentos existen en el inquilino.
     """
-    tenant_row = await repo.get_or_create_tenant(session, tenant or settings.default_tenant_slug)
-    department = await repo.get_department(session, department_id)
-    if department is None or department.tenant_id != tenant_row.id:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="El departamento no existe"
-        )
+    department = await _load_hotel_department(
+        session, settings, department_id=department_id, tenant=tenant
+    )
     allowed = principal.department_ids
     if allowed is not None and department.id not in allowed:
         raise HTTPException(
@@ -1925,12 +1944,9 @@ async def get_hotel_module(
     tenant: str | None = None,
 ) -> HotelModuleOut:
     """Si el módulo de hotel está activo para este departamento. Reservado a administración."""
-    tenant_row = await repo.get_or_create_tenant(session, tenant or settings.default_tenant_slug)
-    department = await repo.get_department(session, department_id)
-    if department is None or department.tenant_id != tenant_row.id:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="El departamento no existe"
-        )
+    department = await _load_hotel_department(
+        session, settings, department_id=department_id, tenant=tenant
+    )
     return HotelModuleOut(enabled=repo.hotel_module_enabled(department))
 
 
@@ -1948,16 +1964,13 @@ async def set_hotel_module(
     El resto de ramas de negocio del inquilino no se ven afectadas: cada
     departamento activa el módulo por su cuenta.
     """
-    tenant_row = await repo.get_or_create_tenant(session, tenant or settings.default_tenant_slug)
-    department = await repo.get_department(session, department_id)
-    if department is None or department.tenant_id != tenant_row.id:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="El departamento no existe"
-        )
+    department = await _load_hotel_department(
+        session, settings, department_id=department_id, tenant=tenant
+    )
     await repo.set_hotel_module_enabled(session, department=department, enabled=body.enabled)
     await repo.record_audit(
         session,
-        tenant_id=tenant_row.id,
+        tenant_id=department.tenant_id,
         actor=principal.audit_actor,
         action="hotel_module_toggled",
         subject_type="department",
@@ -2116,6 +2129,11 @@ async def create_hotel_room(
     room_type = await repo.get_hotel_room_type(session, body.room_type_id)
     if room_type is None or room_type.department_id != department.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="La categoría no existe")
+    if not room_type.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="La categoría está retirada; no admite habitaciones nuevas",
+        )
     if await repo.find_hotel_room_by_code(session, department_id=department.id, code=body.code):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail="Ya existe una habitación con ese número"
@@ -2382,6 +2400,11 @@ async def create_hotel_reservation(
     room = await repo.get_hotel_room(session, body.room_id)
     if room is None or room.department_id != department.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="La habitación no existe")
+    if not room.room_type.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="La categoría de esta habitación está retirada",
+        )
     if room.status != "available":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

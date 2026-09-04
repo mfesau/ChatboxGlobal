@@ -1578,7 +1578,14 @@ async def rate_plan_for_stay(
     session: AsyncSession, *, room_type_id: uuid.UUID, check_in: date
 ) -> HotelRatePlan | None:
     """La tarifa vigente el día de entrada: la de temporada si aplica, si no
-    la que no tiene fechas fijadas (la tarifa por omisión de la categoría)."""
+    la que no tiene fechas fijadas (la tarifa por omisión de la categoría).
+
+    Si hay más de una candidata para el mismo día —dos tarifas de temporada
+    solapadas, o dos «por omisión» cargadas por error— se elige la creada más
+    recientemente: un empate no puede quedar librado al orden que devuelva la
+    base de datos, porque entonces el precio aplicado cambiaría de una
+    llamada a otra sin que nada en los datos lo explique.
+    """
     stmt = (
         select(HotelRatePlan)
         .where(
@@ -1587,20 +1594,35 @@ async def rate_plan_for_stay(
             or_(HotelRatePlan.ends_on.is_(None), HotelRatePlan.ends_on > check_in),
         )
         # Una tarifa de temporada (con fechas) manda sobre la de omisión.
-        .order_by(HotelRatePlan.starts_on.is_(None), HotelRatePlan.starts_on.desc())
+        .order_by(
+            HotelRatePlan.starts_on.is_(None),
+            HotelRatePlan.starts_on.desc(),
+            HotelRatePlan.created_at.desc(),
+        )
         .limit(1)
     )
     return (await session.execute(stmt)).scalars().first()
 
 
 # -- Reservas -----------------------------------------------------------------
+def _overlapping_reservations_clause(check_in: date, check_out: date) -> list[Any]:
+    """Condiciones comunes de solapamiento: reserva activa con fechas cruzadas.
+
+    Las canceladas o "no show" no cuentan como ocupación. Compartida entre
+    ``hotel_room_has_overlap`` y ``list_available_hotel_rooms`` para que ambas
+    definan «solapado» exactamente igual — si una cambiara sin la otra, la
+    disponibilidad mostrada dejaría de coincidir con lo que de verdad se puede
+    reservar.
+    """
+    return [
+        HotelReservation.status.notin_(("cancelled", "no_show")),
+        HotelReservation.check_in < check_out,
+        HotelReservation.check_out > check_in,
+    ]
+
+
 async def hotel_room_has_overlap(
-    session: AsyncSession,
-    *,
-    room_id: uuid.UUID,
-    check_in: date,
-    check_out: date,
-    exclude_reservation_id: uuid.UUID | None = None,
+    session: AsyncSession, *, room_id: uuid.UUID, check_in: date, check_out: date
 ) -> bool:
     """Si ya hay una reserva activa que se solapa con ese rango en esa habitación.
 
@@ -1611,12 +1633,8 @@ async def hotel_room_has_overlap(
     """
     stmt = select(HotelReservation.id).where(
         HotelReservation.room_id == room_id,
-        HotelReservation.status.notin_(("cancelled", "no_show")),
-        HotelReservation.check_in < check_out,
-        HotelReservation.check_out > check_in,
+        *_overlapping_reservations_clause(check_in, check_out),
     )
-    if exclude_reservation_id is not None:
-        stmt = stmt.where(HotelReservation.id != exclude_reservation_id)
     return (await session.execute(stmt.limit(1))).first() is not None
 
 
@@ -1631,9 +1649,7 @@ async def list_available_hotel_rooms(
     """Habitaciones sin ninguna reserva activa que se solape con el rango pedido."""
     overlapping = select(HotelReservation.room_id).where(
         HotelReservation.department_id == department_id,
-        HotelReservation.status.notin_(("cancelled", "no_show")),
-        HotelReservation.check_in < check_out,
-        HotelReservation.check_out > check_in,
+        *_overlapping_reservations_clause(check_in, check_out),
     )
     stmt = (
         select(HotelRoom)

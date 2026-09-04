@@ -3299,3 +3299,112 @@ async def test_an_agent_without_department_access_cannot_use_its_hotel_module(as
     assert (
         await ana.get(f"/api/departments/{department['id']}/hotel/room-types")
     ).status_code == 200
+
+
+async def test_a_seasonal_rate_wins_over_the_default_when_it_applies(as_agent, team):
+    admin = await as_agent(team["admin"]["email"])
+    department = await _hotel_department(admin, "Hotel 7")
+    room_type = (
+        await admin.post(
+            f"/api/departments/{department['id']}/hotel/room-types",
+            json={"name": "Doble", "capacity": 2},
+        )
+    ).json()
+    await admin.post(
+        f"/api/departments/{department['id']}/hotel/rate-plans",
+        json={
+            "room_type_id": room_type["id"],
+            "name": "Tarifa base",
+            "nightly_price_cents": 5_000,
+        },
+    )
+    await admin.post(
+        f"/api/departments/{department['id']}/hotel/rate-plans",
+        json={
+            "room_type_id": room_type["id"],
+            "name": "Temporada alta",
+            "starts_on": "2026-12-20",
+            "ends_on": "2027-01-05",
+            "nightly_price_cents": 9_000,
+        },
+    )
+
+    # Entra en temporada alta: se aplica esa tarifa, no la base.
+    room_a = (
+        await admin.post(
+            f"/api/departments/{department['id']}/hotel/rooms",
+            json={"room_type_id": room_type["id"], "code": "501"},
+        )
+    ).json()
+    high_season = await admin.post(
+        f"/api/departments/{department['id']}/hotel/reservations",
+        json={
+            "room_id": room_a["id"],
+            "guest_name": "Persona Huésped",
+            "check_in": "2026-12-24",
+            "check_out": "2026-12-27",
+        },
+    )
+    assert high_season.status_code == 201
+    assert high_season.json()["nightly_price_cents"] == 9_000
+
+    # Fuera de temporada alta, en la misma categoría: se aplica la tarifa base.
+    room_b = (
+        await admin.post(
+            f"/api/departments/{department['id']}/hotel/rooms",
+            json={"room_type_id": room_type["id"], "code": "502"},
+        )
+    ).json()
+    low_season = await admin.post(
+        f"/api/departments/{department['id']}/hotel/reservations",
+        json={
+            "room_id": room_b["id"],
+            "guest_name": "Otra Persona",
+            "check_in": "2026-03-01",
+            "check_out": "2026-03-03",
+        },
+    )
+    assert low_season.status_code == 201
+    assert low_season.json()["nightly_price_cents"] == 5_000
+
+
+async def test_a_retired_room_type_rejects_new_rooms_and_new_reservations(as_agent, team):
+    admin = await as_agent(team["admin"]["email"])
+    department = await _hotel_department(admin, "Hotel 8")
+    room = await _hotel_room(admin, department["id"])
+    room_type_id = room["room_type_id"]
+
+    retired = await admin.patch(
+        f"/api/departments/{department['id']}/hotel/room-types/{room_type_id}",
+        json={"is_active": False},
+    )
+    assert retired.status_code == 200
+
+    rejected_room = await admin.post(
+        f"/api/departments/{department['id']}/hotel/rooms",
+        json={"room_type_id": room_type_id, "code": "999"},
+    )
+    assert rejected_room.status_code == 409
+
+    rejected_reservation = await admin.post(
+        f"/api/departments/{department['id']}/hotel/reservations",
+        json={
+            "room_id": room["id"],
+            "guest_name": "Persona Huésped",
+            "check_in": "2027-01-10",
+            "check_out": "2027-01-12",
+        },
+    )
+    assert rejected_reservation.status_code == 409
+
+
+async def test_hotel_operations_are_rejected_on_an_inactive_department(as_agent, team):
+    admin = await as_agent(team["admin"]["email"])
+    department = await _hotel_department(admin, "Hotel 9")
+
+    async with session_scope() as session:
+        row = await repo.get_department(session, uuid.UUID(department["id"]))
+        row.is_active = False
+
+    response = await admin.get(f"/api/departments/{department['id']}/hotel/room-types")
+    assert response.status_code == 404
