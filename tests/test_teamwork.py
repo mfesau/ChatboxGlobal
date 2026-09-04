@@ -12,7 +12,7 @@ import json
 import urllib.parse
 import uuid
 from collections.abc import AsyncIterator, Callable
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any, ClassVar
 
@@ -3571,3 +3571,269 @@ async def test_hotel_tools_are_only_offered_once_the_module_is_active(anonymous,
             await handler._available_tools(_tool_ctx(session, conversation))
             == hotel_booking.HOTEL_TOOLS
         )
+
+
+# --------------------------------------------------------------------------- #
+# Módulo Hotel: edición, aviso de pendientes, contactos y reporte
+# --------------------------------------------------------------------------- #
+async def _create_hotel_reservation(
+    admin: httpx.AsyncClient,
+    department_id: str,
+    *,
+    room_id: str,
+    check_in: str,
+    check_out: str,
+    guest_name: str = "Persona Huésped",
+    **extra,
+) -> dict:
+    body = {
+        "room_id": room_id,
+        "guest_name": guest_name,
+        "check_in": check_in,
+        "check_out": check_out,
+        **extra,
+    }
+    response = await admin.post(f"/api/departments/{department_id}/hotel/reservations", json=body)
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+async def test_editing_a_reservation_changes_its_dates_and_room(as_agent, team):
+    admin = await as_agent(team["admin"]["email"])
+    department = await _hotel_department(admin, "Hotel 10")
+    room_a = await _hotel_room(admin, department["id"], code="a1")
+    room_b = await _hotel_room(admin, department["id"], code="b1")
+
+    reservation = await _create_hotel_reservation(
+        admin, department["id"], room_id=room_a["id"], check_in="2026-06-01", check_out="2026-06-03"
+    )
+
+    edited = await admin.patch(
+        f"/api/departments/{department['id']}/hotel/reservations/{reservation['id']}",
+        json={"room_id": room_b["id"], "check_in": "2026-06-05", "check_out": "2026-06-08"},
+    )
+    assert edited.status_code == 200, edited.text
+    body = edited.json()
+    assert body["room_id"] == room_b["id"]
+    assert body["check_in"] == "2026-06-05"
+    assert body["check_out"] == "2026-06-08"
+
+    # La habitación original quedó libre en las fechas de antes.
+    free = await admin.get(
+        f"/api/departments/{department['id']}/hotel/availability",
+        params={"check_in": "2026-06-01", "check_out": "2026-06-03"},
+    )
+    assert room_a["id"] in ids(free.json())
+
+
+async def test_editing_a_reservation_does_not_reject_itself_as_an_overlap(as_agent, team):
+    admin = await as_agent(team["admin"]["email"])
+    department = await _hotel_department(admin, "Hotel 11")
+    room = await _hotel_room(admin, department["id"])
+
+    reservation = await _create_hotel_reservation(
+        admin, department["id"], room_id=room["id"], check_in="2026-07-01", check_out="2026-07-04"
+    )
+
+    # Mismo cuarto, fechas que se solapan con las que ya tenía esta misma
+    # reserva: no debería chocar contra sí misma.
+    edited = await admin.patch(
+        f"/api/departments/{department['id']}/hotel/reservations/{reservation['id']}",
+        json={"check_in": "2026-07-02", "check_out": "2026-07-05"},
+    )
+    assert edited.status_code == 200, edited.text
+
+
+async def test_editing_a_reservation_rejects_an_overlap_with_another_reservation(as_agent, team):
+    admin = await as_agent(team["admin"]["email"])
+    department = await _hotel_department(admin, "Hotel 12")
+    room = await _hotel_room(admin, department["id"])
+
+    await _create_hotel_reservation(
+        admin, department["id"], room_id=room["id"], check_in="2026-08-01", check_out="2026-08-05"
+    )
+    other = await _create_hotel_reservation(
+        admin, department["id"], room_id=room["id"], check_in="2026-08-10", check_out="2026-08-12"
+    )
+
+    edited = await admin.patch(
+        f"/api/departments/{department['id']}/hotel/reservations/{other['id']}",
+        json={"check_in": "2026-08-02", "check_out": "2026-08-04"},
+    )
+    assert edited.status_code == 409
+
+
+async def test_a_checked_out_reservation_cannot_be_edited(as_agent, team):
+    admin = await as_agent(team["admin"]["email"])
+    department = await _hotel_department(admin, "Hotel 13")
+    room = await _hotel_room(admin, department["id"])
+    reservation = await _create_hotel_reservation(
+        admin, department["id"], room_id=room["id"], check_in="2026-09-01", check_out="2026-09-03"
+    )
+    status_url = (
+        f"/api/departments/{department['id']}/hotel/reservations/{reservation['id']}/status"
+    )
+    await admin.put(status_url, json={"status": "checked_in"})
+    await admin.put(status_url, json={"status": "checked_out"})
+
+    edited = await admin.patch(
+        f"/api/departments/{department['id']}/hotel/reservations/{reservation['id']}",
+        json={"check_in": "2026-09-10", "check_out": "2026-09-12"},
+    )
+    assert edited.status_code == 409
+
+
+async def test_editing_a_rate_plan_changes_its_price(as_agent, team):
+    admin = await as_agent(team["admin"]["email"])
+    department = await _hotel_department(admin, "Hotel 14")
+    room_type = (
+        await admin.post(
+            f"/api/departments/{department['id']}/hotel/room-types", json={"name": "Doble"}
+        )
+    ).json()
+    rate_plan = (
+        await admin.post(
+            f"/api/departments/{department['id']}/hotel/rate-plans",
+            json={"room_type_id": room_type["id"], "name": "Base", "nightly_price_cents": 5_000},
+        )
+    ).json()
+
+    edited = await admin.patch(
+        f"/api/departments/{department['id']}/hotel/rate-plans/{rate_plan['id']}",
+        json={"nightly_price_cents": 6_500},
+    )
+    assert edited.status_code == 200
+    assert edited.json()["nightly_price_cents"] == 6_500
+
+    listed = (await admin.get(f"/api/departments/{department['id']}/hotel/rate-plans")).json()
+    assert listed[0]["nightly_price_cents"] == 6_500
+
+
+async def test_editing_a_rate_plan_rejects_an_invalid_date_range(as_agent, team):
+    admin = await as_agent(team["admin"]["email"])
+    department = await _hotel_department(admin, "Hotel 15")
+    room_type = (
+        await admin.post(
+            f"/api/departments/{department['id']}/hotel/room-types", json={"name": "Doble"}
+        )
+    ).json()
+    rate_plan = (
+        await admin.post(
+            f"/api/departments/{department['id']}/hotel/rate-plans",
+            json={
+                "room_type_id": room_type["id"],
+                "name": "Temporada",
+                "starts_on": "2026-12-01",
+                "ends_on": "2026-12-20",
+                "nightly_price_cents": 8_000,
+            },
+        )
+    ).json()
+
+    edited = await admin.patch(
+        f"/api/departments/{department['id']}/hotel/rate-plans/{rate_plan['id']}",
+        json={"ends_on": "2026-11-01"},
+    )
+    assert edited.status_code == 422
+
+
+async def test_searching_hotel_contacts_finds_an_existing_one_by_email(
+    anonymous, as_agent, team
+):
+    admin = await as_agent(team["admin"]["email"])
+    department = await _hotel_department(admin, "Hotel 16")
+    await arrive(anonymous, "web-hotel-contacto-1")
+
+    found = await admin.get(
+        f"/api/departments/{department['id']}/hotel/contacts",
+        params={"q": "web-hotel-contacto-1"},
+    )
+    assert found.status_code == 200
+    matches = found.json()
+    assert len(matches) == 1
+    assert matches[0]["primary_email"] == "web-hotel-contacto-1@clientes.local"
+
+
+async def test_a_reservation_can_be_linked_to_an_existing_contact(anonymous, as_agent, team):
+    admin = await as_agent(team["admin"]["email"])
+    department = await _hotel_department(admin, "Hotel 17")
+    room = await _hotel_room(admin, department["id"])
+    await arrive(anonymous, "web-hotel-contacto-2")
+    contacts = (
+        await admin.get(
+            f"/api/departments/{department['id']}/hotel/contacts",
+            params={"q": "web-hotel-contacto-2"},
+        )
+    ).json()
+    contact_id = contacts[0]["id"]
+
+    reservation = await _create_hotel_reservation(
+        admin,
+        department["id"],
+        room_id=room["id"],
+        check_in="2026-10-01",
+        check_out="2026-10-03",
+        contact_id=contact_id,
+    )
+    assert reservation["contact_id"] == contact_id
+
+
+async def test_hotel_report_counts_arrivals_departures_occupancy_and_revenue(as_agent, team):
+    admin = await as_agent(team["admin"]["email"])
+    department = await _hotel_department(admin, "Hotel 18")
+    departing = await _hotel_room(admin, department["id"], code="dep")
+    arriving = await _hotel_room(admin, department["id"], code="arr")
+    staying = await _hotel_room(admin, department["id"], code="sty")
+
+    today = date.today()
+    await _create_hotel_reservation(
+        admin,
+        department["id"],
+        room_id=departing["id"],
+        check_in=(today - timedelta(days=2)).isoformat(),
+        check_out=today.isoformat(),
+        nightly_price_cents=5_000,
+    )
+    await _create_hotel_reservation(
+        admin,
+        department["id"],
+        room_id=arriving["id"],
+        check_in=today.isoformat(),
+        check_out=(today + timedelta(days=3)).isoformat(),
+        nightly_price_cents=5_000,
+    )
+    await _create_hotel_reservation(
+        admin,
+        department["id"],
+        room_id=staying["id"],
+        check_in=(today - timedelta(days=1)).isoformat(),
+        check_out=(today + timedelta(days=1)).isoformat(),
+        nightly_price_cents=5_000,
+    )
+
+    report = await admin.get(f"/api/departments/{department['id']}/hotel/report")
+    assert report.status_code == 200
+    body = report.json()
+    assert body["total_rooms"] == 3
+    assert body["arrivals_today"] == 1
+    assert body["departures_today"] == 1
+    assert body["occupied_rooms"] == 2
+    assert body["pending_count"] == 0
+    # arr: 3 noches dentro de la ventana; sty: 1 noche; dep: 0 (ya terminó).
+    assert body["revenue_next_30_days"] == [{"currency": "USD", "total_cents": 20_000}]
+
+
+async def test_hotel_report_counts_pending_reservations(as_agent, team):
+    admin = await as_agent(team["admin"]["email"])
+    department = await _hotel_department(admin, "Hotel 19")
+    room = await _hotel_room(admin, department["id"])
+    reservation = await _create_hotel_reservation(
+        admin, department["id"], room_id=room["id"], check_in="2026-05-01", check_out="2026-05-03"
+    )
+
+    async with session_scope() as session:
+        row = await repo.get_hotel_reservation(session, uuid.UUID(reservation["id"]))
+        row.status = "pending"
+
+    report = await admin.get(f"/api/departments/{department['id']}/hotel/report")
+    assert report.json()["pending_count"] == 1

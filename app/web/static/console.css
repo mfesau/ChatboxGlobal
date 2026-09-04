@@ -870,6 +870,26 @@
   cursor: pointer;
 }
 
+/* Resumen del hotel: cuatro cifras en fila, cada una con su etiqueta encima. */
+.hotel-report__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 12px;
+  margin: 10px 0;
+}
+
+.hotel-report__grid dt {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.hotel-report__grid dd {
+  margin: 2px 0 0;
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text);
+}
+
 .panel__list-remove:hover {
   color: var(--text);
   background: var(--surface-alt);

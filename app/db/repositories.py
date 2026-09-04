@@ -571,6 +571,29 @@ async def list_contacts(
     return [(row[0], row[1], row[2]) for row in (await session.execute(stmt)).all()]
 
 
+async def search_contacts(
+    session: AsyncSession, *, tenant_id: uuid.UUID, search: str, limit: int = 20
+) -> list[Contact]:
+    """Búsqueda simple por nombre, correo o teléfono, sin las estadísticas de
+    ``list_contacts``: la usa cualquier agente al vincular un contacto
+    conocido a una reserva de hotel, no solo supervisión."""
+    pattern = f"%{search.strip().lower()}%"
+    stmt = (
+        select(Contact)
+        .where(
+            Contact.tenant_id == tenant_id,
+            or_(
+                func.lower(Contact.display_name).like(pattern),
+                func.lower(Contact.primary_email).like(pattern),
+                Contact.primary_phone.like(f"%{search.strip()}%"),
+            ),
+        )
+        .order_by(Contact.display_name)
+        .limit(limit)
+    )
+    return list((await session.execute(stmt)).scalars())
+
+
 async def list_conversations_for_contact(
     session: AsyncSession, contact_id: uuid.UUID
 ) -> list[Conversation]:
@@ -1574,6 +1597,31 @@ async def delete_hotel_rate_plan(session: AsyncSession, rate_plan: HotelRatePlan
     await session.flush()
 
 
+async def update_hotel_rate_plan(
+    session: AsyncSession,
+    *,
+    rate_plan: HotelRatePlan,
+    name: str | None = None,
+    starts_on: date | None = None,
+    ends_on: date | None = None,
+    nightly_price_cents: int | None = None,
+    currency: str | None = None,
+) -> HotelRatePlan:
+    """Cambia solo los campos recibidos; el resto queda igual."""
+    if name is not None:
+        rate_plan.name = name.strip()
+    if starts_on is not None:
+        rate_plan.starts_on = starts_on
+    if ends_on is not None:
+        rate_plan.ends_on = ends_on
+    if nightly_price_cents is not None:
+        rate_plan.nightly_price_cents = nightly_price_cents
+    if currency is not None:
+        rate_plan.currency = currency.upper()
+    await session.flush()
+    return rate_plan
+
+
 async def rate_plan_for_stay(
     session: AsyncSession, *, room_type_id: uuid.UUID, check_in: date
 ) -> HotelRatePlan | None:
@@ -1622,7 +1670,12 @@ def _overlapping_reservations_clause(check_in: date, check_out: date) -> list[An
 
 
 async def hotel_room_has_overlap(
-    session: AsyncSession, *, room_id: uuid.UUID, check_in: date, check_out: date
+    session: AsyncSession,
+    *,
+    room_id: uuid.UUID,
+    check_in: date,
+    check_out: date,
+    exclude_reservation_id: uuid.UUID | None = None,
 ) -> bool:
     """Si ya hay una reserva activa que se solapa con ese rango en esa habitación.
 
@@ -1630,11 +1683,16 @@ async def hotel_room_has_overlap(
     la restricción de exclusión de la migración es la que de verdad impide la
     carrera entre dos peticiones simultáneas — ver
     ``db/migrations/0013_hotel_module.sql``; esta consulta no la sustituye.
+
+    ``exclude_reservation_id`` es para editar una reserva ya existente: no
+    tendría que chocar consigo misma al revalidar sus propias fechas.
     """
     stmt = select(HotelReservation.id).where(
         HotelReservation.room_id == room_id,
         *_overlapping_reservations_clause(check_in, check_out),
     )
+    if exclude_reservation_id is not None:
+        stmt = stmt.where(HotelReservation.id != exclude_reservation_id)
     return (await session.execute(stmt.limit(1))).first() is not None
 
 
@@ -1645,12 +1703,20 @@ async def list_available_hotel_rooms(
     check_in: date,
     check_out: date,
     room_type_id: uuid.UUID | None = None,
+    exclude_reservation_id: uuid.UUID | None = None,
 ) -> list[HotelRoom]:
-    """Habitaciones sin ninguna reserva activa que se solape con el rango pedido."""
+    """Habitaciones sin ninguna reserva activa que se solape con el rango pedido.
+
+    ``exclude_reservation_id`` es para editar una reserva ya existente: sin
+    él, la habitación que esa misma reserva ya ocupa no aparecería libre ni
+    para sus propias fechas, porque chocaría contra sí misma.
+    """
     overlapping = select(HotelReservation.room_id).where(
         HotelReservation.department_id == department_id,
         *_overlapping_reservations_clause(check_in, check_out),
     )
+    if exclude_reservation_id is not None:
+        overlapping = overlapping.where(HotelReservation.id != exclude_reservation_id)
     stmt = (
         select(HotelRoom)
         .where(
@@ -1708,6 +1774,49 @@ async def create_hotel_reservation(
     return reservation
 
 
+async def update_hotel_reservation(
+    session: AsyncSession,
+    *,
+    reservation: HotelReservation,
+    room_id: uuid.UUID,
+    check_in: date,
+    check_out: date,
+    guest_name: str | None = None,
+    guest_phone: str | None = None,
+    guest_email: str | None = None,
+    contact_id: uuid.UUID | None = None,
+    guests: int | None = None,
+    nightly_price_cents: int | None = None,
+    currency: str | None = None,
+    notes: str | None = None,
+) -> HotelReservation:
+    """Corrige los datos de una reserva ya cargada. ``room_id``/fechas siempre
+    se fijan —quien llama ya resolvió a qué valor quedan, sean nuevos o los
+    que ya tenía—; el resto solo cambia si se recibió un valor.
+    """
+    reservation.room_id = room_id
+    reservation.check_in = check_in
+    reservation.check_out = check_out
+    if guest_name is not None:
+        reservation.guest_name = guest_name.strip()
+    if guest_phone is not None:
+        reservation.guest_phone = guest_phone
+    if guest_email is not None:
+        reservation.guest_email = guest_email
+    if contact_id is not None:
+        reservation.contact_id = contact_id
+    if guests is not None:
+        reservation.guests = guests
+    if nightly_price_cents is not None:
+        reservation.nightly_price_cents = nightly_price_cents
+    if currency is not None:
+        reservation.currency = currency.upper()
+    if notes is not None:
+        reservation.notes = notes
+    await session.flush()
+    return reservation
+
+
 async def get_hotel_reservation(
     session: AsyncSession, reservation_id: uuid.UUID
 ) -> HotelReservation | None:
@@ -1750,6 +1859,77 @@ async def set_hotel_reservation_status(
     reservation.status = status
     await session.flush()
     return reservation
+
+
+#: Cuántos días adelante cubre el resumen de ingresos del reporte.
+HOTEL_REPORT_HORIZON_DAYS = 30
+
+
+async def hotel_department_report(
+    session: AsyncSession, *, department_id: uuid.UUID, today: date
+) -> dict[str, Any]:
+    """Resumen operativo del departamento: llegadas y salidas de hoy, cuántas
+    habitaciones están ocupadas ahora mismo, reservas pendientes de confirmar
+    e ingresos de los próximos ``HOTEL_REPORT_HORIZON_DAYS`` días.
+
+    Se calcula en Python sobre las filas ya traídas, y no con ``SUM``/``COUNT``
+    en SQL: son pocas reservas por departamento, y así el prorrateo de
+    ingresos —una reserva que empezó antes de la ventana pero sigue dentro—
+    queda legible en vez de repartido entre varias subconsultas.
+    """
+    total_rooms = await session.scalar(
+        select(func.count())
+        .select_from(HotelRoom)
+        .where(HotelRoom.department_id == department_id)
+    )
+    pending_count = await session.scalar(
+        select(func.count())
+        .select_from(HotelReservation)
+        .where(
+            HotelReservation.department_id == department_id,
+            HotelReservation.status == "pending",
+        )
+    )
+
+    horizon = today + timedelta(days=HOTEL_REPORT_HORIZON_DAYS)
+    stmt = select(HotelReservation).where(
+        HotelReservation.department_id == department_id,
+        HotelReservation.status.notin_(("cancelled", "no_show")),
+        # >= y no > : una salida justo hoy debe seguir contando para
+        # ``departures_today``, aunque ya no sume a ``occupied_rooms`` ni a
+        # los ingresos (eso lo filtran sus propios cálculos, más abajo).
+        HotelReservation.check_out >= today,
+        HotelReservation.check_in < horizon,
+    )
+    reservations = list((await session.execute(stmt)).scalars())
+
+    arrivals_today = sum(1 for row in reservations if row.check_in == today)
+    departures_today = sum(1 for row in reservations if row.check_out == today)
+    occupied_rooms = len(
+        {row.room_id for row in reservations if row.check_in <= today < row.check_out}
+    )
+
+    revenue: dict[str, int] = {}
+    for row in reservations:
+        if row.nightly_price_cents is None:
+            continue
+        nights = (min(row.check_out, horizon) - max(row.check_in, today)).days
+        if nights <= 0:
+            continue
+        revenue[row.currency] = revenue.get(row.currency, 0) + row.nightly_price_cents * nights
+
+    return {
+        "reference_date": today,
+        "arrivals_today": arrivals_today,
+        "departures_today": departures_today,
+        "occupied_rooms": occupied_rooms,
+        "total_rooms": total_rooms or 0,
+        "pending_count": pending_count or 0,
+        "revenue_by_currency": [
+            {"currency": currency, "total_cents": total_cents}
+            for currency, total_cents in sorted(revenue.items())
+        ],
+    }
 
 
 # --------------------------------------------------------------------------- #

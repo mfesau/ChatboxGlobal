@@ -592,7 +592,7 @@
                 </form>
               </section>
               <form class="panel" id="create-rate-plan-form">
-                <h3>Tarifas</h3>
+                <h3 id="rate-plan-form-title">Tarifas</h3>
                 <p class="console__muted">
                   Fechas vacías = tarifa por omisión de la categoría. Con dos
                   tarifas vigentes el mismo día gana la de temporada, o si hay
@@ -607,7 +607,10 @@
                 <label class="panel__field"><span>Hasta (opcional)</span><input type="date" id="new-rate-plan-ends" /></label>
                 <label class="panel__field"><span>Precio por noche</span><input type="number" id="new-rate-plan-price" min="0.01" step="0.01" required /></label>
                 <label class="panel__field"><span>Moneda</span><input type="text" id="new-rate-plan-currency" maxlength="3" value="USD" style="text-transform:uppercase" /></label>
-                <button type="submit" class="send-button">Crear tarifa</button>
+                <button type="submit" class="send-button" id="rate-plan-submit">Crear tarifa</button>
+                <button type="button" class="ghost-button" id="rate-plan-cancel-edit" hidden>
+                  Cancelar edición
+                </button>
                 <div class="table-scroll">
                   <table class="data-table" id="rate-plans-table">
                     <thead><tr><th>Categoría</th><th>Nombre</th><th>Vigencia</th><th>Precio</th><th>Acciones</th></tr></thead>
@@ -746,6 +749,20 @@
           <p class="gate__error" id="hotel-error" hidden></p>
 
           <div id="hotel-body" hidden>
+            <section class="panel" id="hotel-report">
+              <h3>Resumen de hoy</h3>
+              <dl class="hotel-report__grid">
+                <div><dt>Llegadas hoy</dt><dd id="hotel-report-arrivals">—</dd></div>
+                <div><dt>Salidas hoy</dt><dd id="hotel-report-departures">—</dd></div>
+                <div><dt>Ocupación</dt><dd id="hotel-report-occupancy">—</dd></div>
+                <div><dt>Pendientes de confirmar</dt><dd id="hotel-report-pending">—</dd></div>
+              </dl>
+              <p class="console__muted">
+                Ingresos de los próximos 30 días:
+                <span id="hotel-report-revenue">—</span>
+              </p>
+            </section>
+
             <section class="panel">
               <h3>Buscar disponibilidad</h3>
               <form id="hotel-availability-form" class="panel__inline-form">
@@ -757,11 +774,18 @@
             </section>
 
             <form class="panel" id="hotel-reservation-form">
-              <h3>Nueva reserva</h3>
+              <h3 id="hotel-reservation-form-title">Nueva reserva</h3>
               <p class="console__muted">
                 Busque disponibilidad primero: la habitación se elige entre
                 las que quedaron libres para esas fechas.
               </p>
+              <label class="panel__field">
+                <span>Buscar contacto conocido (opcional)</span>
+                <input type="search" id="hotel-contact-search" autocomplete="off"
+                       placeholder="Nombre, teléfono o correo" />
+              </label>
+              <ul class="panel__list" id="hotel-contact-results" hidden></ul>
+              <p class="console__muted" id="hotel-contact-linked" hidden></p>
               <label class="panel__field">
                 <span>Habitación</span>
                 <select id="hotel-reservation-room" required></select>
@@ -771,7 +795,10 @@
               <label class="panel__field"><span>Correo (opcional)</span><input type="email" id="hotel-guest-email" maxlength="254" /></label>
               <label class="panel__field"><span>Personas</span><input type="number" id="hotel-guest-count" min="1" max="20" value="1" /></label>
               <label class="panel__field"><span>Notas (opcional)</span><textarea id="hotel-reservation-notes" rows="2" maxlength="2000"></textarea></label>
-              <button type="submit" class="send-button">Crear reserva</button>
+              <button type="submit" class="send-button" id="hotel-reservation-submit">Crear reserva</button>
+              <button type="button" class="ghost-button" id="hotel-reservation-cancel-edit" hidden>
+                Cancelar edición
+              </button>
             </form>
 
             <section class="panel">

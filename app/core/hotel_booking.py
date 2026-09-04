@@ -222,6 +222,7 @@ async def _create_reservation(ctx: TurnContext, arguments: dict[str, Any]) -> st
             "type": "hotel_reservation_created",
             "conversation_id": str(ctx.conversation.id),
             "reservation_id": str(reservation.id),
+            "department_id": str(department_id),
             "room": room.code,
             "check_in": arguments["check_in"],
             "check_out": arguments["check_out"],

@@ -45,7 +45,7 @@ from app.core.branding import (
     normalize_hex,
     read_accent,
 )
-from app.core.business_hours import SERVICE_SETTINGS_KEY, parse_clock
+from app.core.business_hours import SERVICE_SETTINGS_KEY, parse_clock, resolve_timezone
 from app.core.envelope import (
     Attachment,
     ChannelKind,
@@ -277,6 +277,7 @@ class HotelReservationOut(BaseModel):
     nightly_price_cents: int | None
     currency: str
     notes: str | None
+    contact_id: uuid.UUID | None
     conversation_id: uuid.UUID | None
 
 
@@ -285,6 +286,9 @@ class HotelReservationIn(BaseModel):
     guest_name: str = Field(min_length=1, max_length=160)
     guest_phone: str | None = None
     guest_email: str | None = None
+    #: Vincula la reserva a un contacto ya conocido —encontrado por búsqueda—,
+    #: además del nombre y los datos de contacto sueltos.
+    contact_id: uuid.UUID | None = None
     check_in: date
     check_out: date
     guests: int = Field(default=1, ge=1, le=20)
@@ -302,8 +306,56 @@ class HotelReservationIn(BaseModel):
         return value
 
 
+class HotelReservationPatchIn(BaseModel):
+    """Corrige una reserva ya cargada. Solo se aplican los campos recibidos."""
+
+    room_id: uuid.UUID | None = None
+    check_in: date | None = None
+    check_out: date | None = None
+    guest_name: str | None = Field(default=None, min_length=1, max_length=160)
+    guest_phone: str | None = None
+    guest_email: str | None = None
+    contact_id: uuid.UUID | None = None
+    guests: int | None = Field(default=None, ge=1, le=20)
+    nightly_price_cents: int | None = Field(default=None, gt=0)
+    currency: str | None = Field(default=None, min_length=3, max_length=3)
+    notes: str | None = None
+
+
 class HotelReservationStatusIn(BaseModel):
     status: Literal["confirmed", "checked_in", "checked_out", "cancelled", "no_show"]
+
+
+class HotelRatePlanPatchIn(BaseModel):
+    """Edita una tarifa ya cargada. Solo se aplican los campos recibidos."""
+
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    starts_on: date | None = None
+    ends_on: date | None = None
+    nightly_price_cents: int | None = Field(default=None, gt=0)
+    currency: str | None = Field(default=None, min_length=3, max_length=3)
+
+
+class HotelContactOut(BaseModel):
+    id: uuid.UUID
+    display_name: str | None
+    primary_phone: str | None
+    primary_email: str | None
+
+
+class HotelRevenueOut(BaseModel):
+    currency: str
+    total_cents: int
+
+
+class HotelReportOut(BaseModel):
+    reference_date: str
+    arrivals_today: int
+    departures_today: int
+    occupied_rooms: int
+    total_rooms: int
+    pending_count: int
+    revenue_next_30_days: list[HotelRevenueOut]
 
 
 SHORTCODE_PATTERN = r"^[a-z0-9_-]+$"
@@ -2301,6 +2353,57 @@ async def delete_hotel_rate_plan(
     )
 
 
+@router.patch(
+    "/departments/{department_id}/hotel/rate-plans/{rate_plan_id}",
+    response_model=HotelRatePlanOut,
+)
+async def update_hotel_rate_plan(
+    department_id: uuid.UUID,
+    rate_plan_id: uuid.UUID,
+    body: HotelRatePlanPatchIn,
+    session: SessionDep,
+    settings: SettingsDep,
+    principal: AdminDep,
+    tenant: str | None = None,
+) -> HotelRatePlanOut:
+    """Edita una tarifa ya cargada —por ejemplo, para corregir el precio.
+    Reservado a administración."""
+    department = await _require_hotel_department(
+        session, settings, principal, department_id=department_id, tenant=tenant
+    )
+    rate_plan = await repo.get_hotel_rate_plan(session, rate_plan_id)
+    if rate_plan is None or rate_plan.department_id != department.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="La tarifa no existe")
+
+    starts_on = body.starts_on if body.starts_on is not None else rate_plan.starts_on
+    ends_on = body.ends_on if body.ends_on is not None else rate_plan.ends_on
+    if starts_on is not None and ends_on is not None and ends_on <= starts_on:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="La fecha de fin debe ser posterior a la de inicio",
+        )
+
+    await repo.update_hotel_rate_plan(
+        session,
+        rate_plan=rate_plan,
+        name=body.name,
+        starts_on=body.starts_on,
+        ends_on=body.ends_on,
+        nightly_price_cents=body.nightly_price_cents,
+        currency=body.currency,
+    )
+    await repo.record_audit(
+        session,
+        tenant_id=department.tenant_id,
+        actor=principal.audit_actor,
+        action="hotel_rate_plan_updated",
+        subject_type="hotel_rate_plan",
+        subject_id=str(rate_plan.id),
+        detail={"name": rate_plan.name},
+    )
+    return _hotel_rate_plan_out(rate_plan)
+
+
 def _hotel_reservation_out(row: HotelReservation) -> HotelReservationOut:
     return HotelReservationOut(
         id=row.id,
@@ -2317,6 +2420,7 @@ def _hotel_reservation_out(row: HotelReservation) -> HotelReservationOut:
         nightly_price_cents=row.nightly_price_cents,
         currency=row.currency,
         notes=row.notes,
+        contact_id=row.contact_id,
         conversation_id=row.conversation_id,
     )
 
@@ -2333,6 +2437,9 @@ async def hotel_availability(
     principal: PrincipalDep,
     tenant: str | None = None,
     room_type_id: uuid.UUID | None = None,
+    #: Al editar una reserva, para que su propia habitación no quede excluida
+    #: por chocar contra sí misma en sus propias fechas.
+    exclude_reservation_id: uuid.UUID | None = None,
 ) -> list[HotelRoomOut]:
     """Habitaciones libres —sin ninguna reserva activa que se solape— para un rango de fechas."""
     department = await _require_hotel_department(
@@ -2349,6 +2456,7 @@ async def hotel_availability(
         check_in=check_in,
         check_out=check_out,
         room_type_id=room_type_id,
+        exclude_reservation_id=exclude_reservation_id,
     )
     return [_hotel_room_out(row) for row in rows]
 
@@ -2417,6 +2525,12 @@ async def create_hotel_reservation(
             status_code=status.HTTP_409_CONFLICT,
             detail="La habitación ya está reservada en esas fechas",
         )
+    if body.contact_id is not None:
+        contact = await repo.get_contact(session, body.contact_id)
+        if contact is None or contact.tenant_id != department.tenant_id:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="El contacto no existe"
+            )
 
     price = body.nightly_price_cents
     currency = body.currency
@@ -2436,6 +2550,7 @@ async def create_hotel_reservation(
         guest_name=body.guest_name,
         guest_phone=body.guest_phone,
         guest_email=body.guest_email,
+        contact_id=body.contact_id,
         check_in=body.check_in,
         check_out=body.check_out,
         guests=body.guests,
@@ -2458,6 +2573,113 @@ async def create_hotel_reservation(
             "room": room.code,
             "check_in": body.check_in.isoformat(),
             "check_out": body.check_out.isoformat(),
+        },
+    )
+    return _hotel_reservation_out(reservation)
+
+
+@router.patch(
+    "/departments/{department_id}/hotel/reservations/{reservation_id}",
+    response_model=HotelReservationOut,
+)
+async def update_hotel_reservation(
+    department_id: uuid.UUID,
+    reservation_id: uuid.UUID,
+    body: HotelReservationPatchIn,
+    session: SessionDep,
+    settings: SettingsDep,
+    principal: PrincipalDep,
+    tenant: str | None = None,
+) -> HotelReservationOut:
+    """Corrige fechas, habitación o datos del huésped de una reserva que
+    todavía no llegó. Cualquier persona con acceso al departamento puede
+    hacerlo, igual que crearla.
+    """
+    department = await _require_hotel_department(
+        session, settings, principal, department_id=department_id, tenant=tenant
+    )
+    reservation = await repo.get_hotel_reservation(session, reservation_id)
+    if reservation is None or reservation.department_id != department.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="La reserva no existe")
+    if reservation.status not in {"pending", "confirmed"}:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Solo se puede editar una reserva pendiente o confirmada",
+        )
+
+    check_in = body.check_in if body.check_in is not None else reservation.check_in
+    check_out = body.check_out if body.check_out is not None else reservation.check_out
+    if check_out <= check_in:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="La salida debe ser posterior a la entrada",
+        )
+
+    room = reservation.room
+    if body.room_id is not None and body.room_id != reservation.room_id:
+        room = await repo.get_hotel_room(session, body.room_id)
+        if room is None or room.department_id != department.id:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="La habitación no existe"
+            )
+        if not room.room_type.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="La categoría de esta habitación está retirada",
+            )
+        if room.status != "available":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="La habitación no está disponible (en mantenimiento o fuera de servicio)",
+            )
+
+    if await repo.hotel_room_has_overlap(
+        session,
+        room_id=room.id,
+        check_in=check_in,
+        check_out=check_out,
+        exclude_reservation_id=reservation.id,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="La habitación ya está reservada en esas fechas",
+        )
+    if body.contact_id is not None:
+        contact = await repo.get_contact(session, body.contact_id)
+        if contact is None or contact.tenant_id != department.tenant_id:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="El contacto no existe"
+            )
+
+    await repo.update_hotel_reservation(
+        session,
+        reservation=reservation,
+        room_id=room.id,
+        check_in=check_in,
+        check_out=check_out,
+        guest_name=body.guest_name,
+        guest_phone=body.guest_phone,
+        guest_email=body.guest_email,
+        contact_id=body.contact_id,
+        guests=body.guests,
+        nightly_price_cents=body.nightly_price_cents,
+        currency=body.currency,
+        notes=body.notes,
+    )
+    # Por si cambió de habitación: se evita una carga perezosa, que en una
+    # sesión async fallaría al serializar la respuesta.
+    reservation.room = room
+    await repo.record_audit(
+        session,
+        tenant_id=department.tenant_id,
+        actor=principal.audit_actor,
+        action="hotel_reservation_updated",
+        subject_type="hotel_reservation",
+        subject_id=str(reservation.id),
+        detail={
+            "room": room.code,
+            "check_in": check_in.isoformat(),
+            "check_out": check_out.isoformat(),
         },
     )
     return _hotel_reservation_out(reservation)
@@ -2514,6 +2736,62 @@ async def set_hotel_reservation_status(
         detail={"from": previous_status, "to": body.status},
     )
     return _hotel_reservation_out(reservation)
+
+
+@router.get("/departments/{department_id}/hotel/contacts", response_model=list[HotelContactOut])
+async def search_hotel_contacts(
+    department_id: uuid.UUID,
+    q: str,
+    session: SessionDep,
+    settings: SettingsDep,
+    principal: PrincipalDep,
+    tenant: str | None = None,
+) -> list[HotelContactOut]:
+    """Busca un contacto ya conocido por nombre, teléfono o correo, para
+    vincularlo a una reserva sin volver a escribir sus datos a mano.
+    """
+    department = await _require_hotel_department(
+        session, settings, principal, department_id=department_id, tenant=tenant
+    )
+    if not q.strip():
+        return []
+    contacts = await repo.search_contacts(session, tenant_id=department.tenant_id, search=q)
+    return [
+        HotelContactOut(
+            id=c.id,
+            display_name=c.display_name,
+            primary_phone=c.primary_phone,
+            primary_email=c.primary_email,
+        )
+        for c in contacts
+    ]
+
+
+@router.get("/departments/{department_id}/hotel/report", response_model=HotelReportOut)
+async def hotel_report(
+    department_id: uuid.UUID,
+    session: SessionDep,
+    settings: SettingsDep,
+    principal: PrincipalDep,
+    tenant: str | None = None,
+) -> HotelReportOut:
+    """Resumen operativo: llegadas y salidas de hoy, ocupación e ingresos de
+    los próximos 30 días, en el huso horario del departamento.
+    """
+    department = await _require_hotel_department(
+        session, settings, principal, department_id=department_id, tenant=tenant
+    )
+    today = utcnow().astimezone(resolve_timezone(department.timezone)).date()
+    report = await repo.hotel_department_report(session, department_id=department.id, today=today)
+    return HotelReportOut(
+        reference_date=report["reference_date"].isoformat(),
+        arrivals_today=report["arrivals_today"],
+        departures_today=report["departures_today"],
+        occupied_rooms=report["occupied_rooms"],
+        total_rooms=report["total_rooms"],
+        pending_count=report["pending_count"],
+        revenue_next_30_days=[HotelRevenueOut(**row) for row in report["revenue_by_currency"]],
+    )
 
 
 # --------------------------------------------------------------------------- #

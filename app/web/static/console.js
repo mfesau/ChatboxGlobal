@@ -170,17 +170,31 @@
     newRatePlanPrice: document.getElementById("new-rate-plan-price"),
     newRatePlanCurrency: document.getElementById("new-rate-plan-currency"),
     ratePlansTable: document.querySelector("#rate-plans-table tbody"),
+    ratePlanFormTitle: document.getElementById("rate-plan-form-title"),
+    ratePlanSubmit: document.getElementById("rate-plan-submit"),
+    ratePlanCancelEdit: document.getElementById("rate-plan-cancel-edit"),
     hotelButton: document.getElementById("hotel-button"),
     hotelPanel: document.getElementById("hotel-panel"),
     hotelClose: document.getElementById("hotel-close"),
     hotelDepartment: document.getElementById("hotel-department"),
     hotelError: document.getElementById("hotel-error"),
     hotelBody: document.getElementById("hotel-body"),
+    hotelReportArrivals: document.getElementById("hotel-report-arrivals"),
+    hotelReportDepartures: document.getElementById("hotel-report-departures"),
+    hotelReportOccupancy: document.getElementById("hotel-report-occupancy"),
+    hotelReportPending: document.getElementById("hotel-report-pending"),
+    hotelReportRevenue: document.getElementById("hotel-report-revenue"),
     hotelAvailabilityForm: document.getElementById("hotel-availability-form"),
     hotelCheckIn: document.getElementById("hotel-check-in"),
     hotelCheckOut: document.getElementById("hotel-check-out"),
     hotelAvailabilityList: document.getElementById("hotel-availability-list"),
     hotelReservationForm: document.getElementById("hotel-reservation-form"),
+    hotelReservationFormTitle: document.getElementById("hotel-reservation-form-title"),
+    hotelReservationSubmit: document.getElementById("hotel-reservation-submit"),
+    hotelReservationCancelEdit: document.getElementById("hotel-reservation-cancel-edit"),
+    hotelContactSearch: document.getElementById("hotel-contact-search"),
+    hotelContactResults: document.getElementById("hotel-contact-results"),
+    hotelContactLinked: document.getElementById("hotel-contact-linked"),
     hotelReservationRoom: document.getElementById("hotel-reservation-room"),
     hotelGuestName: document.getElementById("hotel-guest-name"),
     hotelGuestPhone: document.getElementById("hotel-guest-phone"),
@@ -2426,6 +2440,8 @@
   }
 
   let hotelAdminRoomTypes = [];
+  // Nulo = el formulario de tarifas crea una nueva; con id, corrige esta.
+  let editingRatePlanId = null;
 
   function fillRoomTypeSelect(select) {
     select.textContent = "";
@@ -2551,6 +2567,13 @@
       row.appendChild(cell);
     });
     const actionsCell = document.createElement("td");
+    const edit = document.createElement("button");
+    edit.type = "button";
+    edit.className = "ghost-button";
+    edit.textContent = "Editar";
+    edit.addEventListener("click", () => startEditingRatePlan(ratePlan));
+    actionsCell.appendChild(edit);
+
     const remove = document.createElement("button");
     remove.type = "button";
     remove.className = "ghost-button ghost-button--danger";
@@ -2562,6 +2585,9 @@
           `/api/departments/${dom.hotelAdminDepartment.value}/hotel/rate-plans/${ratePlan.id}`,
           { method: "DELETE" },
         );
+        if (editingRatePlanId === ratePlan.id) {
+          cancelEditingRatePlan();
+        }
         await loadHotelRatePlans();
       } catch (error) {
         showAdminError(error.message);
@@ -2571,6 +2597,34 @@
     row.appendChild(actionsCell);
     return row;
   }
+
+  function startEditingRatePlan(ratePlan) {
+    editingRatePlanId = ratePlan.id;
+    dom.newRatePlanTypeSelect.value = ratePlan.room_type_id;
+    // La categoría no se puede cambiar al editar: una tarifa pertenece a una
+    // sola, igual que una habitación. Queda a la vista, no en blanco.
+    dom.newRatePlanTypeSelect.disabled = true;
+    dom.newRatePlanName.value = ratePlan.name;
+    dom.newRatePlanStarts.value = ratePlan.starts_on || "";
+    dom.newRatePlanEnds.value = ratePlan.ends_on || "";
+    dom.newRatePlanPrice.value = (ratePlan.nightly_price_cents / 100).toFixed(2);
+    dom.newRatePlanCurrency.value = ratePlan.currency;
+    dom.ratePlanFormTitle.textContent = "Editar tarifa";
+    dom.ratePlanSubmit.textContent = "Guardar cambios";
+    dom.ratePlanCancelEdit.hidden = false;
+  }
+
+  function cancelEditingRatePlan() {
+    editingRatePlanId = null;
+    dom.createRatePlanForm.reset();
+    dom.newRatePlanTypeSelect.disabled = false;
+    dom.newRatePlanCurrency.value = "USD";
+    dom.ratePlanFormTitle.textContent = "Tarifas";
+    dom.ratePlanSubmit.textContent = "Crear tarifa";
+    dom.ratePlanCancelEdit.hidden = true;
+  }
+
+  dom.ratePlanCancelEdit.addEventListener("click", cancelEditingRatePlan);
 
   async function loadHotelRatePlans() {
     const departmentId = dom.hotelAdminDepartment.value;
@@ -2589,6 +2643,7 @@
     showAdminError("");
     dom.hotelAdminModuleField.hidden = true;
     dom.hotelAdminSetup.hidden = true;
+    cancelEditingRatePlan();
     const departmentId = dom.hotelAdminDepartment.value;
     if (!departmentId) {
       return;
@@ -2673,22 +2728,32 @@
       showAdminError("El precio debe ser mayor que cero.");
       return;
     }
+    const body = {
+      name: dom.newRatePlanName.value.trim(),
+      starts_on: dom.newRatePlanStarts.value || null,
+      ends_on: dom.newRatePlanEnds.value || null,
+      nightly_price_cents: Math.round(price * 100),
+      currency: (dom.newRatePlanCurrency.value || "USD").toUpperCase(),
+    };
     try {
-      await api(`/api/departments/${dom.hotelAdminDepartment.value}/hotel/rate-plans`, {
-        method: "POST",
-        body: JSON.stringify({
-          room_type_id: dom.newRatePlanTypeSelect.value,
-          name: dom.newRatePlanName.value.trim(),
-          starts_on: dom.newRatePlanStarts.value || null,
-          ends_on: dom.newRatePlanEnds.value || null,
-          nightly_price_cents: Math.round(price * 100),
-          currency: (dom.newRatePlanCurrency.value || "USD").toUpperCase(),
-        }),
-      });
-      dom.createRatePlanForm.reset();
-      dom.newRatePlanCurrency.value = "USD";
-      await loadHotelRatePlans();
-      setStatus("Tarifa creada.");
+      if (editingRatePlanId) {
+        await api(
+          `/api/departments/${dom.hotelAdminDepartment.value}/hotel/rate-plans/${editingRatePlanId}`,
+          { method: "PATCH", body: JSON.stringify(body) },
+        );
+        cancelEditingRatePlan();
+        await loadHotelRatePlans();
+        setStatus("Tarifa actualizada.");
+      } else {
+        await api(`/api/departments/${dom.hotelAdminDepartment.value}/hotel/rate-plans`, {
+          method: "POST",
+          body: JSON.stringify({ ...body, room_type_id: dom.newRatePlanTypeSelect.value }),
+        });
+        dom.createRatePlanForm.reset();
+        dom.newRatePlanCurrency.value = "USD";
+        await loadHotelRatePlans();
+        setStatus("Tarifa creada.");
+      }
     } catch (error) {
       showAdminError(error.message);
     }
@@ -3134,6 +3199,13 @@
     no_show: [],
   };
 
+  // Nulo = el formulario de abajo crea una reserva; con id, corrige esta.
+  let editingReservationId = null;
+  // Contacto elegido en el buscador, para vincularlo a la reserva además de
+  // copiarle nombre/teléfono/correo. Se limpia junto con el formulario.
+  let hotelSelectedContactId = null;
+  let hotelContactSearchTimer = null;
+
   function showHotelError(message) {
     dom.hotelError.textContent = message;
     dom.hotelError.hidden = !message;
@@ -3150,6 +3222,11 @@
       check_in: dom.hotelCheckIn.value,
       check_out: dom.hotelCheckOut.value,
     });
+    // Al editar, la habitación que la propia reserva ya ocupa no debe
+    // excluirse por chocar contra sí misma en sus propias fechas.
+    if (editingReservationId) {
+      query.set("exclude_reservation_id", editingReservationId);
+    }
     try {
       const rooms = await api(`/api/departments/${departmentId}/hotel/availability?${query}`);
       if (rooms.length === 0) {
@@ -3174,6 +3251,87 @@
     }
   }
 
+  function formatHotelRevenue(revenue) {
+    if (!revenue || revenue.length === 0) {
+      return "sin reservas con precio";
+    }
+    return revenue.map((row) => formatMoney(row.total_cents, row.currency)).join(" + ");
+  }
+
+  async function loadHotelReport() {
+    const departmentId = dom.hotelDepartment.value;
+    try {
+      const report = await api(`/api/departments/${departmentId}/hotel/report`);
+      dom.hotelReportArrivals.textContent = report.arrivals_today;
+      dom.hotelReportDepartures.textContent = report.departures_today;
+      dom.hotelReportOccupancy.textContent = `${report.occupied_rooms} / ${report.total_rooms}`;
+      dom.hotelReportPending.textContent = report.pending_count;
+      dom.hotelReportRevenue.textContent = formatHotelRevenue(report.revenue_next_30_days);
+    } catch {
+      // El resumen es un agregado, no algo bloqueante: si falla, el resto
+      // del panel —disponibilidad, reservas— sigue funcionando igual.
+      dom.hotelReportArrivals.textContent = "—";
+      dom.hotelReportDepartures.textContent = "—";
+      dom.hotelReportOccupancy.textContent = "—";
+      dom.hotelReportPending.textContent = "—";
+      dom.hotelReportRevenue.textContent = "—";
+    }
+  }
+
+  function setHotelContactLink(contact) {
+    hotelSelectedContactId = contact ? contact.id : null;
+    if (!contact) {
+      dom.hotelContactLinked.hidden = true;
+      dom.hotelContactLinked.textContent = "";
+      return;
+    }
+    dom.hotelGuestName.value = contact.display_name || dom.hotelGuestName.value;
+    dom.hotelGuestPhone.value = contact.primary_phone || dom.hotelGuestPhone.value;
+    dom.hotelGuestEmail.value = contact.primary_email || dom.hotelGuestEmail.value;
+    dom.hotelContactLinked.hidden = false;
+    dom.hotelContactLinked.textContent =
+      `Vinculado a ${contact.display_name || contact.primary_email || contact.primary_phone}.`;
+    dom.hotelContactResults.hidden = true;
+    dom.hotelContactResults.textContent = "";
+    dom.hotelContactSearch.value = "";
+  }
+
+  async function searchHotelContacts(term) {
+    dom.hotelContactResults.textContent = "";
+    if (!term) {
+      dom.hotelContactResults.hidden = true;
+      return;
+    }
+    try {
+      const matches = await api(
+        `/api/departments/${dom.hotelDepartment.value}/hotel/contacts?q=${encodeURIComponent(term)}`,
+      );
+      if (matches.length === 0) {
+        const empty = document.createElement("li");
+        empty.className = "console__muted";
+        empty.textContent = "Sin coincidencias.";
+        dom.hotelContactResults.appendChild(empty);
+      } else {
+        matches.forEach((contact) => {
+          const item = document.createElement("li");
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "ghost-button";
+          const label = [contact.display_name, contact.primary_phone, contact.primary_email]
+            .filter(Boolean)
+            .join(" · ");
+          button.textContent = label || "(sin datos)";
+          button.addEventListener("click", () => setHotelContactLink(contact));
+          item.appendChild(button);
+          dom.hotelContactResults.appendChild(item);
+        });
+      }
+      dom.hotelContactResults.hidden = false;
+    } catch (error) {
+      showHotelError(error.message);
+    }
+  }
+
   function buildHotelReservationRow(reservation) {
     const row = document.createElement("tr");
     [
@@ -3190,6 +3348,18 @@
     });
 
     const actionsCell = document.createElement("td");
+
+    // Solo tiene sentido corregir fechas u habitación mientras la estadía
+    // todavía no arrancó; una vez con check-in o cerrada, ya pasó.
+    if (reservation.status === "pending" || reservation.status === "confirmed") {
+      const edit = document.createElement("button");
+      edit.type = "button";
+      edit.className = "ghost-button";
+      edit.textContent = "Editar";
+      edit.addEventListener("click", () => startEditingReservation(reservation));
+      actionsCell.appendChild(edit);
+    }
+
     (HOTEL_STATUS_TRANSITIONS[reservation.status] || []).forEach(([nextStatus, label]) => {
       const button = document.createElement("button");
       button.type = "button";
@@ -3202,8 +3372,12 @@
             `/api/departments/${dom.hotelDepartment.value}/hotel/reservations/${reservation.id}/status`,
             { method: "PUT", body: JSON.stringify({ status: nextStatus }) },
           );
+          if (editingReservationId === reservation.id) {
+            cancelEditingReservation();
+          }
           await loadHotelReservations();
           await loadHotelAvailability();
+          await loadHotelReport();
           setStatus(`Reserva: ${HOTEL_STATUS_LABELS[nextStatus] || nextStatus}.`);
         } catch (error) {
           showHotelError(error.message);
@@ -3231,6 +3405,47 @@
     return row;
   }
 
+  async function startEditingReservation(reservation) {
+    editingReservationId = reservation.id;
+    dom.hotelCheckIn.value = reservation.check_in;
+    dom.hotelCheckOut.value = reservation.check_out;
+    dom.hotelGuestName.value = reservation.guest_name;
+    dom.hotelGuestPhone.value = reservation.guest_phone || "";
+    dom.hotelGuestEmail.value = reservation.guest_email || "";
+    dom.hotelGuestCount.value = reservation.guests;
+    dom.hotelReservationNotes.value = reservation.notes || "";
+    // Los datos del huésped ya vienen de la reserva; a diferencia de
+    // setHotelContactLink (pensada para el buscador), aquí no hay que
+    // completar nombre/teléfono/correo con los del contacto.
+    hotelSelectedContactId = reservation.contact_id || null;
+    dom.hotelContactLinked.hidden = !reservation.contact_id;
+    dom.hotelContactLinked.textContent = reservation.contact_id
+      ? "Vinculado al contacto de esta reserva."
+      : "";
+    dom.hotelReservationFormTitle.textContent = "Editar reserva";
+    dom.hotelReservationSubmit.textContent = "Guardar cambios";
+    dom.hotelReservationCancelEdit.hidden = false;
+    await loadHotelAvailability();
+    // Sin esto, el navegador selecciona la primera opción de la lista —que
+    // solo coincide con la habitación actual por casualidad del orden
+    // alfabético—, no la que esta reserva de verdad tiene asignada.
+    dom.hotelReservationRoom.value = reservation.room_id;
+    dom.hotelReservationForm.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  function cancelEditingReservation() {
+    editingReservationId = null;
+    dom.hotelReservationForm.reset();
+    dom.hotelGuestCount.value = 1;
+    setHotelContactLink(null);
+    dom.hotelReservationFormTitle.textContent = "Nueva reserva";
+    dom.hotelReservationSubmit.textContent = "Crear reserva";
+    dom.hotelReservationCancelEdit.hidden = true;
+    loadHotelAvailability();
+  }
+
+  dom.hotelReservationCancelEdit.addEventListener("click", cancelEditingReservation);
+
   // Devuelve si pudo cargar, en vez de dejarlo solo en el aviso de error: el
   // selector de departamento lo usa para decidir si mostrar el resto del
   // panel, y una excepción tragada aquí se lo ocultaría.
@@ -3257,8 +3472,7 @@
     dom.hotelBody.hidden = true;
     dom.hotelDepartment.value = "";
     dom.hotelAvailabilityList.textContent = "";
-    dom.hotelReservationRoom.textContent = "";
-    dom.hotelReservationForm.reset();
+    cancelEditingReservation();
     dom.hotelPanel.hidden = false;
   });
 
@@ -3269,6 +3483,7 @@
   dom.hotelDepartment.addEventListener("change", async () => {
     showHotelError("");
     dom.hotelBody.hidden = true;
+    cancelEditingReservation();
     const departmentId = dom.hotelDepartment.value;
     if (!departmentId) {
       return;
@@ -3281,6 +3496,7 @@
       return;
     }
     dom.hotelBody.hidden = false;
+    await loadHotelReport();
     await loadHotelAvailability();
   });
 
@@ -3290,6 +3506,12 @@
     loadHotelAvailability();
   });
 
+  dom.hotelContactSearch.addEventListener("input", () => {
+    clearTimeout(hotelContactSearchTimer);
+    const term = dom.hotelContactSearch.value.trim();
+    hotelContactSearchTimer = setTimeout(() => searchHotelContacts(term), 300);
+  });
+
   dom.hotelReservationForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     showHotelError("");
@@ -3297,25 +3519,41 @@
       showHotelError("Busque disponibilidad y elija una habitación primero.");
       return;
     }
+    const body = {
+      room_id: dom.hotelReservationRoom.value,
+      guest_name: dom.hotelGuestName.value.trim(),
+      guest_phone: dom.hotelGuestPhone.value.trim() || null,
+      guest_email: dom.hotelGuestEmail.value.trim() || null,
+      contact_id: hotelSelectedContactId,
+      check_in: dom.hotelCheckIn.value,
+      check_out: dom.hotelCheckOut.value,
+      guests: Number(dom.hotelGuestCount.value) || 1,
+      notes: dom.hotelReservationNotes.value.trim() || null,
+    };
     try {
-      await api(`/api/departments/${dom.hotelDepartment.value}/hotel/reservations`, {
-        method: "POST",
-        body: JSON.stringify({
-          room_id: dom.hotelReservationRoom.value,
-          guest_name: dom.hotelGuestName.value.trim(),
-          guest_phone: dom.hotelGuestPhone.value.trim() || null,
-          guest_email: dom.hotelGuestEmail.value.trim() || null,
-          check_in: dom.hotelCheckIn.value,
-          check_out: dom.hotelCheckOut.value,
-          guests: Number(dom.hotelGuestCount.value) || 1,
-          notes: dom.hotelReservationNotes.value.trim() || null,
-        }),
-      });
-      dom.hotelReservationForm.reset();
-      dom.hotelGuestCount.value = 1;
-      await loadHotelReservations();
-      await loadHotelAvailability();
-      setStatus("Reserva creada.");
+      if (editingReservationId) {
+        await api(
+          `/api/departments/${dom.hotelDepartment.value}/hotel/reservations/${editingReservationId}`,
+          { method: "PATCH", body: JSON.stringify(body) },
+        );
+        cancelEditingReservation();
+        await loadHotelReservations();
+        await loadHotelAvailability();
+        await loadHotelReport();
+        setStatus("Reserva actualizada.");
+      } else {
+        await api(`/api/departments/${dom.hotelDepartment.value}/hotel/reservations`, {
+          method: "POST",
+          body: JSON.stringify(body),
+        });
+        dom.hotelReservationForm.reset();
+        dom.hotelGuestCount.value = 1;
+        setHotelContactLink(null);
+        await loadHotelReservations();
+        await loadHotelAvailability();
+        await loadHotelReport();
+        setStatus("Reserva creada.");
+      }
     } catch (error) {
       showHotelError(error.message);
     }
@@ -3587,6 +3825,19 @@
       const esMio = payload.assignee_id === state.me?.agent?.id;
       if (payload.type === "assignment" && esMio) {
         setStatus(`${payload.by} le derivó una conversación.`);
+      }
+
+      if (payload.type === "hotel_reservation_created") {
+        setStatus(
+          `Reserva de hotel pendiente: ${payload.room} (${payload.check_in} → ${payload.check_out}).`,
+        );
+        // Si el panel de reservas está abierto en ese mismo departamento, se
+        // refresca solo: sin esto, quien lo tenga abierto vería una reserva
+        // de menos hasta cerrar y volver a entrar.
+        if (!dom.hotelPanel.hidden && dom.hotelDepartment.value === payload.department_id) {
+          await loadHotelReservations();
+          await loadHotelReport();
+        }
       }
 
       // Si el hilo abierto acaba de pasar a otra persona, se cierra en el acto:
