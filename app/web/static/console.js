@@ -1687,8 +1687,8 @@
     fillWithPlaceholder(dom.transferDepartment, i18n.t("aside.choose"));
     fillWithPlaceholder(dom.newUserDepartment, i18n.t("admin.noDepartment"));
     fillWithPlaceholder(dom.newAccountDepartment, i18n.t("admin.noDepartment"));
-    fillWithPlaceholder(dom.hotelAdminDepartment, "— Elegir —");
-    fillWithPlaceholder(dom.hotelDepartment, "— Elegir —");
+    fillWithPlaceholder(dom.hotelAdminDepartment, i18n.t("aside.choose"));
+    fillWithPlaceholder(dom.hotelDepartment, i18n.t("aside.choose"));
 
     // El horario conserva el departamento elegido si sigue existiendo, para
     // no perder la selección al recargar la lista tras guardar. La opción de
@@ -2448,25 +2448,29 @@
     hotelAdminRoomTypes.forEach((roomType) => {
       const option = document.createElement("option");
       option.value = roomType.id;
-      option.textContent = roomType.is_active ? roomType.name : `${roomType.name} (retirada)`;
+      option.textContent = roomType.is_active
+        ? roomType.name
+        : `${roomType.name} (${i18n.t("hotel.retired").toLowerCase()})`;
       select.appendChild(option);
     });
   }
 
   function buildRoomTypeRow(roomType) {
     const row = document.createElement("tr");
-    [roomType.name, roomType.capacity, roomType.is_active ? "Activa" : "Retirada"].forEach(
-      (value) => {
-        const cell = document.createElement("td");
-        cell.textContent = value;
-        row.appendChild(cell);
-      },
-    );
+    [
+      roomType.name,
+      roomType.capacity,
+      i18n.t(roomType.is_active ? "hotel.active" : "hotel.retired"),
+    ].forEach((value) => {
+      const cell = document.createElement("td");
+      cell.textContent = value;
+      row.appendChild(cell);
+    });
     const actionsCell = document.createElement("td");
     const toggle = document.createElement("button");
     toggle.type = "button";
     toggle.className = "ghost-button";
-    toggle.textContent = roomType.is_active ? "Retirar" : "Reactivar";
+    toggle.textContent = i18n.t(roomType.is_active ? "hotel.withdraw" : "hotel.reactivate");
     toggle.addEventListener("click", async () => {
       showAdminError("");
       try {
@@ -2506,9 +2510,9 @@
     const statusCell = document.createElement("td");
     const statusSelect = document.createElement("select");
     [
-      ["available", "Disponible"],
-      ["maintenance", "Mantenimiento"],
-      ["out_of_service", "Fuera de servicio"],
+      ["available", i18n.t("hotel.roomStatus.available")],
+      ["maintenance", i18n.t("hotel.roomStatus.maintenance")],
+      ["out_of_service", i18n.t("hotel.roomStatus.outOfService")],
     ].forEach(([value, label]) => {
       const option = document.createElement("option");
       option.value = value;
@@ -2523,7 +2527,7 @@
     const save = document.createElement("button");
     save.type = "button";
     save.className = "ghost-button";
-    save.textContent = "Guardar";
+    save.textContent = i18n.t("common.save");
     save.addEventListener("click", async () => {
       showAdminError("");
       try {
@@ -2532,7 +2536,7 @@
           body: JSON.stringify({ status: statusSelect.value }),
         });
         await loadHotelRooms();
-        setStatus("Habitación actualizada.");
+        setStatus(i18n.t("hotel.roomUpdated"));
       } catch (error) {
         showAdminError(error.message);
       }
@@ -2555,7 +2559,7 @@
     const validity =
       ratePlan.starts_on || ratePlan.ends_on
         ? `${ratePlan.starts_on || "…"} → ${ratePlan.ends_on || "…"}`
-        : "Todo el año";
+        : i18n.t("hotel.allYear");
     [
       roomType ? roomType.name : "—",
       ratePlan.name,
@@ -2570,14 +2574,14 @@
     const edit = document.createElement("button");
     edit.type = "button";
     edit.className = "ghost-button";
-    edit.textContent = "Editar";
+    edit.textContent = i18n.t("hotel.edit");
     edit.addEventListener("click", () => startEditingRatePlan(ratePlan));
     actionsCell.appendChild(edit);
 
     const remove = document.createElement("button");
     remove.type = "button";
     remove.className = "ghost-button ghost-button--danger";
-    remove.textContent = "Borrar";
+    remove.textContent = i18n.t("admin.delete");
     remove.addEventListener("click", async () => {
       showAdminError("");
       try {
@@ -2609,8 +2613,8 @@
     dom.newRatePlanEnds.value = ratePlan.ends_on || "";
     dom.newRatePlanPrice.value = (ratePlan.nightly_price_cents / 100).toFixed(2);
     dom.newRatePlanCurrency.value = ratePlan.currency;
-    dom.ratePlanFormTitle.textContent = "Editar tarifa";
-    dom.ratePlanSubmit.textContent = "Guardar cambios";
+    dom.ratePlanFormTitle.textContent = i18n.t("hotel.admin.editRateTitle");
+    dom.ratePlanSubmit.textContent = i18n.t("hotel.saveChanges");
     dom.ratePlanCancelEdit.hidden = false;
   }
 
@@ -2619,8 +2623,8 @@
     dom.createRatePlanForm.reset();
     dom.newRatePlanTypeSelect.disabled = false;
     dom.newRatePlanCurrency.value = "USD";
-    dom.ratePlanFormTitle.textContent = "Tarifas";
-    dom.ratePlanSubmit.textContent = "Crear tarifa";
+    dom.ratePlanFormTitle.textContent = i18n.t("hotel.admin.rates");
+    dom.ratePlanSubmit.textContent = i18n.t("hotel.admin.createRate");
     dom.ratePlanCancelEdit.hidden = true;
   }
 
@@ -2673,7 +2677,7 @@
       if (enabled) {
         await loadHotelAdminSetup();
       }
-      setStatus(enabled ? "Módulo de hotel activado." : "Módulo de hotel desactivado.");
+      setStatus(i18n.t(enabled ? "hotel.moduleOn" : "hotel.moduleOff"));
     } catch (error) {
       dom.hotelAdminModuleEnabled.checked = !enabled;
       showAdminError(error.message);
@@ -2695,7 +2699,7 @@
       dom.createRoomTypeForm.reset();
       dom.newRoomTypeCapacity.value = 2;
       await loadHotelRoomTypes();
-      setStatus("Categoría creada.");
+      setStatus(i18n.t("hotel.roomTypeCreated"));
     } catch (error) {
       showAdminError(error.message);
     }
@@ -2714,7 +2718,7 @@
       });
       dom.newRoomCode.value = "";
       await loadHotelRooms();
-      setStatus("Habitación creada.");
+      setStatus(i18n.t("hotel.roomCreated"));
     } catch (error) {
       showAdminError(error.message);
     }
@@ -2725,7 +2729,7 @@
     showAdminError("");
     const price = Number(dom.newRatePlanPrice.value);
     if (!price || price <= 0) {
-      showAdminError("El precio debe ser mayor que cero.");
+      showAdminError(i18n.t("hotel.priceMustBePositive"));
       return;
     }
     const body = {
@@ -2743,7 +2747,7 @@
         );
         cancelEditingRatePlan();
         await loadHotelRatePlans();
-        setStatus("Tarifa actualizada.");
+        setStatus(i18n.t("hotel.rateUpdated"));
       } else {
         await api(`/api/departments/${dom.hotelAdminDepartment.value}/hotel/rate-plans`, {
           method: "POST",
@@ -2752,7 +2756,7 @@
         dom.createRatePlanForm.reset();
         dom.newRatePlanCurrency.value = "USD";
         await loadHotelRatePlans();
-        setStatus("Tarifa creada.");
+        setStatus(i18n.t("hotel.rateCreated"));
       }
     } catch (error) {
       showAdminError(error.message);
@@ -3172,28 +3176,18 @@
 
   /* --------------------------------------------------- módulo Hotel: reservas */
 
-  const HOTEL_STATUS_LABELS = {
-    pending: "Pendiente",
-    confirmed: "Confirmada",
-    checked_in: "Con check-in",
-    checked_out: "Con check-out",
-    cancelled: "Cancelada",
-    no_show: "No show",
-  };
+  // Función y no un objeto fijo: así toma el idioma activo en el momento de
+  // dibujar la fila, no el que estaba puesto cuando se cargó la página.
+  function hotelStatusLabel(status) {
+    return i18n.t(`hotel.status.${status}`) || status;
+  }
 
   // Reflejo, solo para no ofrecer botones que el servidor rechazaría; la
   // regla de verdad vive en HOTEL_RESERVATION_TRANSITIONS, en console.py.
   const HOTEL_STATUS_TRANSITIONS = {
-    pending: [
-      ["confirmed", "Confirmar"],
-      ["cancelled", "Cancelar"],
-    ],
-    confirmed: [
-      ["checked_in", "Check-in"],
-      ["cancelled", "Cancelar"],
-      ["no_show", "No show"],
-    ],
-    checked_in: [["checked_out", "Check-out"]],
+    pending: ["confirmed", "cancelled"],
+    confirmed: ["checked_in", "cancelled", "no_show"],
+    checked_in: ["checked_out"],
     checked_out: [],
     cancelled: [],
     no_show: [],
@@ -3232,7 +3226,7 @@
       if (rooms.length === 0) {
         const empty = document.createElement("li");
         empty.className = "console__muted";
-        empty.textContent = "Sin habitaciones libres para esas fechas.";
+        empty.textContent = i18n.t("hotel.noRoomsAvailable");
         dom.hotelAvailabilityList.appendChild(empty);
         return;
       }
@@ -3253,7 +3247,7 @@
 
   function formatHotelRevenue(revenue) {
     if (!revenue || revenue.length === 0) {
-      return "sin reservas con precio";
+      return i18n.t("hotel.noRevenue");
     }
     return revenue.map((row) => formatMoney(row.total_cents, row.currency)).join(" + ");
   }
@@ -3289,8 +3283,9 @@
     dom.hotelGuestPhone.value = contact.primary_phone || dom.hotelGuestPhone.value;
     dom.hotelGuestEmail.value = contact.primary_email || dom.hotelGuestEmail.value;
     dom.hotelContactLinked.hidden = false;
-    dom.hotelContactLinked.textContent =
-      `Vinculado a ${contact.display_name || contact.primary_email || contact.primary_phone}.`;
+    dom.hotelContactLinked.textContent = i18n.t("hotel.linkedTo", {
+      name: contact.display_name || contact.primary_email || contact.primary_phone,
+    });
     dom.hotelContactResults.hidden = true;
     dom.hotelContactResults.textContent = "";
     dom.hotelContactSearch.value = "";
@@ -3309,7 +3304,7 @@
       if (matches.length === 0) {
         const empty = document.createElement("li");
         empty.className = "console__muted";
-        empty.textContent = "Sin coincidencias.";
+        empty.textContent = i18n.t("hotel.noMatches");
         dom.hotelContactResults.appendChild(empty);
       } else {
         matches.forEach((contact) => {
@@ -3320,7 +3315,7 @@
           const label = [contact.display_name, contact.primary_phone, contact.primary_email]
             .filter(Boolean)
             .join(" · ");
-          button.textContent = label || "(sin datos)";
+          button.textContent = label || i18n.t("hotel.noContactData");
           button.addEventListener("click", () => setHotelContactLink(contact));
           item.appendChild(button);
           dom.hotelContactResults.appendChild(item);
@@ -3340,7 +3335,7 @@
       reservation.check_in,
       reservation.check_out,
       formatMoney(reservation.nightly_price_cents, reservation.currency),
-      HOTEL_STATUS_LABELS[reservation.status] || reservation.status,
+      hotelStatusLabel(reservation.status),
     ].forEach((value) => {
       const cell = document.createElement("td");
       cell.textContent = value;
@@ -3355,16 +3350,16 @@
       const edit = document.createElement("button");
       edit.type = "button";
       edit.className = "ghost-button";
-      edit.textContent = "Editar";
+      edit.textContent = i18n.t("hotel.edit");
       edit.addEventListener("click", () => startEditingReservation(reservation));
       actionsCell.appendChild(edit);
     }
 
-    (HOTEL_STATUS_TRANSITIONS[reservation.status] || []).forEach(([nextStatus, label]) => {
+    (HOTEL_STATUS_TRANSITIONS[reservation.status] || []).forEach((nextStatus) => {
       const button = document.createElement("button");
       button.type = "button";
       button.className = "ghost-button";
-      button.textContent = label;
+      button.textContent = i18n.t(`hotel.action.${nextStatus}`);
       button.addEventListener("click", async () => {
         showHotelError("");
         try {
@@ -3378,7 +3373,7 @@
           await loadHotelReservations();
           await loadHotelAvailability();
           await loadHotelReport();
-          setStatus(`Reserva: ${HOTEL_STATUS_LABELS[nextStatus] || nextStatus}.`);
+          setStatus(i18n.t("hotel.statusChangedTo", { status: hotelStatusLabel(nextStatus) }));
         } catch (error) {
           showHotelError(error.message);
         }
@@ -3392,7 +3387,7 @@
       const confirmButton = document.createElement("button");
       confirmButton.type = "button";
       confirmButton.className = "ghost-button";
-      confirmButton.textContent = "Confirmar por WhatsApp";
+      confirmButton.textContent = i18n.t("hotel.confirmWhatsApp");
       confirmButton.addEventListener("click", () => {
         dom.hotelPanel.hidden = true;
         dom.startTo.value = reservation.guest_phone;
@@ -3420,10 +3415,10 @@
     hotelSelectedContactId = reservation.contact_id || null;
     dom.hotelContactLinked.hidden = !reservation.contact_id;
     dom.hotelContactLinked.textContent = reservation.contact_id
-      ? "Vinculado al contacto de esta reserva."
+      ? i18n.t("hotel.linkedToThisReservation")
       : "";
-    dom.hotelReservationFormTitle.textContent = "Editar reserva";
-    dom.hotelReservationSubmit.textContent = "Guardar cambios";
+    dom.hotelReservationFormTitle.textContent = i18n.t("hotel.editReservationTitle");
+    dom.hotelReservationSubmit.textContent = i18n.t("hotel.saveChanges");
     dom.hotelReservationCancelEdit.hidden = false;
     await loadHotelAvailability();
     // Sin esto, el navegador selecciona la primera opción de la lista —que
@@ -3438,8 +3433,8 @@
     dom.hotelReservationForm.reset();
     dom.hotelGuestCount.value = 1;
     setHotelContactLink(null);
-    dom.hotelReservationFormTitle.textContent = "Nueva reserva";
-    dom.hotelReservationSubmit.textContent = "Crear reserva";
+    dom.hotelReservationFormTitle.textContent = i18n.t("hotel.newReservation");
+    dom.hotelReservationSubmit.textContent = i18n.t("hotel.createReservation");
     dom.hotelReservationCancelEdit.hidden = true;
     loadHotelAvailability();
   }
@@ -3516,7 +3511,7 @@
     event.preventDefault();
     showHotelError("");
     if (!dom.hotelReservationRoom.value) {
-      showHotelError("Busque disponibilidad y elija una habitación primero.");
+      showHotelError(i18n.t("hotel.pickRoomFirst"));
       return;
     }
     const body = {
@@ -3540,7 +3535,7 @@
         await loadHotelReservations();
         await loadHotelAvailability();
         await loadHotelReport();
-        setStatus("Reserva actualizada.");
+        setStatus(i18n.t("hotel.reservationUpdated"));
       } else {
         await api(`/api/departments/${dom.hotelDepartment.value}/hotel/reservations`, {
           method: "POST",
@@ -3552,7 +3547,7 @@
         await loadHotelReservations();
         await loadHotelAvailability();
         await loadHotelReport();
-        setStatus("Reserva creada.");
+        setStatus(i18n.t("hotel.reservationCreated"));
       }
     } catch (error) {
       showHotelError(error.message);
@@ -3829,7 +3824,11 @@
 
       if (payload.type === "hotel_reservation_created") {
         setStatus(
-          `Reserva de hotel pendiente: ${payload.room} (${payload.check_in} → ${payload.check_out}).`,
+          i18n.t("hotel.liveNotification", {
+            room: payload.room,
+            checkIn: payload.check_in,
+            checkOut: payload.check_out,
+          }),
         );
         // Si el panel de reservas está abierto en ese mismo departamento, se
         // refresca solo: sin esto, quien lo tenga abierto vería una reserva
@@ -3898,6 +3897,16 @@
     // Los desplegables se rellenan con el marcador ya traducido.
     loadDepartments();
     loadLabels();
+    // Los estados y acciones de reserva se traducen al construir cada fila:
+    // sin volver a cargar la tabla, un panel ya abierto se quedaría con el
+    // idioma con el que se abrió.
+    if (!dom.hotelPanel.hidden && dom.hotelDepartment.value) {
+      loadHotelReservations();
+      loadHotelReport();
+    }
+    if (!dom.hotelAdminSetup.hidden && dom.hotelAdminDepartment.value) {
+      loadHotelAdminSetup();
+    }
   });
 
   async function start() {

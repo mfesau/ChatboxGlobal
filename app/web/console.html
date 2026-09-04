@@ -100,7 +100,7 @@
           <!-- Trabajo operativo, no de administración: lo ve cualquier agente.
                El servidor decide, departamento por departamento, si tiene
                acceso y si el módulo está activo (ver console.js). -->
-          <button type="button" class="console__start" id="hotel-button" hidden>
+          <button type="button" class="console__start" id="hotel-button" data-i18n="hotel.button" hidden>
             + Reserva de hotel
           </button>
         </header>
@@ -277,7 +277,8 @@
                     data-i18n="admin.tab.labels">Etiquetas</button>
             <button type="button" role="tab" data-admin-tab="messages" aria-selected="false"
                     data-i18n="admin.tab.messages">Saludos y mensajes</button>
-            <button type="button" role="tab" data-admin-tab="hotel" aria-selected="false">Hotel</button>
+            <button type="button" role="tab" data-admin-tab="hotel" aria-selected="false"
+                    data-i18n="admin.tab.hotel">Hotel</button>
             <button type="button" role="tab" data-admin-tab="appearance" aria-selected="false"
                     data-i18n="admin.tab.appearance">Apariencia</button>
           </nav>
@@ -545,75 +546,75 @@
           </div>
           <div class="admin-tab-panel" id="admin-tab-hotel" hidden>
             <section class="panel">
-              <h3>Departamento</h3>
-              <p class="console__muted">
+              <h3 data-i18n="hours.department">Departamento</h3>
+              <p class="console__muted" data-i18n="hotel.admin.departmentHint">
                 El módulo de reservas de habitaciones se activa por
                 departamento: elija la rama de Hotel para configurarla. El
-                resto de departamentos de la Cooperativa no se ven afectados.
+                resto de departamentos de la empresa no se ven afectados.
               </p>
               <label class="panel__field">
-                <span>Departamento</span>
-                <select id="hotel-admin-department"><option value="">— Elegir —</option></select>
+                <span data-i18n="hours.department">Departamento</span>
+                <select id="hotel-admin-department"><option value="" data-i18n="aside.choose">— Elegir —</option></select>
               </label>
               <label class="panel__field panel__field--checkbox" id="hotel-admin-module-field" hidden>
                 <input type="checkbox" id="hotel-admin-module-enabled" />
-                <span>Módulo de hotel activo en este departamento</span>
+                <span data-i18n="hotel.admin.moduleEnabled">Módulo de hotel activo en este departamento</span>
               </label>
             </section>
             <div id="hotel-admin-setup" hidden>
               <section class="admin-grid">
                 <form class="panel" id="create-room-type-form">
-                  <h3>Categorías de habitación</h3>
-                  <label class="panel__field"><span>Nombre</span><input type="text" id="new-room-type-name" maxlength="120" placeholder="p. ej. Doble" required /></label>
-                  <label class="panel__field"><span>Capacidad (personas)</span><input type="number" id="new-room-type-capacity" min="1" max="20" value="2" /></label>
-                  <label class="panel__field"><span>Descripción</span><textarea id="new-room-type-description" rows="2" maxlength="2000"></textarea></label>
-                  <button type="submit" class="send-button">Crear categoría</button>
+                  <h3 data-i18n="hotel.admin.roomTypes">Categorías de habitación</h3>
+                  <label class="panel__field"><span data-i18n="aside.name">Nombre</span><input type="text" id="new-room-type-name" maxlength="120" data-i18n-placeholder="hotel.admin.roomTypeNamePlaceholder" placeholder="p. ej. Doble" required /></label>
+                  <label class="panel__field"><span data-i18n="hotel.admin.capacity">Capacidad (personas)</span><input type="number" id="new-room-type-capacity" min="1" max="20" value="2" /></label>
+                  <label class="panel__field"><span data-i18n="hotel.admin.description">Descripción</span><textarea id="new-room-type-description" rows="2" maxlength="2000"></textarea></label>
+                  <button type="submit" class="send-button" data-i18n="hotel.admin.createRoomType">Crear categoría</button>
                   <div class="table-scroll">
                     <table class="data-table" id="room-types-table">
-                      <thead><tr><th>Nombre</th><th>Capacidad</th><th>Estado</th><th>Acciones</th></tr></thead>
+                      <thead><tr><th data-i18n="aside.name">Nombre</th><th data-i18n="hotel.capacityColumn">Capacidad</th><th data-i18n="table.status">Estado</th><th data-i18n="table.actions">Acciones</th></tr></thead>
                       <tbody></tbody>
                     </table>
                   </div>
                 </form>
                 <form class="panel" id="create-room-form">
-                  <h3>Habitaciones</h3>
+                  <h3 data-i18n="hotel.admin.rooms">Habitaciones</h3>
                   <label class="panel__field">
-                    <span>Categoría</span>
+                    <span data-i18n="hotel.admin.category">Categoría</span>
                     <select id="new-room-type-select"></select>
                   </label>
-                  <label class="panel__field"><span>Número</span><input type="text" id="new-room-code" maxlength="20" placeholder="p. ej. 204" required /></label>
-                  <button type="submit" class="send-button">Dar de alta la habitación</button>
+                  <label class="panel__field"><span data-i18n="hotel.admin.roomNumber">Número</span><input type="text" id="new-room-code" maxlength="20" data-i18n-placeholder="hotel.admin.roomNumberPlaceholder" placeholder="p. ej. 204" required /></label>
+                  <button type="submit" class="send-button" data-i18n="hotel.admin.createRoom">Dar de alta la habitación</button>
                   <div class="table-scroll">
                     <table class="data-table" id="rooms-table">
-                      <thead><tr><th>Número</th><th>Categoría</th><th>Estado</th><th>Acciones</th></tr></thead>
+                      <thead><tr><th data-i18n="hotel.admin.roomNumber">Número</th><th data-i18n="hotel.admin.category">Categoría</th><th data-i18n="table.status">Estado</th><th data-i18n="table.actions">Acciones</th></tr></thead>
                       <tbody></tbody>
                     </table>
                   </div>
                 </form>
               </section>
               <form class="panel" id="create-rate-plan-form">
-                <h3 id="rate-plan-form-title">Tarifas</h3>
-                <p class="console__muted">
+                <h3 id="rate-plan-form-title" data-i18n="hotel.admin.rates">Tarifas</h3>
+                <p class="console__muted" data-i18n="hotel.admin.ratesHint">
                   Fechas vacías = tarifa por omisión de la categoría. Con dos
                   tarifas vigentes el mismo día gana la de temporada, o si hay
                   varias, la cargada más recientemente.
                 </p>
                 <label class="panel__field">
-                  <span>Categoría</span>
+                  <span data-i18n="hotel.admin.category">Categoría</span>
                   <select id="new-rate-plan-type-select"></select>
                 </label>
-                <label class="panel__field"><span>Nombre</span><input type="text" id="new-rate-plan-name" maxlength="120" placeholder="p. ej. Temporada alta" required /></label>
-                <label class="panel__field"><span>Desde (opcional)</span><input type="date" id="new-rate-plan-starts" /></label>
-                <label class="panel__field"><span>Hasta (opcional)</span><input type="date" id="new-rate-plan-ends" /></label>
-                <label class="panel__field"><span>Precio por noche</span><input type="number" id="new-rate-plan-price" min="0.01" step="0.01" required /></label>
-                <label class="panel__field"><span>Moneda</span><input type="text" id="new-rate-plan-currency" maxlength="3" value="USD" style="text-transform:uppercase" /></label>
-                <button type="submit" class="send-button" id="rate-plan-submit">Crear tarifa</button>
-                <button type="button" class="ghost-button" id="rate-plan-cancel-edit" hidden>
+                <label class="panel__field"><span data-i18n="aside.name">Nombre</span><input type="text" id="new-rate-plan-name" maxlength="120" data-i18n-placeholder="hotel.admin.rateNamePlaceholder" placeholder="p. ej. Temporada alta" required /></label>
+                <label class="panel__field"><span data-i18n="hotel.admin.startsOn">Desde (opcional)</span><input type="date" id="new-rate-plan-starts" /></label>
+                <label class="panel__field"><span data-i18n="hotel.admin.endsOn">Hasta (opcional)</span><input type="date" id="new-rate-plan-ends" /></label>
+                <label class="panel__field"><span data-i18n="hotel.admin.nightlyPrice">Precio por noche</span><input type="number" id="new-rate-plan-price" min="0.01" step="0.01" required /></label>
+                <label class="panel__field"><span data-i18n="hotel.admin.currency">Moneda</span><input type="text" id="new-rate-plan-currency" maxlength="3" value="USD" style="text-transform:uppercase" /></label>
+                <button type="submit" class="send-button" id="rate-plan-submit" data-i18n="hotel.admin.createRate">Crear tarifa</button>
+                <button type="button" class="ghost-button" id="rate-plan-cancel-edit" data-i18n="hotel.cancelEdit" hidden>
                   Cancelar edición
                 </button>
                 <div class="table-scroll">
                   <table class="data-table" id="rate-plans-table">
-                    <thead><tr><th>Categoría</th><th>Nombre</th><th>Vigencia</th><th>Precio</th><th>Acciones</th></tr></thead>
+                    <thead><tr><th data-i18n="hotel.admin.category">Categoría</th><th data-i18n="aside.name">Nombre</th><th data-i18n="hotel.validity">Vigencia</th><th data-i18n="hotel.priceColumn">Precio</th><th data-i18n="table.actions">Acciones</th></tr></thead>
                     <tbody></tbody>
                   </table>
                 </div>
@@ -738,94 +739,94 @@
       <div class="overlay" id="hotel-panel" hidden>
         <div class="overlay__card">
           <header class="overlay__header">
-            <h2>Reservas de hotel</h2>
+            <h2 data-i18n="hotel.title">Reservas de hotel</h2>
             <button type="button" class="ghost-button" id="hotel-close" data-i18n="common.close">Cerrar</button>
           </header>
 
           <label class="panel__field">
-            <span>Departamento</span>
-            <select id="hotel-department"><option value="">— Elegir —</option></select>
+            <span data-i18n="hours.department">Departamento</span>
+            <select id="hotel-department"><option value="" data-i18n="aside.choose">— Elegir —</option></select>
           </label>
           <p class="gate__error" id="hotel-error" hidden></p>
 
           <div id="hotel-body" hidden>
             <section class="panel" id="hotel-report">
-              <h3>Resumen de hoy</h3>
+              <h3 data-i18n="hotel.reportTitle">Resumen de hoy</h3>
               <dl class="hotel-report__grid">
-                <div><dt>Llegadas hoy</dt><dd id="hotel-report-arrivals">—</dd></div>
-                <div><dt>Salidas hoy</dt><dd id="hotel-report-departures">—</dd></div>
-                <div><dt>Ocupación</dt><dd id="hotel-report-occupancy">—</dd></div>
-                <div><dt>Pendientes de confirmar</dt><dd id="hotel-report-pending">—</dd></div>
+                <div><dt data-i18n="hotel.arrivalsToday">Llegadas hoy</dt><dd id="hotel-report-arrivals">—</dd></div>
+                <div><dt data-i18n="hotel.departuresToday">Salidas hoy</dt><dd id="hotel-report-departures">—</dd></div>
+                <div><dt data-i18n="hotel.occupancy">Ocupación</dt><dd id="hotel-report-occupancy">—</dd></div>
+                <div><dt data-i18n="hotel.pendingConfirm">Pendientes de confirmar</dt><dd id="hotel-report-pending">—</dd></div>
               </dl>
               <p class="console__muted">
-                Ingresos de los próximos 30 días:
+                <span data-i18n="hotel.revenue30">Ingresos de los próximos 30 días:</span>
                 <span id="hotel-report-revenue">—</span>
               </p>
             </section>
 
             <section class="panel">
-              <h3>Buscar disponibilidad</h3>
+              <h3 data-i18n="hotel.searchAvailability">Buscar disponibilidad</h3>
               <form id="hotel-availability-form" class="panel__inline-form">
-                <label class="panel__field"><span>Entrada</span><input type="date" id="hotel-check-in" required /></label>
-                <label class="panel__field"><span>Salida</span><input type="date" id="hotel-check-out" required /></label>
-                <button type="submit" class="ghost-button">Buscar</button>
+                <label class="panel__field"><span data-i18n="hotel.checkIn">Entrada</span><input type="date" id="hotel-check-in" required /></label>
+                <label class="panel__field"><span data-i18n="hotel.checkOut">Salida</span><input type="date" id="hotel-check-out" required /></label>
+                <button type="submit" class="ghost-button" data-i18n="hotel.search">Buscar</button>
               </form>
               <ul class="panel__list" id="hotel-availability-list"></ul>
             </section>
 
             <form class="panel" id="hotel-reservation-form">
-              <h3 id="hotel-reservation-form-title">Nueva reserva</h3>
-              <p class="console__muted">
+              <h3 id="hotel-reservation-form-title" data-i18n="hotel.newReservation">Nueva reserva</h3>
+              <p class="console__muted" data-i18n="hotel.searchHint">
                 Busque disponibilidad primero: la habitación se elige entre
                 las que quedaron libres para esas fechas.
               </p>
               <label class="panel__field">
-                <span>Buscar contacto conocido (opcional)</span>
+                <span data-i18n="hotel.searchContact">Buscar contacto conocido (opcional)</span>
                 <input type="search" id="hotel-contact-search" autocomplete="off"
-                       placeholder="Nombre, teléfono o correo" />
+                       data-i18n-placeholder="hotel.searchContactPlaceholder" placeholder="Nombre, teléfono o correo" />
               </label>
               <ul class="panel__list" id="hotel-contact-results" hidden></ul>
               <p class="console__muted" id="hotel-contact-linked" hidden></p>
               <label class="panel__field">
-                <span>Habitación</span>
+                <span data-i18n="hotel.room">Habitación</span>
                 <select id="hotel-reservation-room" required></select>
               </label>
-              <label class="panel__field"><span>Huésped</span><input type="text" id="hotel-guest-name" maxlength="160" required /></label>
-              <label class="panel__field"><span>Teléfono (opcional)</span><input type="tel" id="hotel-guest-phone" maxlength="32" /></label>
-              <label class="panel__field"><span>Correo (opcional)</span><input type="email" id="hotel-guest-email" maxlength="254" /></label>
-              <label class="panel__field"><span>Personas</span><input type="number" id="hotel-guest-count" min="1" max="20" value="1" /></label>
-              <label class="panel__field"><span>Notas (opcional)</span><textarea id="hotel-reservation-notes" rows="2" maxlength="2000"></textarea></label>
-              <button type="submit" class="send-button" id="hotel-reservation-submit">Crear reserva</button>
-              <button type="button" class="ghost-button" id="hotel-reservation-cancel-edit" hidden>
+              <label class="panel__field"><span data-i18n="hotel.guest">Huésped</span><input type="text" id="hotel-guest-name" maxlength="160" required /></label>
+              <label class="panel__field"><span data-i18n="hotel.phoneOptional">Teléfono (opcional)</span><input type="tel" id="hotel-guest-phone" maxlength="32" /></label>
+              <label class="panel__field"><span data-i18n="hotel.emailOptional">Correo (opcional)</span><input type="email" id="hotel-guest-email" maxlength="254" /></label>
+              <label class="panel__field"><span data-i18n="hotel.guests">Personas</span><input type="number" id="hotel-guest-count" min="1" max="20" value="1" /></label>
+              <label class="panel__field"><span data-i18n="hotel.notesOptional">Notas (opcional)</span><textarea id="hotel-reservation-notes" rows="2" maxlength="2000"></textarea></label>
+              <button type="submit" class="send-button" id="hotel-reservation-submit" data-i18n="hotel.createReservation">Crear reserva</button>
+              <button type="button" class="ghost-button" id="hotel-reservation-cancel-edit" data-i18n="hotel.cancelEdit" hidden>
                 Cancelar edición
               </button>
             </form>
 
             <section class="panel">
-              <h3>Reservas del departamento</h3>
+              <h3 data-i18n="hotel.departmentReservations">Reservas del departamento</h3>
               <label class="panel__field">
-                <span>Estado</span>
+                <span data-i18n="table.status">Estado</span>
                 <select id="hotel-status-filter">
-                  <option value="">Todas</option>
-                  <option value="pending">Pendientes</option>
-                  <option value="confirmed">Confirmadas</option>
-                  <option value="checked_in">Con check-in</option>
-                  <option value="checked_out">Con check-out</option>
-                  <option value="cancelled">Canceladas</option>
-                  <option value="no_show">No show</option>
+                  <option value="" data-i18n="hotel.statusAll">Todas</option>
+                  <option value="pending" data-i18n="hotel.filterStatus.pending">Pendientes</option>
+                  <option value="confirmed" data-i18n="hotel.filterStatus.confirmed">Confirmadas</option>
+                  <option value="checked_in" data-i18n="hotel.filterStatus.checked_in">Con check-in</option>
+                  <option value="checked_out" data-i18n="hotel.filterStatus.checked_out">Con check-out</option>
+                  <option value="cancelled" data-i18n="hotel.filterStatus.cancelled">Canceladas</option>
+                  <option value="no_show" data-i18n="hotel.filterStatus.no_show">No show</option>
                 </select>
               </label>
               <div class="table-scroll">
                 <table class="data-table" id="hotel-reservations-table">
                   <thead>
                     <tr>
-                      <th>Habitación</th>
-                      <th>Huésped</th>
-                      <th>Entrada</th>
-                      <th>Salida</th>
-                      <th>Precio</th>
-                      <th>Estado</th>
-                      <th>Acciones</th>
+                      <th data-i18n="hotel.room">Habitación</th>
+                      <th data-i18n="hotel.guest">Huésped</th>
+                      <th data-i18n="hotel.checkIn">Entrada</th>
+                      <th data-i18n="hotel.checkOut">Salida</th>
+                      <th data-i18n="hotel.priceColumn">Precio</th>
+                      <th data-i18n="table.status">Estado</th>
+                      <th data-i18n="table.actions">Acciones</th>
                     </tr>
                   </thead>
                   <tbody></tbody>
