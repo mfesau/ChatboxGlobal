@@ -149,6 +149,46 @@
     contactsClose: document.getElementById("contacts-close"),
     contactsSearch: document.getElementById("contacts-search"),
     contactsTable: document.querySelector("#contacts-table tbody"),
+    hotelAdminDepartment: document.getElementById("hotel-admin-department"),
+    hotelAdminModuleField: document.getElementById("hotel-admin-module-field"),
+    hotelAdminModuleEnabled: document.getElementById("hotel-admin-module-enabled"),
+    hotelAdminSetup: document.getElementById("hotel-admin-setup"),
+    createRoomTypeForm: document.getElementById("create-room-type-form"),
+    newRoomTypeName: document.getElementById("new-room-type-name"),
+    newRoomTypeCapacity: document.getElementById("new-room-type-capacity"),
+    newRoomTypeDescription: document.getElementById("new-room-type-description"),
+    roomTypesTable: document.querySelector("#room-types-table tbody"),
+    createRoomForm: document.getElementById("create-room-form"),
+    newRoomTypeSelect: document.getElementById("new-room-type-select"),
+    newRoomCode: document.getElementById("new-room-code"),
+    roomsTable: document.querySelector("#rooms-table tbody"),
+    createRatePlanForm: document.getElementById("create-rate-plan-form"),
+    newRatePlanTypeSelect: document.getElementById("new-rate-plan-type-select"),
+    newRatePlanName: document.getElementById("new-rate-plan-name"),
+    newRatePlanStarts: document.getElementById("new-rate-plan-starts"),
+    newRatePlanEnds: document.getElementById("new-rate-plan-ends"),
+    newRatePlanPrice: document.getElementById("new-rate-plan-price"),
+    newRatePlanCurrency: document.getElementById("new-rate-plan-currency"),
+    ratePlansTable: document.querySelector("#rate-plans-table tbody"),
+    hotelButton: document.getElementById("hotel-button"),
+    hotelPanel: document.getElementById("hotel-panel"),
+    hotelClose: document.getElementById("hotel-close"),
+    hotelDepartment: document.getElementById("hotel-department"),
+    hotelError: document.getElementById("hotel-error"),
+    hotelBody: document.getElementById("hotel-body"),
+    hotelAvailabilityForm: document.getElementById("hotel-availability-form"),
+    hotelCheckIn: document.getElementById("hotel-check-in"),
+    hotelCheckOut: document.getElementById("hotel-check-out"),
+    hotelAvailabilityList: document.getElementById("hotel-availability-list"),
+    hotelReservationForm: document.getElementById("hotel-reservation-form"),
+    hotelReservationRoom: document.getElementById("hotel-reservation-room"),
+    hotelGuestName: document.getElementById("hotel-guest-name"),
+    hotelGuestPhone: document.getElementById("hotel-guest-phone"),
+    hotelGuestEmail: document.getElementById("hotel-guest-email"),
+    hotelGuestCount: document.getElementById("hotel-guest-count"),
+    hotelReservationNotes: document.getElementById("hotel-reservation-notes"),
+    hotelStatusFilter: document.getElementById("hotel-status-filter"),
+    hotelReservationsTable: document.querySelector("#hotel-reservations-table tbody"),
     contactProfile: document.getElementById("contact-profile"),
     profileTitle: document.getElementById("contact-profile-title"),
     profileName: document.getElementById("profile-name"),
@@ -270,6 +310,11 @@
       // todo el mundo. Si la instalacion no tiene WhatsApp, el boton se
       // retira al primer intento (ver openStartPanel).
       dom.startButton.hidden = false;
+      // Igual que "Nueva conversación": operar el hotel es trabajo de
+      // cualquier agente con acceso al departamento, no solo de
+      // administración. El servidor decide el acceso al elegir el
+      // departamento (ver dom.hotelDepartment).
+      dom.hotelButton.hidden = false;
       showApp();
       return true;
     } catch {
@@ -1628,6 +1673,8 @@
     fillWithPlaceholder(dom.transferDepartment, i18n.t("aside.choose"));
     fillWithPlaceholder(dom.newUserDepartment, i18n.t("admin.noDepartment"));
     fillWithPlaceholder(dom.newAccountDepartment, i18n.t("admin.noDepartment"));
+    fillWithPlaceholder(dom.hotelAdminDepartment, "— Elegir —");
+    fillWithPlaceholder(dom.hotelDepartment, "— Elegir —");
 
     // El horario conserva el departamento elegido si sigue existiendo, para
     // no perder la selección al recargar la lista tras guardar. La opción de
@@ -2372,6 +2419,281 @@
     }
   });
 
+  /* --------------------------------------------- módulo Hotel: administración */
+
+  function formatMoney(cents, currency) {
+    return cents == null ? "—" : `${(cents / 100).toFixed(2)} ${currency}`;
+  }
+
+  let hotelAdminRoomTypes = [];
+
+  function fillRoomTypeSelect(select) {
+    select.textContent = "";
+    hotelAdminRoomTypes.forEach((roomType) => {
+      const option = document.createElement("option");
+      option.value = roomType.id;
+      option.textContent = roomType.is_active ? roomType.name : `${roomType.name} (retirada)`;
+      select.appendChild(option);
+    });
+  }
+
+  function buildRoomTypeRow(roomType) {
+    const row = document.createElement("tr");
+    [roomType.name, roomType.capacity, roomType.is_active ? "Activa" : "Retirada"].forEach(
+      (value) => {
+        const cell = document.createElement("td");
+        cell.textContent = value;
+        row.appendChild(cell);
+      },
+    );
+    const actionsCell = document.createElement("td");
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.className = "ghost-button";
+    toggle.textContent = roomType.is_active ? "Retirar" : "Reactivar";
+    toggle.addEventListener("click", async () => {
+      showAdminError("");
+      try {
+        await api(
+          `/api/departments/${dom.hotelAdminDepartment.value}/hotel/room-types/${roomType.id}`,
+          { method: "PATCH", body: JSON.stringify({ is_active: !roomType.is_active }) },
+        );
+        await loadHotelRoomTypes();
+      } catch (error) {
+        showAdminError(error.message);
+      }
+    });
+    actionsCell.appendChild(toggle);
+    row.appendChild(actionsCell);
+    return row;
+  }
+
+  async function loadHotelRoomTypes() {
+    const departmentId = dom.hotelAdminDepartment.value;
+    hotelAdminRoomTypes = await api(`/api/departments/${departmentId}/hotel/room-types`);
+    dom.roomTypesTable.textContent = "";
+    hotelAdminRoomTypes.forEach((roomType) =>
+      dom.roomTypesTable.appendChild(buildRoomTypeRow(roomType)),
+    );
+    fillRoomTypeSelect(dom.newRoomTypeSelect);
+    fillRoomTypeSelect(dom.newRatePlanTypeSelect);
+  }
+
+  function buildRoomRow(room) {
+    const row = document.createElement("tr");
+    [room.code, room.room_type_name].forEach((value) => {
+      const cell = document.createElement("td");
+      cell.textContent = value;
+      row.appendChild(cell);
+    });
+
+    const statusCell = document.createElement("td");
+    const statusSelect = document.createElement("select");
+    [
+      ["available", "Disponible"],
+      ["maintenance", "Mantenimiento"],
+      ["out_of_service", "Fuera de servicio"],
+    ].forEach(([value, label]) => {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = label;
+      option.selected = value === room.status;
+      statusSelect.appendChild(option);
+    });
+    statusCell.appendChild(statusSelect);
+    row.appendChild(statusCell);
+
+    const actionsCell = document.createElement("td");
+    const save = document.createElement("button");
+    save.type = "button";
+    save.className = "ghost-button";
+    save.textContent = "Guardar";
+    save.addEventListener("click", async () => {
+      showAdminError("");
+      try {
+        await api(`/api/departments/${dom.hotelAdminDepartment.value}/hotel/rooms/${room.id}`, {
+          method: "PATCH",
+          body: JSON.stringify({ status: statusSelect.value }),
+        });
+        await loadHotelRooms();
+        setStatus("Habitación actualizada.");
+      } catch (error) {
+        showAdminError(error.message);
+      }
+    });
+    actionsCell.appendChild(save);
+    row.appendChild(actionsCell);
+    return row;
+  }
+
+  async function loadHotelRooms() {
+    const departmentId = dom.hotelAdminDepartment.value;
+    const rooms = await api(`/api/departments/${departmentId}/hotel/rooms`);
+    dom.roomsTable.textContent = "";
+    rooms.forEach((room) => dom.roomsTable.appendChild(buildRoomRow(room)));
+  }
+
+  function buildRatePlanRow(ratePlan) {
+    const roomType = hotelAdminRoomTypes.find((rt) => rt.id === ratePlan.room_type_id);
+    const row = document.createElement("tr");
+    const validity =
+      ratePlan.starts_on || ratePlan.ends_on
+        ? `${ratePlan.starts_on || "…"} → ${ratePlan.ends_on || "…"}`
+        : "Todo el año";
+    [
+      roomType ? roomType.name : "—",
+      ratePlan.name,
+      validity,
+      formatMoney(ratePlan.nightly_price_cents, ratePlan.currency),
+    ].forEach((value) => {
+      const cell = document.createElement("td");
+      cell.textContent = value;
+      row.appendChild(cell);
+    });
+    const actionsCell = document.createElement("td");
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "ghost-button ghost-button--danger";
+    remove.textContent = "Borrar";
+    remove.addEventListener("click", async () => {
+      showAdminError("");
+      try {
+        await api(
+          `/api/departments/${dom.hotelAdminDepartment.value}/hotel/rate-plans/${ratePlan.id}`,
+          { method: "DELETE" },
+        );
+        await loadHotelRatePlans();
+      } catch (error) {
+        showAdminError(error.message);
+      }
+    });
+    actionsCell.appendChild(remove);
+    row.appendChild(actionsCell);
+    return row;
+  }
+
+  async function loadHotelRatePlans() {
+    const departmentId = dom.hotelAdminDepartment.value;
+    const ratePlans = await api(`/api/departments/${departmentId}/hotel/rate-plans`);
+    dom.ratePlansTable.textContent = "";
+    ratePlans.forEach((ratePlan) => dom.ratePlansTable.appendChild(buildRatePlanRow(ratePlan)));
+  }
+
+  async function loadHotelAdminSetup() {
+    await loadHotelRoomTypes();
+    await loadHotelRooms();
+    await loadHotelRatePlans();
+  }
+
+  dom.hotelAdminDepartment.addEventListener("change", async () => {
+    showAdminError("");
+    dom.hotelAdminModuleField.hidden = true;
+    dom.hotelAdminSetup.hidden = true;
+    const departmentId = dom.hotelAdminDepartment.value;
+    if (!departmentId) {
+      return;
+    }
+    try {
+      const module = await api(`/api/departments/${departmentId}/hotel/module`);
+      dom.hotelAdminModuleEnabled.checked = module.enabled;
+      dom.hotelAdminModuleField.hidden = false;
+      dom.hotelAdminSetup.hidden = !module.enabled;
+      if (module.enabled) {
+        await loadHotelAdminSetup();
+      }
+    } catch (error) {
+      showAdminError(error.message);
+    }
+  });
+
+  dom.hotelAdminModuleEnabled.addEventListener("change", async () => {
+    showAdminError("");
+    const enabled = dom.hotelAdminModuleEnabled.checked;
+    try {
+      await api(`/api/departments/${dom.hotelAdminDepartment.value}/hotel/module`, {
+        method: "PUT",
+        body: JSON.stringify({ enabled }),
+      });
+      dom.hotelAdminSetup.hidden = !enabled;
+      if (enabled) {
+        await loadHotelAdminSetup();
+      }
+      setStatus(enabled ? "Módulo de hotel activado." : "Módulo de hotel desactivado.");
+    } catch (error) {
+      dom.hotelAdminModuleEnabled.checked = !enabled;
+      showAdminError(error.message);
+    }
+  });
+
+  dom.createRoomTypeForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    showAdminError("");
+    try {
+      await api(`/api/departments/${dom.hotelAdminDepartment.value}/hotel/room-types`, {
+        method: "POST",
+        body: JSON.stringify({
+          name: dom.newRoomTypeName.value.trim(),
+          capacity: Number(dom.newRoomTypeCapacity.value) || 1,
+          description: dom.newRoomTypeDescription.value.trim() || null,
+        }),
+      });
+      dom.createRoomTypeForm.reset();
+      dom.newRoomTypeCapacity.value = 2;
+      await loadHotelRoomTypes();
+      setStatus("Categoría creada.");
+    } catch (error) {
+      showAdminError(error.message);
+    }
+  });
+
+  dom.createRoomForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    showAdminError("");
+    try {
+      await api(`/api/departments/${dom.hotelAdminDepartment.value}/hotel/rooms`, {
+        method: "POST",
+        body: JSON.stringify({
+          room_type_id: dom.newRoomTypeSelect.value,
+          code: dom.newRoomCode.value.trim(),
+        }),
+      });
+      dom.newRoomCode.value = "";
+      await loadHotelRooms();
+      setStatus("Habitación creada.");
+    } catch (error) {
+      showAdminError(error.message);
+    }
+  });
+
+  dom.createRatePlanForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    showAdminError("");
+    const price = Number(dom.newRatePlanPrice.value);
+    if (!price || price <= 0) {
+      showAdminError("El precio debe ser mayor que cero.");
+      return;
+    }
+    try {
+      await api(`/api/departments/${dom.hotelAdminDepartment.value}/hotel/rate-plans`, {
+        method: "POST",
+        body: JSON.stringify({
+          room_type_id: dom.newRatePlanTypeSelect.value,
+          name: dom.newRatePlanName.value.trim(),
+          starts_on: dom.newRatePlanStarts.value || null,
+          ends_on: dom.newRatePlanEnds.value || null,
+          nightly_price_cents: Math.round(price * 100),
+          currency: (dom.newRatePlanCurrency.value || "USD").toUpperCase(),
+        }),
+      });
+      dom.createRatePlanForm.reset();
+      dom.newRatePlanCurrency.value = "USD";
+      await loadHotelRatePlans();
+      setStatus("Tarifa creada.");
+    } catch (error) {
+      showAdminError(error.message);
+    }
+  });
+
   /* -------------------------------------------------------------- supervisión */
 
   dom.supervisorButton.addEventListener("click", async () => {
@@ -2634,6 +2956,11 @@
     await loadCannedResponses();
     await loadMacros();
     refreshMacroStepFields();
+    // El departamento del hotel no se conserva de una apertura a otra: sin
+    // esto, reabrir el panel dejaría a la vista la configuración de la
+    // última vez, con el desplegable ya vacío por loadDepartments().
+    dom.hotelAdminModuleField.hidden = true;
+    dom.hotelAdminSetup.hidden = true;
     // Se abre siempre por usuarios: es lo que más se administra, y volver a
     // la sección donde alguien estuvo la vez anterior desorienta más de lo
     // que ahorra.
@@ -2775,6 +3102,222 @@
       showStartError(error.message);
     } finally {
       dom.startSend.disabled = false;
+    }
+  });
+
+  /* --------------------------------------------------- módulo Hotel: reservas */
+
+  const HOTEL_STATUS_LABELS = {
+    pending: "Pendiente",
+    confirmed: "Confirmada",
+    checked_in: "Con check-in",
+    checked_out: "Con check-out",
+    cancelled: "Cancelada",
+    no_show: "No show",
+  };
+
+  // Reflejo, solo para no ofrecer botones que el servidor rechazaría; la
+  // regla de verdad vive en HOTEL_RESERVATION_TRANSITIONS, en console.py.
+  const HOTEL_STATUS_TRANSITIONS = {
+    pending: [
+      ["confirmed", "Confirmar"],
+      ["cancelled", "Cancelar"],
+    ],
+    confirmed: [
+      ["checked_in", "Check-in"],
+      ["cancelled", "Cancelar"],
+      ["no_show", "No show"],
+    ],
+    checked_in: [["checked_out", "Check-out"]],
+    checked_out: [],
+    cancelled: [],
+    no_show: [],
+  };
+
+  function showHotelError(message) {
+    dom.hotelError.textContent = message;
+    dom.hotelError.hidden = !message;
+  }
+
+  async function loadHotelAvailability() {
+    dom.hotelAvailabilityList.textContent = "";
+    dom.hotelReservationRoom.textContent = "";
+    if (!dom.hotelCheckIn.value || !dom.hotelCheckOut.value) {
+      return;
+    }
+    const departmentId = dom.hotelDepartment.value;
+    const query = new URLSearchParams({
+      check_in: dom.hotelCheckIn.value,
+      check_out: dom.hotelCheckOut.value,
+    });
+    try {
+      const rooms = await api(`/api/departments/${departmentId}/hotel/availability?${query}`);
+      if (rooms.length === 0) {
+        const empty = document.createElement("li");
+        empty.className = "console__muted";
+        empty.textContent = "Sin habitaciones libres para esas fechas.";
+        dom.hotelAvailabilityList.appendChild(empty);
+        return;
+      }
+      rooms.forEach((room) => {
+        const item = document.createElement("li");
+        item.textContent = `${room.room_type_name} — ${room.code}`;
+        dom.hotelAvailabilityList.appendChild(item);
+
+        const option = document.createElement("option");
+        option.value = room.id;
+        option.textContent = `${room.room_type_name} — ${room.code}`;
+        dom.hotelReservationRoom.appendChild(option);
+      });
+    } catch (error) {
+      showHotelError(error.message);
+    }
+  }
+
+  function buildHotelReservationRow(reservation) {
+    const row = document.createElement("tr");
+    [
+      `${reservation.room_type_name} — ${reservation.room_code}`,
+      reservation.guest_name,
+      reservation.check_in,
+      reservation.check_out,
+      formatMoney(reservation.nightly_price_cents, reservation.currency),
+      HOTEL_STATUS_LABELS[reservation.status] || reservation.status,
+    ].forEach((value) => {
+      const cell = document.createElement("td");
+      cell.textContent = value;
+      row.appendChild(cell);
+    });
+
+    const actionsCell = document.createElement("td");
+    (HOTEL_STATUS_TRANSITIONS[reservation.status] || []).forEach(([nextStatus, label]) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "ghost-button";
+      button.textContent = label;
+      button.addEventListener("click", async () => {
+        showHotelError("");
+        try {
+          await api(
+            `/api/departments/${dom.hotelDepartment.value}/hotel/reservations/${reservation.id}/status`,
+            { method: "PUT", body: JSON.stringify({ status: nextStatus }) },
+          );
+          await loadHotelReservations();
+          await loadHotelAvailability();
+          setStatus(`Reserva: ${HOTEL_STATUS_LABELS[nextStatus] || nextStatus}.`);
+        } catch (error) {
+          showHotelError(error.message);
+        }
+      });
+      actionsCell.appendChild(button);
+    });
+
+    // El teléfono viene del huésped o del contacto que escribió por el
+    // canal; sin él no hay a quién mandarle la plantilla de confirmación.
+    if (reservation.guest_phone) {
+      const confirmButton = document.createElement("button");
+      confirmButton.type = "button";
+      confirmButton.className = "ghost-button";
+      confirmButton.textContent = "Confirmar por WhatsApp";
+      confirmButton.addEventListener("click", () => {
+        dom.hotelPanel.hidden = true;
+        dom.startTo.value = reservation.guest_phone;
+        openStartPanel();
+      });
+      actionsCell.appendChild(confirmButton);
+    }
+
+    row.appendChild(actionsCell);
+    return row;
+  }
+
+  // Devuelve si pudo cargar, en vez de dejarlo solo en el aviso de error: el
+  // selector de departamento lo usa para decidir si mostrar el resto del
+  // panel, y una excepción tragada aquí se lo ocultaría.
+  async function loadHotelReservations() {
+    const departmentId = dom.hotelDepartment.value;
+    const query = dom.hotelStatusFilter.value
+      ? `?status=${encodeURIComponent(dom.hotelStatusFilter.value)}`
+      : "";
+    try {
+      const reservations = await api(`/api/departments/${departmentId}/hotel/reservations${query}`);
+      dom.hotelReservationsTable.textContent = "";
+      reservations.forEach((reservation) =>
+        dom.hotelReservationsTable.appendChild(buildHotelReservationRow(reservation)),
+      );
+      return true;
+    } catch (error) {
+      showHotelError(error.message);
+      return false;
+    }
+  }
+
+  dom.hotelButton.addEventListener("click", () => {
+    showHotelError("");
+    dom.hotelBody.hidden = true;
+    dom.hotelDepartment.value = "";
+    dom.hotelAvailabilityList.textContent = "";
+    dom.hotelReservationRoom.textContent = "";
+    dom.hotelReservationForm.reset();
+    dom.hotelPanel.hidden = false;
+  });
+
+  dom.hotelClose.addEventListener("click", () => {
+    dom.hotelPanel.hidden = true;
+  });
+
+  dom.hotelDepartment.addEventListener("change", async () => {
+    showHotelError("");
+    dom.hotelBody.hidden = true;
+    const departmentId = dom.hotelDepartment.value;
+    if (!departmentId) {
+      return;
+    }
+    // 404 = sin acceso a ese departamento; 409 = el módulo no está activo
+    // ahí. En cualquiera de los dos casos el resto del panel queda oculto:
+    // loadHotelReservations ya dejó el aviso puesto.
+    const ok = await loadHotelReservations();
+    if (!ok) {
+      return;
+    }
+    dom.hotelBody.hidden = false;
+    await loadHotelAvailability();
+  });
+
+  dom.hotelStatusFilter.addEventListener("change", loadHotelReservations);
+  dom.hotelAvailabilityForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    loadHotelAvailability();
+  });
+
+  dom.hotelReservationForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    showHotelError("");
+    if (!dom.hotelReservationRoom.value) {
+      showHotelError("Busque disponibilidad y elija una habitación primero.");
+      return;
+    }
+    try {
+      await api(`/api/departments/${dom.hotelDepartment.value}/hotel/reservations`, {
+        method: "POST",
+        body: JSON.stringify({
+          room_id: dom.hotelReservationRoom.value,
+          guest_name: dom.hotelGuestName.value.trim(),
+          guest_phone: dom.hotelGuestPhone.value.trim() || null,
+          guest_email: dom.hotelGuestEmail.value.trim() || null,
+          check_in: dom.hotelCheckIn.value,
+          check_out: dom.hotelCheckOut.value,
+          guests: Number(dom.hotelGuestCount.value) || 1,
+          notes: dom.hotelReservationNotes.value.trim() || null,
+        }),
+      });
+      dom.hotelReservationForm.reset();
+      dom.hotelGuestCount.value = 1;
+      await loadHotelReservations();
+      await loadHotelAvailability();
+      setStatus("Reserva creada.");
+    } catch (error) {
+      showHotelError(error.message);
     }
   });
 
