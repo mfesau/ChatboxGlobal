@@ -157,6 +157,7 @@ class DepartmentOut(BaseModel):
     out_of_hours_message: str | dict[str, str] | None = None
     first_response_target_minutes: int | None = None
     logo_url: str | None = None
+    hotel_enabled: bool = False
 
 
 class DepartmentIn(BaseModel):
@@ -696,9 +697,19 @@ async def list_conversations(
 
 @router.get("/inbox/summary")
 async def inbox_summary(
-    session: SessionDep, settings: SettingsDep, principal: PrincipalDep, tenant: str | None = None
+    session: SessionDep,
+    settings: SettingsDep,
+    principal: PrincipalDep,
+    department: uuid.UUID | None = None,
+    tenant: str | None = None,
 ) -> dict[str, Any]:
-    """Contadores de las pestañas: cola común, cartera propia y total."""
+    """Contadores de las pestañas: cola común, cartera propia y total.
+
+    ``department`` acota los tres a la pestaña de departamento abierta, para
+    que el número de la cola común sea el de ese departamento y no el del
+    inquilino entero. Como en la bandeja, no amplía nada: es un filtro sobre
+    lo que ``department_ids`` ya permite.
+    """
     tenant_row = await repo.get_or_create_tenant(session, tenant or settings.default_tenant_slug)
     summary: dict[str, Any] = {
         "unassigned": await repo.count_conversations(
@@ -706,9 +717,14 @@ async def inbox_summary(
             tenant_id=tenant_row.id,
             scope="unassigned",
             department_ids=principal.department_ids,
+            department=department,
         ),
         "mine": await repo.count_conversations(
-            session, tenant_id=tenant_row.id, scope="mine", agent_id=principal.id
+            session,
+            tenant_id=tenant_row.id,
+            scope="mine",
+            agent_id=principal.id,
+            department=department,
         )
         if principal.id
         else 0,
@@ -716,7 +732,10 @@ async def inbox_summary(
     }
     if principal.is_supervisor:
         summary["all"] = await repo.count_conversations(
-            session, tenant_id=tenant_row.id, department_ids=principal.department_ids
+            session,
+            tenant_id=tenant_row.id,
+            department_ids=principal.department_ids,
+            department=department,
         )
     return summary
 
@@ -3963,6 +3982,10 @@ def _department_out(row: Department) -> DepartmentOut:
         # Se compone aquí y no se guarda: así cambiar el esquema de rutas no
         # exige tocar una sola fila.
         logo_url=f"/api/departments/{row.id}/logo" if row.logo_path else None,
+        # La consola lo necesita para saber qué pestaña de departamento lleva
+        # el botón de reservas; el acceso real lo sigue decidiendo el servidor
+        # en cada operación del módulo (ver _require_hotel_department).
+        hotel_enabled=repo.hotel_module_enabled(row),
     )
 
 

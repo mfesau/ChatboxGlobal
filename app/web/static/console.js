@@ -174,7 +174,6 @@
     ratePlanFormTitle: document.getElementById("rate-plan-form-title"),
     ratePlanSubmit: document.getElementById("rate-plan-submit"),
     ratePlanCancelEdit: document.getElementById("rate-plan-cancel-edit"),
-    hotelButton: document.getElementById("hotel-button"),
     hotelPanel: document.getElementById("hotel-panel"),
     hotelClose: document.getElementById("hotel-close"),
     hotelDepartment: document.getElementById("hotel-department"),
@@ -325,11 +324,6 @@
       // todo el mundo. Si la instalacion no tiene WhatsApp, el boton se
       // retira al primer intento (ver openStartPanel).
       dom.startButton.hidden = false;
-      // Igual que "Nueva conversación": operar el hotel es trabajo de
-      // cualquier agente con acceso al departamento, no solo de
-      // administración. El servidor decide el acceso al elegir el
-      // departamento (ver dom.hotelDepartment).
-      dom.hotelButton.hidden = false;
       showApp();
       return true;
     } catch {
@@ -352,7 +346,14 @@
 
   async function loadCounts() {
     try {
-      const summary = await api("/api/inbox/summary");
+      // Los contadores siguen a la pestaña abierta: la cola común de un
+      // departamento es la suya, no la del inquilino entero.
+      const params = new URLSearchParams();
+      if (dom.departmentFilter.value) {
+        params.set("department", dom.departmentFilter.value);
+      }
+      const query = params.toString();
+      const summary = await api(`/api/inbox/summary${query ? `?${query}` : ""}`);
       dom.counts.unassigned.textContent = summary.unassigned ?? 0;
       dom.counts.mine.textContent = summary.mine ?? 0;
       dom.counts.all.textContent = summary.all ?? 0;
@@ -1809,11 +1810,36 @@
 
   /* -------------------------------------------------- pestañas de departamento */
 
+  /* Cada pestaña es el puesto de trabajo de un departamento: al abrirla, la
+     bandeja —cola común incluida— queda acotada a él, y a la derecha aparecen
+     las acciones del módulo que ese departamento tenga activo. Por eso el
+     botón de reservas vive aquí y no suelto en la barra lateral: solo tiene
+     sentido dentro del departamento que lleva hotel. */
   function syncDepartmentTabs() {
     const active = dom.departmentFilter.value;
     dom.departmentTabs.querySelectorAll(".department-tab").forEach((tab) => {
       tab.setAttribute("aria-selected", String(tab.dataset.department === active));
     });
+    // Puede correr antes de que las pestañas existan (un filtro que cambia
+    // durante el arranque): sin botón todavía, no hay nada que ajustar.
+    if (!dom.departmentHotelButton) {
+      return;
+    }
+    const department = (state.departments || []).find((row) => row.id === active);
+    dom.departmentHotelButton.hidden = !department?.hotel_enabled;
+  }
+
+  function openHotelPanelFor(departmentId) {
+    showHotelError("");
+    dom.hotelBody.hidden = true;
+    dom.hotelAvailabilityList.textContent = "";
+    cancelEditingReservation();
+    dom.hotelPanel.hidden = false;
+    // El departamento ya está elegido —es la pestaña abierta—; se avisa al
+    // desplegable del panel para que cargue sus datos por el camino de
+    // siempre, en vez de repetir aquí esa carga.
+    dom.hotelDepartment.value = departmentId;
+    dom.hotelDepartment.dispatchEvent(new Event("change"));
   }
 
   function renderDepartmentTabs(options) {
@@ -1850,6 +1876,18 @@
     options.forEach((department) => {
       dom.departmentTabs.appendChild(buildTab(department.id, department.name, department.logo_url));
     });
+
+    const hotel = document.createElement("button");
+    hotel.type = "button";
+    hotel.className = "department-tabs__action";
+    hotel.id = "department-hotel-button";
+    hotel.textContent = i18n.t("hotel.button");
+    hotel.hidden = true;
+    hotel.addEventListener("click", () => openHotelPanelFor(dom.departmentFilter.value));
+    dom.departmentTabs.appendChild(hotel);
+    dom.departmentHotelButton = hotel;
+
+    syncDepartmentTabs();
   }
 
   dom.createDepartmentForm.addEventListener("submit", async (event) => {
@@ -3596,15 +3634,6 @@
       return false;
     }
   }
-
-  dom.hotelButton.addEventListener("click", () => {
-    showHotelError("");
-    dom.hotelBody.hidden = true;
-    dom.hotelDepartment.value = "";
-    dom.hotelAvailabilityList.textContent = "";
-    cancelEditingReservation();
-    dom.hotelPanel.hidden = false;
-  });
 
   dom.hotelClose.addEventListener("click", () => {
     dom.hotelPanel.hidden = true;
