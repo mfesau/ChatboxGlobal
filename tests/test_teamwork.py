@@ -423,6 +423,27 @@ async def test_the_inbox_summarys_all_count_is_scoped_for_a_supervisor(
     assert total_marta == total_admin - 1
 
 
+async def test_the_inbox_summary_follows_the_open_department_tab(anonymous, as_agent, team):
+    """La cola común de una pestaña es la de ese departamento, no la del todo."""
+    admin = await as_agent(team["admin"]["email"])
+    ventas = (await admin.post("/api/departments", json={"name": "Pestaña ventas"})).json()
+
+    await arrive(anonymous, "web-pestana-1")  # queda en la cola sin departamento
+    de_ventas = await arrive(anonymous, "web-pestana-2")
+    await admin.post(
+        f"/api/conversations/{de_ventas}/transfer", json={"to_department_id": ventas["id"]}
+    )
+
+    completo = (await admin.get("/api/inbox/summary")).json()
+    acotado = (
+        await admin.get("/api/inbox/summary", params={"department": ventas["id"]})
+    ).json()
+
+    assert completo["unassigned"] == 2
+    assert acotado["unassigned"] == 1
+    assert acotado["all"] == 1
+
+
 async def test_admin_sees_every_thread_and_can_reassign_it(anonymous, as_agent, team):
     conversation_id = await arrive(anonymous, "web-admin-reasigna")
     ana = await as_agent(team["ana"]["email"])

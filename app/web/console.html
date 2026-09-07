@@ -70,8 +70,8 @@
             </select>
             <!-- Fuente de verdad del filtro de departamento: sigue existiendo,
                  pero oculta, para no reescribir el resto de la bandeja
-                 (bandeja, vistas guardadas). La fila de pestañas de abajo la
-                 gobierna. -->
+                 (bandeja, vistas guardadas). Las pestañas de departamento de
+                 la cabecera (ver console__department-tabs) la gobiernan. -->
             <select id="department-filter" data-i18n-aria="filter.department" hidden>
               <option value="">Todos los departamentos</option>
             </select>
@@ -79,13 +79,6 @@
               <option value="">Todas las etiquetas</option>
             </select>
           </div>
-
-          <div
-            class="console__department-tabs"
-            id="department-tabs"
-            role="tablist"
-            data-i18n-aria="filter.department"
-          ></div>
 
           <div class="console__views">
             <div class="console__views-list" id="saved-views"></div>
@@ -108,12 +101,6 @@
           <button type="button" class="console__start" id="start-button" data-i18n="start.open" hidden>
             + Nueva conversación
           </button>
-          <!-- Trabajo operativo, no de administración: lo ve cualquier agente.
-               El servidor decide, departamento por departamento, si tiene
-               acceso y si el módulo está activo (ver console.js). -->
-          <button type="button" class="console__start" id="hotel-button" data-i18n="hotel.button" hidden>
-            + Reserva de hotel
-          </button>
         </header>
 
         <ul class="console__list" id="conversation-list"></ul>
@@ -129,6 +116,13 @@
       </aside>
 
       <main class="console__main">
+        <!-- Pestañas de departamento: cada una es el puesto de trabajo de ese
+             departamento —su cola común, sus chats— y lleva a la derecha las
+             acciones propias del módulo que tenga activo (hoy, reservas de
+             hotel). Solo aparecen las que la persona atiende. -->
+        <nav class="console__department-tabs" id="department-tabs" role="tablist"
+             data-i18n-aria="filter.department"></nav>
+
         <header class="console__thread-header">
           <div class="console__thread-title">
             <h2 id="thread-title" data-i18n="thread.selectOne">Seleccione una conversación</h2>

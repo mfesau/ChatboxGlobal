@@ -835,13 +835,21 @@ async def count_conversations(
     scope: str = "all",
     agent_id: uuid.UUID | None = None,
     department_ids: set[uuid.UUID] | None = None,
+    department: uuid.UUID | None = None,
     status: str | None = "open",
 ) -> int:
-    """Recuento para las pestañas de la consola, sin traer las filas."""
+    """Recuento para las pestañas de la consola, sin traer las filas.
+
+    ``department`` es el filtro de interfaz —la pestaña abierta—; se aplica
+    sobre lo que ``department_ids`` permite, igual que en
+    ``list_conversations``, para que el número y la lista coincidan.
+    """
     stmt = select(func.count()).select_from(Conversation).where(
         Conversation.tenant_id == tenant_id
     )
     stmt = _restrict_to_status(stmt, status)
+    if department:
+        stmt = stmt.where(Conversation.department_id == department)
     if scope == "unassigned":
         stmt = stmt.where(Conversation.assignee_id.is_(None))
         stmt = _restrict_to_accessible_departments(stmt, department_ids)
