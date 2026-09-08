@@ -1129,8 +1129,8 @@ async def test_starting_a_conversation_opens_a_thread_with_the_template(
     as_agent, whatsapp_listo
 ):
     """El caso completo: sin hilo previo, la consola escribe primero."""
-    ana = await as_agent(whatsapp_listo["ana"]["email"])
-    respuesta = await ana.post(
+    admin = await as_agent(whatsapp_listo["admin"]["email"])
+    respuesta = await admin.post(
         "/api/conversations/start",
         json={"to": "+595 982 971717", "template": "pedido", "language": "es",
               "variables": ["Ana", "A-42"]},
@@ -1140,7 +1140,7 @@ async def test_starting_a_conversation_opens_a_thread_with_the_template(
 
     # El hilo queda como cualquier otro: visible en la consola y con el texto
     # ya legible, no con el nombre técnico de la plantilla.
-    mensajes = (await ana.get(f"/api/conversations/{conversation_id}/messages")).json()
+    mensajes = (await admin.get(f"/api/conversations/{conversation_id}/messages")).json()
     assert [m["text"] for m in mensajes] == ["Hola Ana, su pedido A-42 sale hoy."]
 
     # Y el contacto se crea con el teléfono normalizado, para que un entrante
@@ -1160,8 +1160,8 @@ async def test_what_travels_to_whatsapp_is_the_template_and_not_the_text(
     El texto guardado es solo para leer el hilo en la consola; enviarlo como
     mensaje suelto lo rechazaría WhatsApp fuera de la ventana de 24 horas.
     """
-    ana = await as_agent(whatsapp_listo["ana"]["email"])
-    await ana.post(
+    admin = await as_agent(whatsapp_listo["admin"]["email"])
+    await admin.post(
         "/api/conversations/start",
         json={"to": "595982971717", "template": "pedido", "language": "es",
               "variables": ["Ana", "A-42"]},
@@ -1180,18 +1180,34 @@ async def test_what_travels_to_whatsapp_is_the_template_and_not_the_text(
 
 
 async def test_a_template_that_is_not_approved_is_turned_away(as_agent, whatsapp_listo):
-    ana = await as_agent(whatsapp_listo["ana"]["email"])
-    respuesta = await ana.post(
+    admin = await as_agent(whatsapp_listo["admin"]["email"])
+    respuesta = await admin.post(
         "/api/conversations/start",
         json={"to": "595982971717", "template": "inventada", "language": "es"},
     )
     assert respuesta.status_code == 404
 
 
+async def test_only_the_admin_writes_first(as_agent, whatsapp_listo):
+    """Abordar a quien no escribió antes lo decide administración.
+
+    Gasta una plantilla aprobada y llega a un teléfono que no pidió el
+    contacto, así que no alcanza con esconder el botón en la consola.
+    """
+    for quien in ("ana", "marta"):
+        cliente = await as_agent(whatsapp_listo[quien]["email"])
+        assert (await cliente.get("/api/whatsapp/templates")).status_code == 403
+        respuesta = await cliente.post(
+            "/api/conversations/start",
+            json={"to": "595982971717", "template": "hello_world", "language": "en_US"},
+        )
+        assert respuesta.status_code == 403, quien
+
+
 async def test_the_values_must_match_what_the_template_declares(as_agent, whatsapp_listo):
     """Con menos parámetros de los que declara, Meta falla con un error opaco."""
-    ana = await as_agent(whatsapp_listo["ana"]["email"])
-    respuesta = await ana.post(
+    admin = await as_agent(whatsapp_listo["admin"]["email"])
+    respuesta = await admin.post(
         "/api/conversations/start",
         json={"to": "595982971717", "template": "pedido", "language": "es",
               "variables": ["Solo uno"]},
@@ -1201,9 +1217,9 @@ async def test_the_values_must_match_what_the_template_declares(as_agent, whatsa
 
 
 async def test_something_that_is_not_a_phone_number_is_turned_away(as_agent, whatsapp_listo):
-    ana = await as_agent(whatsapp_listo["ana"]["email"])
+    admin = await as_agent(whatsapp_listo["admin"]["email"])
     for malo in ["hola", "12345", "+" + "9" * 20, ""]:
-        respuesta = await ana.post(
+        respuesta = await admin.post(
             "/api/conversations/start",
             json={"to": malo, "template": "hello_world", "language": "en_US"},
         )
@@ -1212,15 +1228,15 @@ async def test_something_that_is_not_a_phone_number_is_turned_away(as_agent, wha
 
 async def test_without_whatsapp_configured_the_console_is_told_so(as_agent, team, monkeypatch):
     """No hay token ni cuenta: se dice por qué, en vez de fallar en la cola."""
-    ana = await as_agent(team["ana"]["email"])
-    assert (await ana.get("/api/whatsapp/templates")).status_code == 503
+    admin = await as_agent(team["admin"]["email"])
+    assert (await admin.get("/api/whatsapp/templates")).status_code == 503
 
     async def plantillas(self):
         return PLANTILLAS
 
     monkeypatch.setattr(WhatsAppAdapter, "list_templates", plantillas)
     # Plantillas sí, pero ninguna cuenta de WhatsApp dada de alta.
-    respuesta = await ana.post(
+    respuesta = await admin.post(
         "/api/conversations/start",
         json={"to": "595982971717", "template": "hello_world", "language": "en_US"},
     )

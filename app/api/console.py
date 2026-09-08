@@ -839,9 +839,13 @@ def _render_template_body(body: str, variables: list[str]) -> str:
 
 @router.get("/whatsapp/templates")
 async def list_whatsapp_templates(
-    principal: PrincipalDep, orchestrator: OrchestratorDep
+    principal: AdminDep, orchestrator: OrchestratorDep
 ) -> list[dict[str, Any]]:
-    """Plantillas aprobadas, para elegir al iniciar una conversacion."""
+    """Plantillas aprobadas, para elegir al iniciar una conversacion.
+
+    Reservado a administración, como el envío que lo usa: es el único sitio
+    desde donde se eligen.
+    """
     adapter = orchestrator.registry.get(ChannelKind.WHATSAPP)
     try:
         return await adapter.list_templates()
@@ -856,11 +860,15 @@ async def start_conversation(
     body: StartConversationIn,
     session: SessionDep,
     settings: SettingsDep,
-    principal: PrincipalDep,
+    principal: AdminDep,
     orchestrator: OrchestratorDep,
     tenant: str | None = None,
 ) -> dict[str, str]:
-    """Abre una conversacion de WhatsApp escribiendo primero.
+    """Abre una conversacion de WhatsApp escribiendo primero. Solo administración.
+
+    Abordar a alguien que no escribió antes no es atender una consulta: gasta
+    una plantilla aprobada y llega a un teléfono que no pidió el contacto. Por
+    eso lo decide administración y no cualquier agente ni supervisión.
 
     WhatsApp no deja mandar texto libre a quien no ha escrito en las ultimas 24
     horas; fuera de esa ventana solo admite plantillas aprobadas. Por eso aqui

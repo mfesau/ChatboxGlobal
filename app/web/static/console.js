@@ -320,10 +320,13 @@
       dom.supervisorButton.hidden = !me.is_supervisor;
       dom.contactsButton.hidden = !me.is_supervisor;
       dom.adminButton.hidden = me.role !== "admin";
-      // Escribir primero es trabajo de agente, no de administracion: lo ve
-      // todo el mundo. Si la instalacion no tiene WhatsApp, el boton se
-      // retira al primer intento (ver openStartPanel).
-      dom.startButton.hidden = false;
+      // Escribir primero queda reservado a administracion: abordar a alguien
+      // que no escribio antes gasta una plantilla aprobada y es un contacto
+      // que el cliente no pidio. El servidor lo exige igual (ver
+      // start_conversation), no solo se oculta el boton. Si la instalacion no
+      // tiene WhatsApp, ademas se retira al primer intento (ver
+      // openStartPanel).
+      dom.startButton.hidden = me.role !== "admin";
       showApp();
       return true;
     } catch {
@@ -3556,7 +3559,10 @@
 
     // El teléfono viene del huésped o del contacto que escribió por el
     // canal; sin él no hay a quién mandarle la plantilla de confirmación.
-    if (reservation.guest_phone) {
+    // Confirmar por WhatsApp es escribir primero, y eso quedó reservado a
+    // administración: sin esta condición el botón seguiría a la vista para
+    // dar un 403 al tocarlo.
+    if (reservation.guest_phone && state.me?.role === "admin") {
       const confirmButton = document.createElement("button");
       confirmButton.type = "button";
       confirmButton.className = "ghost-button";
