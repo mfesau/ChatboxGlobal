@@ -79,10 +79,12 @@ class Settings(BaseSettings):
     microsoft_validate_jwt: bool = True
 
     # ----------------------------------------------------------------------- IA
-    anthropic_api_key: SecretStr | None = None
-    ai_model: str = "claude-opus-5"
+    #: Clave de la API de Gemini (Google AI Studio). Sin ella el asistente
+    #: queda apagado y el turno cae en el aviso de reserva (ver
+    #: ``app/handlers/ai.py``); el resto de la consola funciona igual.
+    google_api_key: SecretStr | None = None
+    ai_model: str = "gemini-3.8-flash"
     ai_max_tokens: int = 4_096
-    ai_effort: Literal["low", "medium", "high", "xhigh", "max"] = "medium"
     ai_history_turns: int = 12
     ai_system_prompt: str = (
         "Eres el asistente virtual de atención al cliente. "

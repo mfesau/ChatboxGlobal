@@ -50,7 +50,7 @@ from app.db.models import (
     Message,
     OutboxItem,
 )
-from app.handlers.ai import AIHandler
+from app.handlers.ai import HANDOFF_TOOL, AIHandler, _as_function_tool
 from app.handlers.builtin import BusinessHoursHandler, FirstResponseSlaHandler
 from app.main import create_app
 
@@ -3953,6 +3953,27 @@ async def test_hotel_dispatch_ignores_tools_it_does_not_own(anonymous, as_agent,
             {"motivo": "x", "urgencia": "baja"},
         )
     assert result is None
+
+
+def test_tools_are_translated_to_the_providers_function_format():
+    """Las definiciones se escriben una vez y se adaptan al llamar.
+
+    Así el módulo de negocio no sabe con qué proveedor se habla, y cambiarlo
+    —como se hizo de Anthropic a Gemini— no obliga a reescribirlas.
+    """
+    traducida = _as_function_tool(HANDOFF_TOOL)
+
+    assert traducida["type"] == "function"
+    assert traducida["name"] == "derivar_a_agente"
+    assert traducida["parameters"]["required"] == ["motivo", "urgencia"]
+    # Lo del proveedor anterior no viaja: el esquema de Gemini lo rechaza.
+    assert "additionalProperties" not in traducida["parameters"]
+    assert "strict" not in traducida
+
+    for tool in hotel_booking.HOTEL_TOOLS:
+        convertida = _as_function_tool(tool)
+        assert convertida["name"] == tool["name"]
+        assert convertida["parameters"]["type"] == "object"
 
 
 async def test_hotel_tools_are_only_offered_once_the_module_is_active(anonymous, as_agent, team):

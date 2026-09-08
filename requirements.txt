@@ -21,7 +21,7 @@ PyJWT[crypto]==2.10.1
 python3-saml==1.16.0
 
 # --- Motor de IA ---
-anthropic==0.75.0
+google-genai==2.22.0
 
 # --- Horario de atención ---
 # Base de datos de zonas horarias de IANA. En Linux la aporta el sistema, pero
