@@ -30,6 +30,10 @@
     charCount: document.getElementById("char-count"),
     statusDot: document.getElementById("status-dot"),
     statusText: document.getElementById("status-text"),
+    identityDepartment: document.getElementById("identity-department"),
+    departmentCard: document.getElementById("department-card"),
+    departmentOptions: document.getElementById("department-options"),
+    departmentError: document.getElementById("department-error"),
     widthToggle: document.getElementById("width-toggle"),
     resetButton: document.getElementById("reset-button"),
     logoutButton: document.getElementById("logout-button"),
@@ -65,6 +69,7 @@
     streamingBubble: null,
     typingTimer: null,
     clientName: null,
+    department: null,
     pendingAttachment: null,
   };
 
@@ -139,6 +144,11 @@
   function showGate() {
     dom.gate.hidden = false;
     dom.shell.hidden = true;
+    // Se vuelve siempre al acceso: si se cayó la sesión con el selector de
+    // rama a la vista, dejarlo puesto ofrecería elegir sin estar identificado.
+    dom.departmentCard.hidden = true;
+    dom.registerForm.hidden = true;
+    dom.loginForm.hidden = false;
     if (state.socket) {
       state.socket.close();
       state.socket = null;
@@ -148,6 +158,71 @@
   function showApp() {
     dom.gate.hidden = true;
     dom.shell.hidden = false;
+  }
+
+  /* ------------------------------------------------------- elegir con quién */
+
+  /** Entra al hilo, ya con la rama decidida (o sin ninguna si no hay). */
+  function enterChat(department) {
+    state.department = department || null;
+    dom.identityDepartment.textContent = department ? department.name : "";
+    dom.identityDepartment.hidden = !department;
+    showApp();
+    connect();
+  }
+
+  /** Muestra el selector de rama, o entra directo si no hay entre qué elegir. */
+  async function chooseBeforeChatting() {
+    let departments = [];
+    try {
+      departments = await api("/api/contact/departments");
+    } catch {
+      // Sin la lista no se puede elegir; entrar igual es mejor que dejar al
+      // cliente en una pantalla vacía. La conversación queda en la cola común,
+      // que es como funcionaba antes de que existiera este paso.
+      enterChat(null);
+      return;
+    }
+    if (departments.length === 0) {
+      enterChat(null);
+      return;
+    }
+
+    dom.departmentError.hidden = true;
+    dom.loginForm.hidden = true;
+    dom.registerForm.hidden = true;
+    dom.departmentCard.hidden = false;
+    dom.gate.hidden = false;
+    dom.shell.hidden = true;
+
+    dom.departmentOptions.textContent = "";
+    departments.forEach((department) => {
+      const option = document.createElement("button");
+      option.type = "button";
+      option.className = "gate__department";
+      option.textContent = department.name;
+      option.addEventListener("click", () => chooseDepartment(department, option));
+      dom.departmentOptions.appendChild(option);
+    });
+  }
+
+  async function chooseDepartment(department, option) {
+    dom.departmentError.hidden = true;
+    option.disabled = true;
+    try {
+      await api("/api/contact/department", {
+        method: "PUT",
+        body: JSON.stringify({ department_id: department.id }),
+      });
+      dom.departmentCard.hidden = true;
+      dom.loginForm.hidden = false;
+      enterChat(department);
+    } catch (error) {
+      dom.departmentError.textContent = error.message;
+      dom.departmentError.hidden = false;
+    } finally {
+      option.disabled = false;
+    }
   }
 
   function updateHeaderIdentity({ control, assigneeName } = {}) {
@@ -201,8 +276,13 @@
       const data = await api("/api/contact/me");
       state.clientName = data.contact?.display_name || null;
       updateHeaderIdentity();
-      showApp();
-      connect();
+      // Quien ya eligió rama vuelve directo a su hilo; solo se pregunta la
+      // primera vez.
+      if (data.department) {
+        enterChat(data.department);
+      } else {
+        await chooseBeforeChatting();
+      }
       return true;
     } catch {
       showGate();
@@ -241,8 +321,9 @@
       }
       state.clientName = data.contact?.display_name || null;
       updateHeaderIdentity();
-      showApp();
-      connect();
+      // Recién identificado: se le pregunta con qué rama quiere hablar, salvo
+      // que ya lo hubiera elegido en una visita anterior.
+      await loadIdentity();
     } catch (error) {
       dom.loginError.textContent = error.message;
       dom.loginError.hidden = false;
@@ -267,8 +348,8 @@
       dom.registerPassword.value = "";
       state.clientName = data.contact?.display_name || null;
       updateHeaderIdentity();
-      showApp();
-      connect();
+      // Cuenta nueva: nunca eligió rama, así que el selector sale sí o sí.
+      await chooseBeforeChatting();
     } catch (error) {
       dom.registerError.textContent = error.message;
       dom.registerError.hidden = false;

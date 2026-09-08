@@ -88,6 +88,21 @@
           <button type="button" class="link-button" id="show-login" data-i18n="gate.login">Inicie sesión</button>
         </p>
       </form>
+
+      <!-- Paso intermedio entre el acceso y el hilo: con qué rama quiere
+           hablar. La elección fija el departamento de la conversación, de modo
+           que el primer mensaje ya nace en la cola correcta y el asistente
+           puede ofrecer lo que ese departamento tenga activo (por ejemplo,
+           reservar una habitación). Se salta si el inquilino no tiene
+           departamentos dados de alta (ver chat.js). -->
+      <div class="gate__card" id="department-card" hidden>
+        <h1 data-i18n="gate.departmentTitle">¿Con quién quiere hablar?</h1>
+        <p class="gate__hint" data-i18n="gate.departmentHint">
+          Elija el área que atiende su consulta.
+        </p>
+        <p class="gate__error" id="department-error" hidden></p>
+        <div class="gate__departments" id="department-options"></div>
+      </div>
     </div>
 
     <!-- Aplicación ----------------------------------------------------------- -->
@@ -97,7 +112,10 @@
           <span class="identity__dot" id="status-dot" aria-hidden="true"></span>
           <div>
             <h1 class="identity__name" id="identity-name">ChatboxGlobal</h1>
-            <p class="identity__state" id="status-text" data-i18n="chat.connecting">Conectando…</p>
+            <p class="identity__state">
+              <span id="status-text" data-i18n="chat.connecting">Conectando…</span>
+              <span id="identity-department" class="identity__department" hidden></span>
+            </p>
           </div>
         </div>
         <div class="header-actions">

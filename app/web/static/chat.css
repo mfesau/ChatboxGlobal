@@ -199,6 +199,43 @@ body {
   border-radius: 10px;
 }
 
+/* Elegir rama: una lista de opciones grandes, no un desplegable. Es la
+   primera decisión que toma el cliente y conviene que se vea entera de un
+   golpe, sobre todo en el móvil. */
+.gate__departments {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.gate__department {
+  padding: 14px 16px;
+  font: inherit;
+  font-size: 15px;
+  color: var(--text);
+  text-align: left;
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  cursor: pointer;
+}
+
+.gate__department:hover:not(:disabled) {
+  color: var(--accent-ink);
+  border-color: var(--accent);
+}
+
+.gate__department:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* La rama elegida, junto al estado de conexión en la cabecera del hilo. */
+.identity__department::before {
+  content: "·";
+  margin: 0 6px;
+}
+
 .gate__switch {
   margin: 0;
   font-size: 13px;

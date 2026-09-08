@@ -1401,6 +1401,88 @@ async def test_a_department_logo_rejects_a_non_image_type(as_agent, team):
     assert rejected.status_code == 415
 
 
+async def test_the_customer_picks_which_branch_to_talk_to(anonymous, as_agent, team):
+    """Elegir rama al entrar deja el primer mensaje ya en la cola correcta.
+
+    Es lo que habilita que el asistente ofrezca lo del departamento —reservar
+    una habitación, por ejemplo—: sin departamento no hay módulo que ofrecer.
+    """
+    admin = await as_agent(team["admin"]["email"])
+    hotel = (await admin.post("/api/departments", json={"name": "Hotel cliente"})).json()
+
+    transport = httpx.ASGITransport(app=anonymous.asgi_app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://pruebas") as cliente:
+        registro = await cliente.post(
+            "/api/contact/register",
+            json={"email": "elige-rama@clientes.local", "password": CLIENT_PASSWORD},
+        )
+        assert registro.status_code == 201
+        # Todavía no eligió; así lo sabe el chatbox al cargar.
+        assert (await cliente.get("/api/contact/me")).json()["department"] is None
+
+        ramas = (await cliente.get("/api/contact/departments")).json()
+        assert "Hotel cliente" in {row["name"] for row in ramas}
+
+        elegida = await cliente.put(
+            "/api/contact/department", json={"department_id": hotel["id"]}
+        )
+        assert elegida.status_code == 200
+        vuelta = (await cliente.get("/api/contact/me")).json()["department"]
+        assert vuelta["name"] == "Hotel cliente"
+
+        escrito = await cliente.post(
+            "/api/web/messages", json={"text": "Quiero una habitación"}
+        )
+        assert escrito.status_code == 200
+
+    # El hilo nace en esa rama, sin que nadie lo derive a mano.
+    en_hotel = (
+        await admin.get(f"/api/conversations?scope=all&department={hotel['id']}")
+    ).json()
+    assert [row["department_name"] for row in en_hotel] == ["Hotel cliente"]
+
+
+async def test_a_customer_cannot_pick_a_branch_that_does_not_exist(anonymous, team):
+    transport = httpx.ASGITransport(app=anonymous.asgi_app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://pruebas") as cliente:
+        await cliente.post(
+            "/api/contact/register",
+            json={"email": "rama-inventada@clientes.local", "password": CLIENT_PASSWORD},
+        )
+        respuesta = await cliente.put(
+            "/api/contact/department", json={"department_id": str(uuid.uuid4())}
+        )
+        assert respuesta.status_code == 404
+
+
+async def test_a_customer_does_not_move_a_thread_someone_is_attending(
+    anonymous, as_agent, team
+):
+    """Cambiar de rama con un agente ya encima se la sacaría de su bandeja."""
+    admin = await as_agent(team["admin"]["email"])
+    primera = (await admin.post("/api/departments", json={"name": "Primera rama"})).json()
+    otra = (await admin.post("/api/departments", json={"name": "Otra rama"})).json()
+
+    transport = httpx.ASGITransport(app=anonymous.asgi_app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://pruebas") as cliente:
+        await cliente.post(
+            "/api/contact/register",
+            json={"email": "ya-atendido@clientes.local", "password": CLIENT_PASSWORD},
+        )
+        await cliente.put("/api/contact/department", json={"department_id": primera["id"]})
+        await cliente.post("/api/web/messages", json={"text": "Hola"})
+
+        hilos = (
+            await admin.get(f"/api/conversations?scope=all&department={primera['id']}")
+        ).json()
+        await admin.post(f"/api/conversations/{hilos[0]['id']}/claim")
+
+        respuesta = await cliente.put(
+            "/api/contact/department", json={"department_id": otra["id"]}
+        )
+        assert respuesta.status_code == 409
+
+
 async def test_admin_grants_extra_departments_to_an_agent(as_agent, team):
     admin = await as_agent(team["admin"]["email"])
     ventas = (await admin.post("/api/departments", json={"name": "Ventas 2"})).json()

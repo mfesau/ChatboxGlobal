@@ -8,6 +8,7 @@ identidad de quien escribe en el chatbox público en vez de para el equipo.
 from __future__ import annotations
 
 import asyncio
+import uuid
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request, Response, UploadFile, status
@@ -20,6 +21,7 @@ from app.api.deps import (
     SessionDep,
     SettingsDep,
 )
+from app.core.envelope import ChannelKind, ConversationRef
 from app.core.mailer import send_email, welcome_email_body
 from app.core.security import (
     WeakPasswordError,
@@ -39,12 +41,44 @@ router = APIRouter(prefix="/api/contact", tags=["chatbox: cuenta"])
 _DUMMY_HASH = hash_password("contraseña-inexistente-de-relleno")
 _EXPIRES_IN_S = int(CONTACT_SESSION_TTL.total_seconds())
 
+#: Identificador de la cuenta de canal del chatbox web. El mismo que pone el
+#: adaptador (ver app/channels/web.py): si no coincidiera, elegir departamento
+#: crearía una conversación distinta de aquella en la que el cliente escribe.
+_WEB_ACCOUNT = "web"
+
+
+def _web_ref(contact: Any) -> ConversationRef:
+    """Referencia del hilo del chatbox de ese contacto.
+
+    El hilo es uno por contacto —no por navegador ni por sesión—, igual que
+    resuelve ``app/api/ws.py`` al abrir el socket.
+    """
+    return ConversationRef(
+        channel=ChannelKind.WEB,
+        channel_conversation_id=str(contact.id),
+        channel_account_id=_WEB_ACCOUNT,
+    )
+
+
+async def _web_conversation(session: Any, contact: Any) -> Any:
+    """Conversación del chatbox de ese contacto, o ``None`` si aún no escribió."""
+    return await repo.find_conversation(
+        session,
+        tenant_id=contact.tenant_id,
+        channel=ChannelKind.WEB,
+        channel_conversation_id=str(contact.id),
+    )
+
 
 def _normalise_email(value: str) -> str:
     value = value.strip().lower()
     if "@" not in value:
         raise ValueError("El correo debe incluir el signo @")
     return value
+
+
+class ChooseDepartmentIn(BaseModel):
+    department_id: uuid.UUID
 
 
 class RegisterIn(BaseModel):
@@ -219,9 +253,88 @@ async def logout(request: Request, response: Response, session: SessionDep) -> d
 
 
 @router.get("/me")
-async def whoami(contact: ContactDep) -> dict[str, Any]:
-    """Identidad efectiva de la petición, usada por el chatbox al cargar."""
-    return {"contact": _serialize(contact)}
+async def whoami(contact: ContactDep, session: SessionDep) -> dict[str, Any]:
+    """Identidad efectiva de la petición, usada por el chatbox al cargar.
+
+    ``department`` es la rama con la que el cliente eligió hablar, o ``None``
+    si todavía no eligió: con eso el chatbox sabe si mostrar el selector
+    antes del hilo.
+    """
+    conversation = await _web_conversation(session, contact)
+    department = None
+    if conversation is not None and conversation.department_id is not None:
+        row = await repo.get_department(session, conversation.department_id)
+        if row is not None:
+            department = {"id": str(row.id), "name": row.name}
+    return {"contact": _serialize(contact), "department": department}
+
+
+@router.get("/departments")
+async def list_contact_departments(
+    contact: ContactDep, session: SessionDep
+) -> list[dict[str, Any]]:
+    """Ramas con las que el cliente puede hablar.
+
+    Solo el nombre y el identificador: al cliente no le incumbe el horario,
+    el objetivo de respuesta ni qué módulos tiene activos cada una.
+    """
+    departments = await repo.list_departments(session, tenant_id=contact.tenant_id)
+    return [{"id": str(row.id), "name": row.name} for row in departments]
+
+
+@router.put("/department")
+async def choose_department(
+    body: ChooseDepartmentIn, contact: ContactDep, session: SessionDep
+) -> dict[str, Any]:
+    """Fija con qué rama habla el cliente, antes de escribir.
+
+    Se guarda en la conversación —creándola si todavía no existe— y no en el
+    contacto: es la conversación la que entra a la cola de ese departamento, y
+    así el primer mensaje ya nace en el sitio correcto en vez de aparecer en la
+    cola común y tener que derivarlo alguien a mano.
+    """
+    department = await repo.get_department(session, body.department_id)
+    if (
+        department is None
+        or department.tenant_id != contact.tenant_id
+        or not department.is_active
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="El departamento no existe"
+        )
+
+    conversation = await _web_conversation(session, contact)
+    if conversation is None:
+        account = await repo.get_or_create_channel_account(
+            session,
+            tenant_id=contact.tenant_id,
+            channel=ChannelKind.WEB,
+            external_id=_WEB_ACCOUNT,
+        )
+        conversation = await repo.resolve_conversation(
+            session,
+            tenant_id=contact.tenant_id,
+            ref=_web_ref(contact),
+            contact_id=contact.id,
+            channel_account=account,
+        )
+    elif conversation.assignee_id is not None:
+        # Ya la está atendiendo alguien: cambiarla de rama se la sacaría de la
+        # bandeja sin que se entere. Que la derive esa persona, que sí ve el
+        # hilo y puede explicar el traspaso.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Ya hay alguien atendiendo esta conversación",
+        )
+
+    conversation.department_id = department.id
+    await session.flush()
+    log.info(
+        "contact_chose_department",
+        contact=str(contact.id),
+        department=department.name,
+    )
+    return {"department": {"id": str(department.id), "name": department.name}}
 
 
 @router.post("/uploads", status_code=status.HTTP_201_CREATED)
