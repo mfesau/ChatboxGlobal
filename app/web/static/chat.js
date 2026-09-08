@@ -31,6 +31,16 @@
     statusDot: document.getElementById("status-dot"),
     statusText: document.getElementById("status-text"),
     identityDepartment: document.getElementById("identity-department"),
+    bookingOpen: document.getElementById("booking-open"),
+    booking: document.getElementById("booking"),
+    bookingClose: document.getElementById("booking-close"),
+    bookingForm: document.getElementById("booking-form"),
+    bookingCheckIn: document.getElementById("booking-check-in"),
+    bookingCheckOut: document.getElementById("booking-check-out"),
+    bookingGuests: document.getElementById("booking-guests"),
+    bookingSearch: document.getElementById("booking-search"),
+    bookingResults: document.getElementById("booking-results"),
+    bookingError: document.getElementById("booking-error"),
     departmentCard: document.getElementById("department-card"),
     departmentOptions: document.getElementById("department-options"),
     departmentError: document.getElementById("department-error"),
@@ -167,9 +177,142 @@
     state.department = department || null;
     dom.identityDepartment.textContent = department ? department.name : "";
     dom.identityDepartment.hidden = !department;
+    // Reservar solo tiene sentido en una rama con el módulo activo.
+    dom.bookingOpen.hidden = !department?.hotel;
+    dom.booking.hidden = true;
     showApp();
     connect();
   }
+
+  /* ----------------------------------------------------------- reservar */
+
+  function showBookingError(message) {
+    dom.bookingError.textContent = message;
+    dom.bookingError.hidden = !message;
+  }
+
+  function money(cents, currency) {
+    return `${(cents / 100).toFixed(2)} ${currency}`;
+  }
+
+  dom.bookingOpen.addEventListener("click", () => {
+    showBookingError("");
+    dom.bookingResults.textContent = "";
+    dom.booking.hidden = false;
+  });
+
+  dom.bookingClose.addEventListener("click", () => {
+    dom.booking.hidden = true;
+  });
+
+  dom.bookingForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    showBookingError("");
+    dom.bookingResults.textContent = "";
+    dom.bookingSearch.disabled = true;
+    const stay = {
+      check_in: dom.bookingCheckIn.value,
+      check_out: dom.bookingCheckOut.value,
+      guests: Number(dom.bookingGuests.value),
+    };
+    try {
+      const params = new URLSearchParams({
+        check_in: stay.check_in,
+        check_out: stay.check_out,
+      });
+      const options = await api(`/api/contact/hotel/availability?${params}`);
+      renderBookingOptions(options, stay);
+    } catch (error) {
+      showBookingError(error.message);
+    } finally {
+      dom.bookingSearch.disabled = false;
+    }
+  });
+
+  function renderBookingOptions(options, stay) {
+    // Sin cupo no se deja al cliente mirando un panel vacío preguntándose si
+    // falló algo: se le dice, y las fechas quedan puestas para probar otras.
+    const libres = options.filter((option) => option.available > 0);
+    if (libres.length === 0) {
+      dom.bookingResults.textContent = i18n.t("booking.none");
+      return;
+    }
+    libres.forEach((option) => {
+      const card = document.createElement("div");
+      card.className = "booking__option";
+
+      const title = document.createElement("strong");
+      title.textContent = option.name;
+      card.appendChild(title);
+
+      const detail = document.createElement("p");
+      const partes = [
+        i18n.t("booking.capacity", { capacity: option.capacity }),
+        i18n.t("booking.free", { count: option.available }),
+      ];
+      if (option.nightly_price_cents !== null) {
+        partes.push(`${money(option.nightly_price_cents, option.currency)} / ${i18n.t("booking.night")}`);
+      }
+      detail.textContent = partes.join(" · ");
+      card.appendChild(detail);
+
+      if (option.total_price_cents !== null) {
+        const total = document.createElement("p");
+        total.className = "booking__total";
+        total.textContent = i18n.t("booking.total", {
+          nights: option.nights,
+          amount: money(option.total_price_cents, option.currency),
+        });
+        card.appendChild(total);
+      }
+
+      const reservar = document.createElement("button");
+      reservar.type = "button";
+      reservar.className = "send-button";
+      reservar.textContent = i18n.t("booking.reserve");
+      reservar.addEventListener("click", () => reserve(option, stay, reservar));
+      card.appendChild(reservar);
+
+      dom.bookingResults.appendChild(card);
+    });
+  }
+
+  async function reserve(option, stay, button) {
+    showBookingError("");
+    button.disabled = true;
+    try {
+      const reserva = await api("/api/contact/hotel/reservations", {
+        method: "POST",
+        body: JSON.stringify({
+          check_in: stay.check_in,
+          check_out: stay.check_out,
+          guests: stay.guests,
+          room_type_id: option.room_type_id,
+          guest_name: state.clientName || i18n.t("chat.client"),
+        }),
+      });
+      dom.booking.hidden = true;
+      // El acuse va al hilo: así queda por escrito en la conversación, que es
+      // donde el cliente va a volver a buscarlo, y el equipo lo ve en la
+      // bandeja junto al resto.
+      sendMessage(
+        i18n.t("booking.sent", {
+          type: reserva.room_type,
+          checkIn: reserva.check_in,
+          checkOut: reserva.check_out,
+        }),
+      );
+    } catch (error) {
+      showBookingError(error.message);
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  // La rama de la cabecera abre otra vez el selector: es la única salida para
+  // quien eligió mal la primera vez. Si ya hay alguien atendiendo el hilo, el
+  // servidor lo rechaza y el error se muestra en el propio selector.
+  dom.identityDepartment.addEventListener("click", () => chooseBeforeChatting());
 
   /** Muestra el selector de rama, o entra directo si no hay entre qué elegir. */
   async function chooseBeforeChatting() {

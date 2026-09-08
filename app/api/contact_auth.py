@@ -265,8 +265,22 @@ async def whoami(contact: ContactDep, session: SessionDep) -> dict[str, Any]:
     if conversation is not None and conversation.department_id is not None:
         row = await repo.get_department(session, conversation.department_id)
         if row is not None:
-            department = {"id": str(row.id), "name": row.name}
+            department = _department_out(row)
     return {"contact": _serialize(contact), "department": department}
+
+
+def _department_out(row: Any) -> dict[str, Any]:
+    """Lo que el chatbox necesita saber de una rama.
+
+    ``hotel`` decide si se le ofrece el formulario de reservas; el permiso real
+    lo vuelve a comprobar el servidor en cada operación (ver
+    ``app/api/contact_hotel.py``).
+    """
+    return {
+        "id": str(row.id),
+        "name": row.name,
+        "hotel": repo.hotel_module_enabled(row),
+    }
 
 
 @router.get("/departments")
@@ -279,7 +293,7 @@ async def list_contact_departments(
     el objetivo de respuesta ni qué módulos tiene activos cada una.
     """
     departments = await repo.list_departments(session, tenant_id=contact.tenant_id)
-    return [{"id": str(row.id), "name": row.name} for row in departments]
+    return [_department_out(row) for row in departments]
 
 
 @router.put("/department")
@@ -334,7 +348,7 @@ async def choose_department(
         contact=str(contact.id),
         department=department.name,
     )
-    return {"department": {"id": str(department.id), "name": department.name}}
+    return {"department": _department_out(department)}
 
 
 @router.post("/uploads", status_code=status.HTTP_201_CREATED)

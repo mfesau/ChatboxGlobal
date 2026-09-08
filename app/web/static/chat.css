@@ -230,10 +230,105 @@ body {
   cursor: default;
 }
 
-/* La rama elegida, junto al estado de conexión en la cabecera del hilo. */
+/* La rama elegida, junto al estado de conexión en la cabecera del hilo. Es un
+   botón —cambiar de área se hace desde acá—, pero se dibuja como texto para no
+   competir con las acciones de la derecha. */
+.identity__department {
+  padding: 0;
+  font: inherit;
+  color: var(--accent-ink);
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
 .identity__department::before {
   content: "·";
   margin: 0 6px;
+  color: var(--text-muted);
+}
+
+.identity__department:hover {
+  text-decoration: underline;
+}
+
+/* --- Reservar una habitación ------------------------------------------- */
+/* Va entre el hilo y el redactor, no como diálogo encima: el cliente sigue
+   viendo la conversación mientras elige, que es donde está lo que ya habló
+   con el hotel. */
+.booking {
+  flex: none;
+  max-height: 55vh;
+  padding: 16px;
+  overflow-y: auto;
+  background: var(--surface-alt);
+  border-top: 1px solid var(--border);
+}
+
+.booking__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.booking__header h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.booking__form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 10px;
+  align-items: end;
+}
+
+.booking__form label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.booking__form input {
+  padding: 9px 10px;
+  font: inherit;
+  font-size: 14px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.booking__results {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+  margin-top: 14px;
+  font-size: 13px;
+}
+
+.booking__option {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+.booking__option p {
+  margin: 0;
+  color: var(--text-muted);
+}
+
+.booking__total {
+  font-weight: 600;
+  color: var(--text) !important;
 }
 
 .gate__switch {

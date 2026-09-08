@@ -114,11 +114,23 @@
             <h1 class="identity__name" id="identity-name">ChatboxGlobal</h1>
             <p class="identity__state">
               <span id="status-text" data-i18n="chat.connecting">Conectando…</span>
-              <span id="identity-department" class="identity__department" hidden></span>
+              <!-- La rama elegida es además el modo de cambiarla: sin esto,
+                   quien elige una vez queda encerrado ahí para siempre. -->
+              <button
+                type="button"
+                id="identity-department"
+                class="identity__department"
+                data-i18n-title="chat.changeDepartment"
+                hidden
+              ></button>
             </p>
           </div>
         </div>
         <div class="header-actions">
+          <!-- Solo si la rama elegida lleva hotel (ver chat.js). -->
+          <button type="button" class="ghost-button" id="booking-open" data-i18n="booking.open" hidden>
+            Reservar
+          </button>
           <button
             type="button"
             class="ghost-button"
@@ -172,6 +184,40 @@
             </button>
           </div>
         </div>
+      </section>
+
+      <!-- Reservar sin depender del asistente: quien entra a una rama con
+           hotel activo tiene aquí el formulario, aunque no haya modelo
+           configurado ni nadie del equipo mirando la bandeja. La reserva nace
+           pendiente; la confirma el hotel. -->
+      <section class="booking" id="booking" hidden>
+        <header class="booking__header">
+          <h2 data-i18n="booking.title">Reservar una habitación</h2>
+          <button type="button" class="ghost-button" id="booking-close" data-i18n="booking.close">
+            Cerrar
+          </button>
+        </header>
+        <p class="gate__error" id="booking-error" hidden></p>
+
+        <form class="booking__form" id="booking-form">
+          <label>
+            <span data-i18n="booking.checkIn">Entrada</span>
+            <input type="date" id="booking-check-in" required />
+          </label>
+          <label>
+            <span data-i18n="booking.checkOut">Salida</span>
+            <input type="date" id="booking-check-out" required />
+          </label>
+          <label>
+            <span data-i18n="booking.guests">Personas</span>
+            <input type="number" id="booking-guests" min="1" max="20" value="2" required />
+          </label>
+          <button type="submit" class="send-button" id="booking-search" data-i18n="booking.search">
+            Ver disponibilidad
+          </button>
+        </form>
+
+        <div class="booking__results" id="booking-results"></div>
       </section>
 
       <div class="typing" id="typing" hidden>

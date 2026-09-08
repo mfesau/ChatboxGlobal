@@ -1442,6 +1442,119 @@ async def test_the_customer_picks_which_branch_to_talk_to(anonymous, as_agent, t
     assert [row["department_name"] for row in en_hotel] == ["Hotel cliente"]
 
 
+async def test_the_customer_books_a_room_from_the_chatbox(anonymous, as_agent, team):
+    """El circuito completo del cliente: elige rama, mira y reserva.
+
+    Sin pasar por el asistente ni por la consola: es lo que necesita quien
+    entra al chatbox de una rama con hotel.
+    """
+    admin = await as_agent(team["admin"]["email"])
+    hotel = await _hotel_department(admin, "Hotel del chatbox")
+    await _hotel_room(admin, hotel["id"], code="301", capacity=2)
+
+    transport = httpx.ASGITransport(app=anonymous.asgi_app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://pruebas") as cliente:
+        await cliente.post(
+            "/api/contact/register",
+            json={"email": "reserva-web@clientes.local", "password": CLIENT_PASSWORD},
+        )
+        # Antes de elegir rama no se puede reservar: no hay hotel al que pedir.
+        temprano = await cliente.get(
+            "/api/contact/hotel/availability",
+            params={"check_in": "2027-03-01", "check_out": "2027-03-04"},
+        )
+        assert temprano.status_code == 409
+
+        await cliente.put("/api/contact/department", json={"department_id": hotel["id"]})
+        # Y la rama se anuncia como de hotel, que es lo que enciende el botón.
+        assert (await cliente.get("/api/contact/me")).json()["department"]["hotel"] is True
+
+        libres = await cliente.get(
+            "/api/contact/hotel/availability",
+            params={"check_in": "2027-03-01", "check_out": "2027-03-04"},
+        )
+        assert libres.status_code == 200
+        opciones = libres.json()
+        assert len(opciones) == 1
+        assert opciones[0]["available"] == 1
+        assert opciones[0]["nights"] == 3
+        assert opciones[0]["total_price_cents"] == opciones[0]["nightly_price_cents"] * 3
+
+        reserva = await cliente.post(
+            "/api/contact/hotel/reservations",
+            json={
+                "check_in": "2027-03-01",
+                "check_out": "2027-03-04",
+                "guests": 2,
+                "room_type_id": opciones[0]["room_type_id"],
+                "guest_name": "Dorothea",
+            },
+        )
+        assert reserva.status_code == 201, reserva.text
+        # Nace pendiente: la confirma el hotel, no quien la pide.
+        assert reserva.json()["status"] == "pending"
+
+        # Y esas fechas ya no figuran libres.
+        despues = (
+            await cliente.get(
+                "/api/contact/hotel/availability",
+                params={"check_in": "2027-03-01", "check_out": "2027-03-04"},
+            )
+        ).json()
+        assert despues == []
+
+    # El equipo la ve en su panel, como cualquier otra reserva.
+    del_equipo = (
+        await admin.get(f"/api/departments/{hotel['id']}/hotel/reservations")
+    ).json()
+    assert [row["guest_name"] for row in del_equipo] == ["Dorothea"]
+
+
+async def test_a_customer_cannot_book_in_a_branch_without_the_module(
+    anonymous, as_agent, team
+):
+    admin = await as_agent(team["admin"]["email"])
+    soporte = (await admin.post("/api/departments", json={"name": "Soporte sin hotel"})).json()
+
+    transport = httpx.ASGITransport(app=anonymous.asgi_app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://pruebas") as cliente:
+        await cliente.post(
+            "/api/contact/register",
+            json={"email": "sin-hotel@clientes.local", "password": CLIENT_PASSWORD},
+        )
+        await cliente.put("/api/contact/department", json={"department_id": soporte["id"]})
+        assert (await cliente.get("/api/contact/me")).json()["department"]["hotel"] is False
+
+        respuesta = await cliente.get(
+            "/api/contact/hotel/availability",
+            params={"check_in": "2027-03-01", "check_out": "2027-03-04"},
+        )
+        assert respuesta.status_code == 409
+
+
+async def test_a_customer_booking_is_turned_away_when_the_dates_make_no_sense(
+    anonymous, as_agent, team
+):
+    admin = await as_agent(team["admin"]["email"])
+    hotel = await _hotel_department(admin, "Hotel fechas")
+
+    transport = httpx.ASGITransport(app=anonymous.asgi_app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://pruebas") as cliente:
+        await cliente.post(
+            "/api/contact/register",
+            json={"email": "fechas-malas@clientes.local", "password": CLIENT_PASSWORD},
+        )
+        await cliente.put("/api/contact/department", json={"department_id": hotel["id"]})
+
+        # Salida antes que la entrada, y una estadía que ya pasó.
+        for entrada, salida in (("2027-03-04", "2027-03-01"), ("2020-01-01", "2020-01-05")):
+            respuesta = await cliente.get(
+                "/api/contact/hotel/availability",
+                params={"check_in": entrada, "check_out": salida},
+            )
+            assert respuesta.status_code == 422, (entrada, salida)
+
+
 async def test_a_customer_cannot_pick_a_branch_that_does_not_exist(anonymous, team):
     transport = httpx.ASGITransport(app=anonymous.asgi_app)
     async with httpx.AsyncClient(transport=transport, base_url="http://pruebas") as cliente:
