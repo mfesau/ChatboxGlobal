@@ -207,6 +207,11 @@
     hotelReservationNotes: document.getElementById("hotel-reservation-notes"),
     hotelStatusFilter: document.getElementById("hotel-status-filter"),
     hotelReservationsTable: document.querySelector("#hotel-reservations-table tbody"),
+    csatDepartment: document.getElementById("csat-department"),
+    csatSettings: document.getElementById("csat-settings"),
+    csatEnabled: document.getElementById("csat-enabled"),
+    csatQuestion: document.getElementById("csat-question"),
+    csatSave: document.getElementById("csat-save"),
     reportsSince: document.getElementById("reports-since"),
     reportsUntil: document.getElementById("reports-until"),
     reportsDepartment: document.getElementById("reports-department"),
@@ -1770,6 +1775,7 @@
     fillWithPlaceholder(dom.newAccountDepartment, i18n.t("admin.noDepartment"));
     fillWithPlaceholder(dom.hotelAdminDepartment, i18n.t("aside.choose"));
     fillWithPlaceholder(dom.hotelDepartment, i18n.t("aside.choose"));
+    fillCsatDepartments();
 
     // El horario conserva el departamento elegido si sigue existiendo, para
     // no perder la selección al recargar la lista tras guardar. La opción de
@@ -3566,6 +3572,62 @@
       }
     }),
   );
+
+  /* ------------------------------------------ encuesta de satisfacción */
+
+  function fillCsatDepartments() {
+    const elegido = dom.csatDepartment.value;
+    dom.csatDepartment.replaceChildren();
+    const vacio = document.createElement("option");
+    vacio.value = "";
+    vacio.textContent = i18n.t("aside.choose");
+    dom.csatDepartment.appendChild(vacio);
+    for (const department of state.departments) {
+      const option = document.createElement("option");
+      option.value = department.id;
+      option.textContent = department.name;
+      dom.csatDepartment.appendChild(option);
+    }
+    dom.csatDepartment.value = elegido;
+  }
+
+  dom.csatDepartment.addEventListener("change", async () => {
+    const department_id = dom.csatDepartment.value;
+    dom.csatSettings.hidden = !department_id;
+    if (!department_id) {
+      return;
+    }
+    try {
+      const estado = await api(`/api/departments/${department_id}/csat`);
+      dom.csatEnabled.checked = estado.enabled;
+      dom.csatQuestion.value = estado.question;
+    } catch (error) {
+      showAdminError(error.message);
+    }
+  });
+
+  dom.csatSave.addEventListener("click", async () => {
+    const department_id = dom.csatDepartment.value;
+    if (!department_id) {
+      return;
+    }
+    showAdminError("");
+    dom.csatSave.disabled = true;
+    try {
+      await api(`/api/departments/${department_id}/csat`, {
+        method: "PUT",
+        body: JSON.stringify({
+          enabled: dom.csatEnabled.checked,
+          question: dom.csatQuestion.value.trim(),
+        }),
+      });
+      setStatus(i18n.t("csat.saved"));
+    } catch (error) {
+      showAdminError(error.message);
+    } finally {
+      dom.csatSave.disabled = false;
+    }
+  });
 
   /* --------------------------------------------- base de conocimiento */
 

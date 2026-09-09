@@ -24,6 +24,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, HTTPException, Query, Response, status
 
 from app.api.deps import SessionDep, SettingsDep, SupervisorDep
+from app.core import csat
 from app.db import reports
 from app.db import repositories as repo
 from app.logging_setup import get_logger
@@ -106,6 +107,9 @@ async def report_summary(
         "departments": await reports.by_department(session, tenant_id=tenant.id, window=window),
         "agents": await reports.by_agent(session, tenant_id=tenant.id, window=window),
         "ai": await reports.ai_usage(session, tenant_id=tenant.id, window=window),
+        "csat": await csat.average(
+            session, tenant_id=tenant.id, since=window.since, until=window.until
+        ),
     }
 
 

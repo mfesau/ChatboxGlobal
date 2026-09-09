@@ -352,6 +352,14 @@
       "common.delete": "Eliminar",
 
       // --- Base de conocimiento ---
+      // --- Encuesta de satisfacción ---
+      "csat.title": "Encuesta de satisfacción",
+      "csat.hint":
+        "Al cerrar una conversación se pregunta una nota del 1 al 5 por el mismo canal por el que se atendió. Se activa por departamento: preguntar donde nadie va a mirar la respuesta solo molesta a quien escribe.",
+      "csat.enabled": "Preguntar al cerrar en este departamento",
+      "csat.question": "Pregunta",
+      "csat.saved": "Encuesta guardada.",
+
       // --- Informes ---
       "reports.title": "Informe del periodo",
       "reports.since": "Desde",
@@ -896,6 +904,13 @@
       "common.save": "Save",
       "common.delete": "Delete",
 
+      "csat.title": "Satisfaction survey",
+      "csat.hint":
+        "When a conversation is closed, a 1-to-5 score is requested over the same channel it was handled on. Turned on per department: asking where nobody will read the answer only bothers the person writing.",
+      "csat.enabled": "Ask on closing in this department",
+      "csat.question": "Question",
+      "csat.saved": "Survey saved.",
+
       "reports.title": "Period report",
       "reports.since": "From",
       "reports.until": "To",
@@ -1439,6 +1454,13 @@
       "common.close": "Schließen",
       "common.save": "Speichern",
       "common.delete": "Löschen",
+
+      "csat.title": "Zufriedenheitsumfrage",
+      "csat.hint":
+        "Beim Abschließen eines Gesprächs wird über denselben Kanal eine Note von 1 bis 5 erfragt. Pro Abteilung aktivierbar: dort zu fragen, wo niemand die Antwort ansieht, belästigt nur den Schreibenden.",
+      "csat.enabled": "Beim Abschließen in dieser Abteilung fragen",
+      "csat.question": "Frage",
+      "csat.saved": "Umfrage gespeichert.",
 
       "reports.title": "Bericht für den Zeitraum",
       "reports.since": "Von",

@@ -26,6 +26,7 @@ from app.api import (
     console,
     contact_auth,
     contact_hotel,
+    csat,
     google_auth,
     knowledge,
     privacy,
@@ -192,6 +193,7 @@ def create_app() -> FastAPI:
     application.include_router(session.router)
     application.include_router(saml.router)
     application.include_router(google_auth.router)
+    application.include_router(csat.router)
     application.include_router(knowledge.router)
     application.include_router(privacy.router)
     application.include_router(reports.router)

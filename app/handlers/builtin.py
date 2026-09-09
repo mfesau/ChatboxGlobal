@@ -6,6 +6,7 @@ import time
 from collections import defaultdict, deque
 from typing import ClassVar
 
+from app.core import csat
 from app.core.business_hours import (
     ServicePolicy,
     is_within_business_hours,
@@ -48,6 +49,44 @@ class RateLimitHandler(Handler):
 
         window.append(now)
         await next_()
+
+
+class CsatHandler(Handler):
+    """Recoge la nota de satisfacción cuando se está esperando.
+
+    Va delante de todo lo demás porque un «4» suelto no es una consulta: si
+    llegase al asistente, contestaría algo educado y sin sentido, y la nota se
+    perdería. Solo actúa mientras el estado de la conversación dice que hay una
+    encuesta pendiente, de modo que en el resto de los turnos no estorba.
+    """
+
+    name: ClassVar[str] = "csat"
+
+    async def handle(self, ctx: TurnContext, next_: NextFn) -> None:
+        if not ctx.state.get(csat.STATE_KEY):
+            await next_()
+            return
+
+        score = csat.read_score(ctx.text, ctx.inbound.action)
+        if score is None:
+            # No es una nota: se deja de esperar y el turno sigue su camino
+            # normal. Insistir con la pregunta ante un mensaje que claramente
+            # es otra cosa convertiría la encuesta en un obstáculo.
+            ctx.clear_state()
+            await next_()
+            return
+
+        survey = await csat.survey_for(ctx.session, ctx.conversation)
+        if survey is None:
+            ctx.clear_state()
+            await next_()
+            return
+
+        await csat.record_score(ctx.session, survey, score=score)
+        ctx.set_state(csat.STATE_KEY, False)
+        ctx.reply("Gracias por su valoración.")
+        # Nada más responde a este turno: la conversación estaba cerrada.
+        return
 
 
 class HumanControlHandler(Handler):

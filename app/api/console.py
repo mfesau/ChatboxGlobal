@@ -39,6 +39,7 @@ from app.api.deps import (
     authorized_conversation,
 )
 from app.channels.whatsapp import TemplatesUnavailable
+from app.core import csat
 from app.core.branding import (
     BRANDING_SETTINGS_KEY,
     InvalidColor,
@@ -1553,9 +1554,62 @@ async def set_control(
     return {"status": "ok", "control": body.control}
 
 
+async def _ask_for_a_score(
+    conversation: Any,
+    session: Any,
+    settings: Any,
+    orchestrator: Any,
+) -> None:
+    """Envía la encuesta de satisfacción si la rama la tiene activa.
+
+    Se llama al cerrar, por los dos caminos que cierran —el botón de cerrar y
+    el estado «resuelta»—, para que la medida no dependa de por cuál se pasó.
+    Un fallo aquí no impide cerrar: lo que importaba era cerrar.
+    """
+    if conversation.department_id is None:
+        return
+    department = await repo.get_department(session, conversation.department_id)
+    if not csat.enabled(department):
+        return
+
+    survey, es_nueva = await csat.open_survey(session, conversation)
+    if not es_nueva:
+        # Ya se le preguntó por esta conversación; no se insiste al reabrir y
+        # volver a cerrar.
+        return
+
+    message = csat.build_message(
+        conversation=conversation,
+        survey=survey,
+        department=department,
+        public_base_url=settings.public_base_url,
+    )
+    try:
+        await orchestrator.send_from_agent(
+            session=session,
+            conversation_id=conversation.id,
+            outbound=message,
+            # Sin agente: la pregunta la manda el sistema, no quien cerró. Que
+            # figure a su nombre haría pensar que la escribió esa persona.
+            agent_id=None,
+        )
+    except Exception:  # noqa: BLE001 - un canal caído no debe impedir cerrar
+        log.warning("csat_not_sent", conversation=str(conversation.id))
+        return
+
+    # Solo se espera la nota donde puede llegar por el propio hilo; en correo y
+    # SMS la respuesta vuelve por la página del enlace.
+    if conversation.channel in csat.CHANNELS_WITH_BUTTONS:
+        conversation.state = {**conversation.state, csat.STATE_KEY: True}
+
+
 @router.post("/conversations/{conversation_id}/close")
 async def close_conversation(
-    conversation: ConversationDep, session: SessionDep, principal: PrincipalDep
+    conversation: ConversationDep,
+    session: SessionDep,
+    settings: SettingsDep,
+    principal: PrincipalDep,
+    orchestrator: OrchestratorDep,
 ) -> dict[str, str]:
     """Cierra el hilo. El historial permanece y se recupera al reabrirse."""
     conversation.status = "closed"
@@ -1566,6 +1620,7 @@ async def close_conversation(
         to_agent_id=conversation.assignee_id,
         by_agent_id=principal.id,
     )
+    await _ask_for_a_score(conversation, session, settings, orchestrator)
     return {"status": "ok", "conversation_status": "closed"}
 
 
@@ -1583,7 +1638,9 @@ async def set_conversation_state(
     conversation: ConversationDep,
     body: ConversationStateIn,
     session: SessionDep,
+    settings: SettingsDep,
     principal: PrincipalDep,
+    orchestrator: OrchestratorDep,
 ) -> dict[str, str]:
     """Marca en qué punto está la conversación: pendiente, en curso o resuelta.
 
@@ -1615,6 +1672,9 @@ async def set_conversation_state(
             to_agent_id=conversation.assignee_id,
             by_agent_id=principal.id,
         )
+    if target == "closed":
+        await _ask_for_a_score(conversation, session, settings, orchestrator)
+
     log.info(
         "conversation_state_set",
         conversation=str(conversation.id),
@@ -2114,6 +2174,68 @@ async def _require_hotel_department(
             detail="El módulo de hotel no está activo para este departamento",
         )
     return department
+
+
+class CsatModuleOut(BaseModel):
+    enabled: bool
+    question: str
+
+
+class CsatModuleIn(BaseModel):
+    enabled: bool
+    #: Nulo = conservar la que hubiera; cadena vacía = volver a la de omisión.
+    question: str | None = Field(default=None, max_length=500)
+
+
+@router.get("/departments/{department_id}/csat", response_model=CsatModuleOut)
+async def get_csat_module(
+    department_id: uuid.UUID, session: SessionDep, principal: AdminDep
+) -> CsatModuleOut:
+    """Si esta rama pregunta la satisfacción al cerrar. Reservado a administración."""
+    department = await repo.get_department(session, department_id)
+    if department is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="El departamento no existe"
+        )
+    return CsatModuleOut(
+        enabled=csat.enabled(department), question=csat.question(department)
+    )
+
+
+@router.put("/departments/{department_id}/csat", response_model=CsatModuleOut)
+async def set_csat_module(
+    department_id: uuid.UUID,
+    body: CsatModuleIn,
+    session: SessionDep,
+    principal: AdminDep,
+) -> CsatModuleOut:
+    """Activa la encuesta en una rama y fija su pregunta. Reservado a administración.
+
+    Por departamento y no global, igual que el módulo de hotel: una rama puede
+    querer medirse y otra no, y preguntar donde no se va a mirar la respuesta
+    solo molesta a quien escribe.
+    """
+    department = await repo.get_department(session, department_id)
+    if department is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="El departamento no existe"
+        )
+
+    await csat.set_enabled(
+        session, department=department, enabled=body.enabled, question=body.question
+    )
+    await repo.record_audit(
+        session,
+        tenant_id=department.tenant_id,
+        actor=principal.audit_actor,
+        action="csat_module_toggled",
+        subject_type="department",
+        subject_id=str(department.id),
+        detail={"enabled": body.enabled},
+    )
+    return CsatModuleOut(
+        enabled=csat.enabled(department), question=csat.question(department)
+    )
 
 
 @router.get("/departments/{department_id}/hotel/module", response_model=HotelModuleOut)

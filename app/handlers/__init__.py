@@ -8,6 +8,7 @@ from app.handlers.ai import AIHandler
 from app.handlers.builtin import (
     BusinessHoursHandler,
     CommandHandler,
+    CsatHandler,
     FallbackHandler,
     FirstResponseSlaHandler,
     HumanControlHandler,
@@ -28,6 +29,9 @@ def build_default_pipeline(settings: Settings) -> Pipeline:
     return Pipeline(
         [
             RateLimitHandler(settings.inbound_rate_limit_per_minute),
+            # Antes que el control humano: la nota llega a un hilo ya cerrado,
+            # que un agente pudo dejar en «humano», y aun así hay que recogerla.
+            CsatHandler(),
             HumanControlHandler(),
             BusinessHoursHandler(),
             FirstResponseSlaHandler(),

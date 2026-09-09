@@ -499,6 +499,30 @@
             <button type="submit" class="send-button" data-i18n="admin.autoReplySave">Guardar respuesta automática</button>
           </form>
 <section class="panel">
+            <h3 data-i18n="csat.title">Encuesta de satisfacción</h3>
+            <p class="console__muted" data-i18n="csat.hint">
+              Al cerrar una conversación se pregunta una nota del 1 al 5 por el
+              mismo canal por el que se atendió. Se activa por departamento:
+              preguntar donde nadie va a mirar la respuesta solo molesta a quien
+              escribe.
+            </p>
+            <label class="panel__field">
+              <span data-i18n="hours.department">Departamento</span>
+              <select id="csat-department"><option value="" data-i18n="aside.choose">— Elegir —</option></select>
+            </label>
+            <div id="csat-settings" hidden>
+              <label class="panel__field panel__field--checkbox">
+                <input type="checkbox" id="csat-enabled" />
+                <span data-i18n="csat.enabled">Preguntar al cerrar en este departamento</span>
+              </label>
+              <label class="panel__field">
+                <span data-i18n="csat.question">Pregunta</span>
+                <textarea id="csat-question" rows="2" maxlength="500"></textarea>
+              </label>
+              <button type="button" class="send-button" id="csat-save" data-i18n="common.save">Guardar</button>
+            </div>
+          </section>
+<section class="panel">
             <h3 data-i18n="hours.title">Horario de atención</h3>
             <p class="console__muted" data-i18n="hours.hint">
               Fuera de este horario el asistente deja de responder: el mensaje

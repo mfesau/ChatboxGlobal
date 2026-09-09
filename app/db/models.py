@@ -1108,3 +1108,51 @@ class KnowledgeChunk(Base):
     )
 
     document: Mapped[KnowledgeDocument] = relationship(back_populates="chunks")
+
+
+# --------------------------------------------------------------------------- #
+# Encuesta de satisfacción
+# --------------------------------------------------------------------------- #
+class CsatSurvey(Base):
+    """Pregunta de satisfacción enviada al cerrar una conversación.
+
+    Una viva por conversación: si el hilo se cierra, se reabre y se vuelve a
+    cerrar, se reutiliza la que había en lugar de acumular preguntas a la misma
+    persona por lo mismo.
+    """
+
+    __tablename__ = "csat_surveys"
+    __table_args__ = (
+        UniqueConstraint("conversation_id", name="ux_csat_conversation"),
+        CheckConstraint("score IS NULL OR (score BETWEEN 1 AND 5)", name="ck_csat_score"),
+        Index("ix_csat_tenant_time", "tenant_id", "sent_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=new_id)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False
+    )
+    conversation_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False
+    )
+    contact_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("contacts.id", ondelete="SET NULL")
+    )
+    #: Quién atendía al cerrarse. Se copia en lugar de mirarse después: una
+    #: reasignación posterior no debe reescribir a quién puntuaron.
+    agent_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("agents.id", ondelete="SET NULL")
+    )
+    department_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("departments.id", ondelete="SET NULL")
+    )
+    #: Testigo del enlace público que se manda por correo y SMS. Es la única
+    #: credencial de esa página, que no tiene sesión.
+    token: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    sent_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now(), nullable=False
+    )
+    responded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    #: De 1 a 5. Nulo mientras no conteste.
+    score: Mapped[int | None] = mapped_column(Integer)
+    comment: Mapped[str | None] = mapped_column(Text)
