@@ -247,6 +247,15 @@ async def login(
             max_attempts=settings.login_max_attempts,
             lockout=timedelta(minutes=settings.login_lockout_minutes),
         ):
+            await repo.record_audit(
+                session,
+                tenant_id=tenant.id,
+                actor=f"contact:{contact.id}",
+                action="login_locked",
+                subject_type="contact",
+                subject_id=str(contact.id),
+            )
+            await session.commit()
             log.warning("contact_login_locked", email=body.email, tenant=tenant.slug)
         log.warning("contact_login_rejected", email=body.email, tenant=tenant.slug)
         raise HTTPException(

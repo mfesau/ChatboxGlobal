@@ -86,3 +86,19 @@ async def database(settings) -> AsyncIterator[None]:
 async def session() -> AsyncIterator[AsyncSession]:
     async with session_scope() as active:
         yield active
+
+
+# El andamiaje de ``tests/test_teamwork.py`` —la aplicación con la cadena de
+# eco, el equipo y la fábrica de clientes autenticados— lo comparten otros
+# módulos de pruebas. Se re-exporta aquí para que pytest lo encuentre sin que
+# cada módulo tenga que importarlo: importado a mano, cada uso quedaría como
+# una redefinición a ojos del analizador estático.
+#
+# La importación va al final a propósito: ese módulo importa la aplicación, y
+# el entorno de arriba tiene que estar fijado antes.
+from tests.test_teamwork import (  # noqa: E402, F401  fixtures compartidas
+    anonymous,
+    app,
+    as_agent,
+    team,
+)

@@ -190,6 +190,13 @@ class Settings(BaseSettings):
     #: minutos dura esa espera. Vale para los agentes y para los clientes.
     login_max_attempts: int = 8
     login_lockout_minutes: int = 15
+    #: Caducidad del contenido, en días. ``0`` —lo que viene puesto— desactiva
+    #: la limpieza y no se borra nada nunca. Con un valor, la tarea de
+    #: mantenimiento vacía a diario el texto y los adjuntos de los mensajes más
+    #: antiguos, sin borrar las filas: de ellas salen los recuentos de los
+    #: informes. La traza de auditoría se descarta entera, esa sí.
+    retention_days_messages: int = 0
+    retention_days_audit: int = 0
     #: Marca la cookie de sesión como ``Secure``. En una red local sin TLS debe
     #: quedar en falso, pues el navegador descartaría la cookie sobre HTTP.
     session_cookie_secure: bool = False

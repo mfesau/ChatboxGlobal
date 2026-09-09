@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.channels.base import ChannelRegistry
 from app.config import Settings
-from app.core.envelope import ChannelKind, ConversationRef, OutboundMessage
+from app.core.envelope import ChannelKind, ConversationRef, OutboundMessage, utcnow
 from app.core.secrets import DecryptionError, decrypt_json
 from app.db import repositories as repo
 from app.db.engine import session_scope
@@ -30,6 +30,9 @@ STALE_LOCK = timedelta(minutes=5)
 #: Antigüedad a partir de la cual se purgan las claves de idempotencia.
 DEDUPE_RETENTION = timedelta(days=3)
 JANITOR_INTERVAL_S = 300
+#: La caducidad del contenido se revisa una vez al día. Es una operación que
+#: recorre tablas grandes y nada cambia por hacerla cada cinco minutos.
+RETENTION_INTERVAL_S = 24 * 60 * 60
 
 
 class OutboxDispatcher:
@@ -183,6 +186,7 @@ class OutboxDispatcher:
     # ------------------------------------------------------------ mantenimiento
     async def _janitor(self) -> None:
         """Recupera bloqueos huérfanos y purga claves de idempotencia caducadas."""
+        next_retention = 0.0
         while self._running:
             await asyncio.sleep(JANITOR_INTERVAL_S)
             try:
@@ -199,7 +203,38 @@ class OutboxDispatcher:
                         purged_dedupe_keys=purged,
                         sla_breached=breached,
                     )
+
+                now = asyncio.get_running_loop().time()
+                if now >= next_retention:
+                    next_retention = now + RETENTION_INTERVAL_S
+                    await self._apply_retention()
             except asyncio.CancelledError:
                 raise
             except Exception:
                 log.exception("janitor_error")
+
+    async def _apply_retention(self) -> None:
+        """Aplica los plazos de conservación configurados.
+
+        Sin plazos —lo que viene puesto— no toca nada: quien no los configure
+        conserva el histórico entero, que es lo que hacía la aplicación antes
+        de existir esta tarea.
+        """
+        messages_days = self.settings.retention_days_messages
+        audit_days = self.settings.retention_days_audit
+        if messages_days <= 0 and audit_days <= 0:
+            return
+
+        async with session_scope() as session:
+            blanked = 0
+            discarded = 0
+            if messages_days > 0:
+                blanked = await repo.purge_message_bodies(
+                    session, older_than=utcnow() - timedelta(days=messages_days)
+                )
+            if audit_days > 0:
+                discarded = await repo.purge_audit(
+                    session, older_than=utcnow() - timedelta(days=audit_days)
+                )
+        if blanked or discarded:
+            log.info("retention_pass", blanked_messages=blanked, discarded_audit=discarded)

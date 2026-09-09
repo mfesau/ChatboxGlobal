@@ -312,6 +312,8 @@
                     data-i18n="admin.tab.hotel">Hotel</button>
             <button type="button" role="tab" data-admin-tab="appearance" aria-selected="false"
                     data-i18n="admin.tab.appearance">Apariencia</button>
+            <button type="button" role="tab" data-admin-tab="audit" aria-selected="false"
+                    data-i18n="admin.tab.audit">Auditoría</button>
           </nav>
           <p class="gate__error" id="admin-error" hidden></p>
           <div class="admin-tab-panel" id="admin-tab-users">
@@ -699,6 +701,47 @@
               </div>
             </section>
           </div>
+
+          <div class="admin-tab-panel" id="admin-tab-audit" hidden>
+            <section class="panel">
+              <h3 data-i18n="audit.title">Traza de auditoría</h3>
+              <p class="console__muted" data-i18n="audit.hint">
+                Quién hizo qué y cuándo. No incluye el contenido de ninguna
+                conversación.
+              </p>
+              <div class="panel__inline-form">
+                <label class="panel__field">
+                  <span data-i18n="audit.actor">Autor</span>
+                  <input type="search" id="audit-actor" placeholder="ana@empresa.local" />
+                </label>
+                <label class="panel__field">
+                  <span data-i18n="audit.action">Acción</span>
+                  <select id="audit-action"><option value="" data-i18n="audit.anyAction">Cualquiera</option></select>
+                </label>
+                <label class="panel__field">
+                  <span data-i18n="audit.since">Desde</span>
+                  <input type="date" id="audit-since" />
+                </label>
+              </div>
+              <div class="table-scroll">
+                <table class="data-table" id="audit-table">
+                  <thead>
+                    <tr>
+                      <th data-i18n="audit.when">Fecha</th>
+                      <th data-i18n="audit.actor">Autor</th>
+                      <th data-i18n="audit.action">Acción</th>
+                      <th data-i18n="audit.subject">Sobre</th>
+                      <th data-i18n="audit.detail">Detalle</th>
+                    </tr>
+                  </thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+              <button type="button" class="ghost-button" id="audit-more" data-i18n="audit.more" hidden>
+                Cargar más
+              </button>
+            </section>
+          </div>
         </div>
       </div>
 
@@ -930,6 +973,19 @@
 
             <h4 data-i18n="table.conversations">Conversaciones</h4>
             <ul class="panel__list" id="profile-conversations"></ul>
+
+            <h4 data-i18n="privacy.title">Datos personales</h4>
+            <p class="console__muted" data-i18n="privacy.help">
+              La copia reúne todo lo que se guarda sobre esta persona. El borrado
+              anonimiza su rastro y no se puede deshacer.
+            </p>
+            <div class="panel__inline-form">
+              <button type="button" class="ghost-button" id="profile-export"
+                      data-i18n="privacy.export">Descargar copia</button>
+              <button type="button" class="ghost-button" id="profile-erase"
+                      data-i18n="privacy.erase" hidden>Borrar datos</button>
+            </div>
+            <p class="gate__error" id="profile-privacy-error" hidden></p>
           </section>
         </div>
       </div>

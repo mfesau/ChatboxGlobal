@@ -65,6 +65,27 @@
       "password.new": "Contraseña nueva",
       "password.submit": "Guardar y continuar",
 
+      // --- Auditoría y datos personales ---
+      "admin.tab.audit": "Auditoría",
+      "audit.title": "Traza de auditoría",
+      "audit.hint":
+        "Quién hizo qué y cuándo. No incluye el contenido de ninguna conversación.",
+      "audit.actor": "Autor",
+      "audit.action": "Acción",
+      "audit.anyAction": "Cualquiera",
+      "audit.since": "Desde",
+      "audit.when": "Fecha",
+      "audit.subject": "Sobre",
+      "audit.detail": "Detalle",
+      "audit.more": "Cargar más",
+      "privacy.title": "Datos personales",
+      "privacy.help":
+        "La copia reúne todo lo que se guarda sobre esta persona. El borrado anonimiza su rastro y no se puede deshacer.",
+      "privacy.export": "Descargar copia",
+      "privacy.erase": "Borrar datos",
+      "privacy.confirm":
+        "Se borrarán el nombre, el teléfono, el correo, el texto de los mensajes y los ficheros adjuntos de esta persona. No se puede deshacer. ¿Continuar?",
+
       // --- Filtros ---
       "filter.status": "Filtrar por estado",
       "filter.status.open": "Abiertas",
@@ -537,6 +558,25 @@
       "password.new": "New password",
       "password.submit": "Save and continue",
 
+      "admin.tab.audit": "Audit",
+      "audit.title": "Audit trail",
+      "audit.hint": "Who did what and when. No conversation content is included.",
+      "audit.actor": "Author",
+      "audit.action": "Action",
+      "audit.anyAction": "Any",
+      "audit.since": "From",
+      "audit.when": "Date",
+      "audit.subject": "About",
+      "audit.detail": "Detail",
+      "audit.more": "Load more",
+      "privacy.title": "Personal data",
+      "privacy.help":
+        "The copy gathers everything held about this person. Erasing anonymises their trail and cannot be undone.",
+      "privacy.export": "Download a copy",
+      "privacy.erase": "Erase data",
+      "privacy.confirm":
+        "This erases the name, phone, email, message text and attachments of this person. It cannot be undone. Continue?",
+
       "filter.status": "Filter by status",
       "filter.status.open": "Open",
       "filter.status.closed": "Closed",
@@ -997,6 +1037,26 @@
       "password.current": "Aktuelles Passwort",
       "password.new": "Neues Passwort",
       "password.submit": "Speichern und fortfahren",
+
+      "admin.tab.audit": "Protokoll",
+      "audit.title": "Prüfprotokoll",
+      "audit.hint":
+        "Wer wann was getan hat. Gesprächsinhalte sind nicht enthalten.",
+      "audit.actor": "Urheber",
+      "audit.action": "Aktion",
+      "audit.anyAction": "Beliebig",
+      "audit.since": "Ab",
+      "audit.when": "Datum",
+      "audit.subject": "Betrifft",
+      "audit.detail": "Detail",
+      "audit.more": "Mehr laden",
+      "privacy.title": "Personenbezogene Daten",
+      "privacy.help":
+        "Die Kopie enthält alles, was über diese Person gespeichert ist. Das Löschen anonymisiert ihre Spuren und lässt sich nicht rückgängig machen.",
+      "privacy.export": "Kopie herunterladen",
+      "privacy.erase": "Daten löschen",
+      "privacy.confirm":
+        "Name, Telefonnummer, E-Mail, Nachrichtentexte und Anhänge dieser Person werden gelöscht. Das lässt sich nicht rückgängig machen. Fortfahren?",
 
       "filter.status": "Nach Status filtern",
       "filter.status.open": "Offen",

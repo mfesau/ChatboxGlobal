@@ -96,6 +96,18 @@ async def login(
             max_attempts=settings.login_max_attempts,
             lockout=timedelta(minutes=settings.login_lockout_minutes),
         ):
+            # Solo se audita el bloqueo, no cada fallo: un ataque por fuerza
+            # bruta llenaría la traza de ruido y la haría inservible justo
+            # cuando más falta hace leerla.
+            await repo.record_audit(
+                session,
+                tenant_id=tenant.id,
+                actor=f"agent:{agent.email}",
+                action="login_locked",
+                subject_type="agent",
+                subject_id=str(agent.id),
+            )
+            await session.commit()
             log.warning("login_locked", email=body.email, tenant=tenant.slug)
         log.warning("login_rejected", email=body.email, tenant=tenant.slug)
         raise HTTPException(
@@ -170,6 +182,14 @@ async def logout(
         await repo.close_agent_session(session, hash_token(token))
     if principal.agent is not None:
         await repo.touch_agent_presence(session, principal.agent.id, "offline")
+        await repo.record_audit(
+            session,
+            tenant_id=principal.agent.tenant_id,
+            actor=principal.audit_actor,
+            action="logout",
+            subject_type="agent",
+            subject_id=str(principal.agent.id),
+        )
     response.delete_cookie(SESSION_COOKIE, path="/")
     return {"status": "ok"}
 

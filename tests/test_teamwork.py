@@ -1350,7 +1350,8 @@ async def test_only_the_admin_sets_a_departments_logo(as_agent, team):
         assert served.content == _PNG_BYTES
 
     listed = await ana.get("/api/departments")
-    assert next(row for row in listed.json() if row["id"] == department["id"])["logo_url"] == logo_url
+    listado = listed.json()
+    assert next(row for row in listado if row["id"] == department["id"])["logo_url"] == logo_url
 
 
 async def test_replacing_a_departments_logo_discards_the_previous_file(as_agent, team):

@@ -1215,6 +1215,74 @@ async def record_audit(
     )
 
 
+async def list_audit(
+    session: AsyncSession,
+    *,
+    tenant_id: uuid.UUID,
+    actor: str | None = None,
+    action: str | None = None,
+    subject_id: str | None = None,
+    since: datetime | None = None,
+    until: datetime | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> list[AuditLog]:
+    """Traza del inquilino, de la más reciente a la más antigua.
+
+    El filtro por actor es por coincidencia parcial: el valor guardado lleva el
+    prefijo del tipo (``agent:ana@empresa.local``), y quien busca escribe el
+    correo, no el prefijo.
+    """
+    stmt = select(AuditLog).where(AuditLog.tenant_id == tenant_id)
+    if actor:
+        stmt = stmt.where(AuditLog.actor.ilike(f"%{actor.strip()}%"))
+    if action:
+        stmt = stmt.where(AuditLog.action == action.strip())
+    if subject_id:
+        stmt = stmt.where(AuditLog.subject_id == subject_id.strip())
+    if since is not None:
+        stmt = stmt.where(AuditLog.created_at >= since)
+    if until is not None:
+        stmt = stmt.where(AuditLog.created_at <= until)
+    stmt = stmt.order_by(AuditLog.created_at.desc(), AuditLog.id.desc())
+    return list((await session.execute(stmt.limit(limit).offset(offset))).scalars())
+
+
+async def list_audit_actions(session: AsyncSession, *, tenant_id: uuid.UUID) -> list[str]:
+    """Acciones distintas presentes en la traza, en orden alfabético."""
+    stmt = (
+        select(AuditLog.action)
+        .where(AuditLog.tenant_id == tenant_id)
+        .distinct()
+        .order_by(AuditLog.action)
+    )
+    return list((await session.execute(stmt)).scalars())
+
+
+async def purge_audit(session: AsyncSession, *, older_than: datetime) -> int:
+    """Descarta la traza anterior a esa fecha. Devuelve cuántas filas se fueron."""
+    result = await session.execute(delete(AuditLog).where(AuditLog.created_at < older_than))
+    return result.rowcount or 0
+
+
+async def purge_message_bodies(session: AsyncSession, *, older_than: datetime) -> int:
+    """Vacía el contenido de los mensajes antiguos, sin borrar las filas.
+
+    La fila se conserva porque de ella salen los recuentos de los informes; lo
+    que caduca es el contenido. Solo toca las que aún tienen algo dentro, de
+    modo que pasar la escoba dos veces no vuelve a escribir nada.
+    """
+    result = await session.execute(
+        update(Message)
+        .where(
+            Message.created_at < older_than,
+            or_(Message.text.is_not(None), Message.attachments != []),
+        )
+        .values(text=None, attachments=[], action=None)
+    )
+    return result.rowcount or 0
+
+
 async def channel_stats(
     session: AsyncSession,
     tenant_id: uuid.UUID,

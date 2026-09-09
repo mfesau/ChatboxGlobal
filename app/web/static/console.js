@@ -208,6 +208,14 @@
     hotelReservationNotes: document.getElementById("hotel-reservation-notes"),
     hotelStatusFilter: document.getElementById("hotel-status-filter"),
     hotelReservationsTable: document.querySelector("#hotel-reservations-table tbody"),
+    auditActor: document.getElementById("audit-actor"),
+    auditAction: document.getElementById("audit-action"),
+    auditSince: document.getElementById("audit-since"),
+    auditTable: document.querySelector("#audit-table tbody"),
+    auditMore: document.getElementById("audit-more"),
+    profileExport: document.getElementById("profile-export"),
+    profileErase: document.getElementById("profile-erase"),
+    profilePrivacyError: document.getElementById("profile-privacy-error"),
     contactProfile: document.getElementById("contact-profile"),
     profileTitle: document.getElementById("contact-profile-title"),
     profileName: document.getElementById("profile-name"),
@@ -3085,6 +3093,10 @@
       const contact = await api(`/api/contacts/${contactId}`);
       state.contactProfileId = contact.id;
       dom.contactProfile.hidden = false;
+      // El servidor lo exige igual (AdminDep); ocultarlo evita ofrecer a
+      // supervisión un botón que solo le daría un 403.
+      dom.profileErase.hidden = state.me?.role !== "admin";
+      showPrivacyError("");
       dom.profileTitle.textContent = contact.display_name || "Contacto sin nombre";
       dom.profileName.value = contact.display_name || "";
       dom.profilePhone.value = contact.primary_phone || "";
@@ -3180,6 +3192,45 @@
     }
   });
 
+  /* ------------------------------------------ datos personales (RGPD) */
+
+  function showPrivacyError(message) {
+    dom.profilePrivacyError.textContent = message;
+    dom.profilePrivacyError.hidden = !message;
+  }
+
+  dom.profileExport.addEventListener("click", async () => {
+    if (!state.contactProfileId) {
+      return;
+    }
+    showPrivacyError("");
+    // Descarga directa y no `api()`: la respuesta es un fichero adjunto, no
+    // JSON que la consola vaya a interpretar. La cookie de sesión viaja igual.
+    window.location.href = `/api/contacts/${state.contactProfileId}/export`;
+  });
+
+  dom.profileErase.addEventListener("click", async () => {
+    if (!state.contactProfileId) {
+      return;
+    }
+    if (!window.confirm(i18n.t("privacy.confirm"))) {
+      return;
+    }
+    showPrivacyError("");
+    dom.profileErase.disabled = true;
+    try {
+      await api(`/api/contacts/${state.contactProfileId}/erase?confirm=true`, {
+        method: "POST",
+      });
+      await openContactProfile(state.contactProfileId);
+      await loadContacts(dom.contactsSearch.value.trim());
+    } catch (error) {
+      showPrivacyError(error.message);
+    } finally {
+      dom.profileErase.disabled = false;
+    }
+  });
+
   dom.profileCommentForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     const body = dom.profileCommentBody.value.trim();
@@ -3218,8 +3269,94 @@
   }
 
   adminTabs.forEach((tab) =>
-    tab.addEventListener("click", () => showAdminTab(tab.dataset.adminTab)),
+    tab.addEventListener("click", () => {
+      showAdminTab(tab.dataset.adminTab);
+      // La traza puede ser larga; se pide al abrir su pestaña y no al abrir
+      // el panel entero, que se usa sobre todo para otras cosas.
+      if (tab.dataset.adminTab === "audit") {
+        loadAudit({ reset: true });
+      }
+    }),
   );
+
+  /* ------------------------------------------------ traza de auditoría */
+
+  const AUDIT_PAGE = 100;
+  let auditOffset = 0;
+
+  function auditQuery() {
+    const params = new URLSearchParams({ limit: String(AUDIT_PAGE), offset: String(auditOffset) });
+    if (dom.auditActor.value.trim()) {
+      params.set("actor", dom.auditActor.value.trim());
+    }
+    if (dom.auditAction.value) {
+      params.set("action", dom.auditAction.value);
+    }
+    if (dom.auditSince.value) {
+      // El campo da una fecha; el filtro espera un instante.
+      params.set("since", `${dom.auditSince.value}T00:00:00`);
+    }
+    return params.toString();
+  }
+
+  async function loadAudit({ reset = false } = {}) {
+    if (reset) {
+      auditOffset = 0;
+      dom.auditTable.replaceChildren();
+      await loadAuditActions();
+    }
+    let entries;
+    try {
+      entries = await api(`/api/audit?${auditQuery()}`);
+    } catch (error) {
+      showAdminError(error.message);
+      return;
+    }
+    for (const entry of entries) {
+      const row = document.createElement("tr");
+      for (const value of [
+        formatTime(entry.created_at),
+        entry.actor,
+        entry.action,
+        entry.subject_type ? `${entry.subject_type} ${entry.subject_id ?? ""}`.trim() : "",
+        Object.keys(entry.detail || {}).length ? JSON.stringify(entry.detail) : "",
+      ]) {
+        const cell = document.createElement("td");
+        cell.textContent = value;
+        row.appendChild(cell);
+      }
+      dom.auditTable.appendChild(row);
+    }
+    auditOffset += entries.length;
+    dom.auditMore.hidden = entries.length < AUDIT_PAGE;
+  }
+
+  async function loadAuditActions() {
+    let actions;
+    try {
+      actions = await api("/api/audit/actions");
+    } catch {
+      return;
+    }
+    const chosen = dom.auditAction.value;
+    dom.auditAction.replaceChildren();
+    const any = document.createElement("option");
+    any.value = "";
+    any.textContent = i18n.t("audit.anyAction");
+    dom.auditAction.appendChild(any);
+    for (const action of actions) {
+      const option = document.createElement("option");
+      option.value = action;
+      option.textContent = action;
+      dom.auditAction.appendChild(option);
+    }
+    dom.auditAction.value = chosen;
+  }
+
+  dom.auditMore.addEventListener("click", () => loadAudit());
+  for (const control of [dom.auditActor, dom.auditAction, dom.auditSince]) {
+    control.addEventListener("change", () => loadAudit({ reset: true }));
+  }
 
   function showAdminError(message) {
     dom.adminError.textContent = message;

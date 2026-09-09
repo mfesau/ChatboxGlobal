@@ -14,7 +14,8 @@ import httpx
 from app.config import Settings
 
 AUTHORIZATION_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth"
-TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token"
+# Es una URL, no una credencial: el analizador se guía por el nombre.
+TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token"  # noqa: S105
 USERINFO_ENDPOINT = "https://openidconnect.googleapis.com/v1/userinfo"
 
 
