@@ -101,6 +101,11 @@
     newUserPasswordField: document.getElementById("new-user-password-field"),
     newUserPassword: document.getElementById("new-user-password"),
     newUserPasswordHint: document.getElementById("new-user-password-hint"),
+    passwordChangePanel: document.getElementById("password-change-panel"),
+    passwordChangeForm: document.getElementById("password-change-form"),
+    passwordCurrent: document.getElementById("password-current"),
+    passwordNew: document.getElementById("password-new"),
+    passwordChangeError: document.getElementById("password-change-error"),
     adminError: document.getElementById("admin-error"),
     adminUsers: document.querySelector("#admin-users-table tbody"),
     createDepartmentForm: document.getElementById("create-department-form"),
@@ -309,10 +314,43 @@
     dom.app.hidden = false;
   }
 
+  function showPasswordChange() {
+    // El servidor responde 403 a todo lo demás mientras la marca siga puesta
+    // (ver resolve_principal): sin este diálogo, la consola se vería vacía y
+    // sin explicación.
+    dom.passwordChangePanel.hidden = false;
+    dom.passwordCurrent.focus();
+  }
+
+  dom.passwordChangeForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    dom.passwordChangeError.hidden = true;
+    try {
+      await api("/api/auth/password", {
+        method: "POST",
+        body: JSON.stringify({
+          current_password: dom.passwordCurrent.value,
+          new_password: dom.passwordNew.value,
+        }),
+      });
+    } catch (error) {
+      dom.passwordChangeError.textContent = error.message;
+      dom.passwordChangeError.hidden = false;
+      return;
+    }
+    // Recargar es lo más simple y lo más seguro: la consola arranca de nuevo
+    // con la sesión ya desbloqueada y sin estado a medio construir.
+    window.location.reload();
+  });
+
   async function loadIdentity() {
     try {
       const me = await api("/api/auth/me");
       state.me = me;
+      if (me.agent && me.agent.must_change_password) {
+        showPasswordChange();
+        return false;
+      }
       const label = me.agent ? me.agent.display_name || me.agent.email : "Acceso de servicio";
       dom.who.textContent = label;
       dom.whoRole.textContent = i18n.t(me.is_supervisor ? "role.supervisor" : "role.agent");

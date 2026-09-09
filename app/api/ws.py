@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import hmac
 from typing import Any
 
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
@@ -142,6 +143,23 @@ async def inbox_socket(
             await hub.unsubscribe(topic, sender)
 
 
+def _service_key(websocket: WebSocket, api_key: str | None) -> str | None:
+    """Clave de servicio presentada por el socket, si la hay.
+
+    La cabecera es la vía buena, y la única que admiten los entornos que no son
+    de desarrollo: un parámetro de consulta queda escrito tal cual en los
+    registros de acceso del proxy inverso, de modo que la credencial acabaría
+    en disco en claro. El navegador no puede poner cabeceras al abrir un
+    WebSocket, pero tampoco las necesita: la consola se identifica por cookie,
+    y quien usa la clave de servicio es una integración, no un navegador.
+    """
+    header = websocket.headers.get("x-api-key")
+    if header:
+        return header
+    settings = websocket.app.state.settings
+    return api_key if settings.environment == "dev" else None
+
+
 async def _authenticate_socket(
     websocket: WebSocket, api_key: str | None, tenant_slug: str
 ) -> tuple[str | None, str | None]:
@@ -149,7 +167,8 @@ async def _authenticate_socket(
 
     Devuelve ``(None, None)`` y cierra la conexión cuando la autenticación falla.
     Los WebSocket no admiten cabeceras personalizadas desde el navegador, de modo
-    que la sesión viaja en la cookie y la clave de servicio, como parámetro.
+    que la sesión de la consola viaja en la cookie; la clave de servicio, en
+    cambio, va por cabecera (ver ``_service_key``).
     """
     settings = websocket.app.state.settings
 
@@ -157,11 +176,16 @@ async def _authenticate_socket(
     if token:
         async with session_scope() as session:
             agent = await repo.resolve_agent_session(session, hash_token(token))
-            if agent is not None:
+            if agent is not None and not agent.must_change_password:
                 return str(agent.id), agent.label
 
     expected = settings.admin_api_key
-    if expected is not None and api_key == expected.get_secret_value():
+    presented = _service_key(websocket, api_key)
+    if (
+        expected is not None
+        and presented is not None
+        and hmac.compare_digest(presented, expected.get_secret_value())
+    ):
         return None, "clave de servicio"
 
     # El login es obligatorio en todo entorno: sin sesión de agente ni clave

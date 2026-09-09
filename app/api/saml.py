@@ -16,6 +16,7 @@ from app.config import Settings
 from app.core.saml import (
     DISPLAY_NAME_CLAIMS,
     AgentInactiveError,
+    AgentNotProvisionedError,
     build_auth,
     extract_claim,
     extract_email,
@@ -101,12 +102,22 @@ async def assertion_consumer_service(
     tenant = await repo.get_or_create_tenant(session, settings.default_tenant_slug)
     try:
         agent, is_new = await login_or_provision_agent(
-            session, tenant_id=tenant.id, email=email, display_name=display_name
+            session,
+            settings=settings,
+            tenant_id=tenant.id,
+            email=email,
+            display_name=display_name,
         )
     except AgentInactiveError as exc:
         log.warning("saml_login_rejected_inactive", email=email)
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="La cuenta está desactivada"
+        ) from exc
+    except AgentNotProvisionedError as exc:
+        log.warning("saml_login_rejected_unknown", email=email)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Esta cuenta no está dada de alta en la consola",
         ) from exc
 
     # El enlace de retorno viaja como `RelayState` en el mismo POST del IdP

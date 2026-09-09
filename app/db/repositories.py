@@ -6,6 +6,7 @@ quien orquesta, no el repositorio.
 
 from __future__ import annotations
 
+import secrets
 import uuid
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
@@ -1288,47 +1289,66 @@ async def create_agent(
     return agent
 
 
-#: Cuenta de arranque documentada en el README. Hardcodeada a propósito: no
-#: depende de que alguien haya ejecutado ``create_agent.py`` antes, ni de una
-#: variable de entorno que pueda faltar en un despliegue nuevo.
+#: Cuenta de arranque. El correo sí es fijo —no depende de que alguien haya
+#: ejecutado ``create_agent.py`` antes, ni de una variable de entorno que pueda
+#: faltar en un despliegue nuevo—, pero la contraseña ya no: se toma de
+#: ``BOOTSTRAP_ADMIN_PASSWORD`` o se genera al azar y se imprime una sola vez
+#: en el log del arranque. Una contraseña fija y documentada valía para todas
+#: las instalaciones a la vez.
 DEFAULT_ADMIN_EMAIL = "admin@local"
-DEFAULT_ADMIN_PASSWORD = "Admin1234"
 
 
-async def ensure_default_admin(session: AsyncSession, *, tenant_id: uuid.UUID) -> None:
+async def ensure_default_admin(
+    session: AsyncSession, *, tenant_id: uuid.UUID, password: str | None = None
+) -> str | None:
     """Garantiza que el inquilino tenga al menos un administrador activo.
 
     Se ejecuta en cada arranque. Si ya existe un administrador activo —el de
     por defecto u otro creado a mano— no toca nada: borrar ``admin@local`` una
     vez dado de alta un reemplazo es seguro y definitivo. Solo reaparece si el
     inquilino se queda sin ningún administrador, como red de seguridad.
+
+    Devuelve la contraseña que hay que anunciar, o ``None`` cuando no hubo que
+    fijar ninguna. Una cuenta ``admin@local`` que ya existía **conserva su
+    contraseña**: antes se reponía en cada arranque, de modo que cambiarla no
+    servía de nada mientras la cuenta siguiera siendo el único administrador.
     """
     has_active_admin = (
         await session.execute(
             select(Agent.id)
-            .where(Agent.tenant_id == tenant_id, Agent.role == ROLE_ADMIN, Agent.is_active.is_(True))
+            .where(
+                Agent.tenant_id == tenant_id,
+                Agent.role == ROLE_ADMIN,
+                Agent.is_active.is_(True),
+            )
             .limit(1)
         )
     ).scalar_one_or_none()
     if has_active_admin is not None:
-        return
+        return None
 
-    default_hash = hash_password(DEFAULT_ADMIN_PASSWORD)
     existing = await find_agent_by_email(session, tenant_id=tenant_id, email=DEFAULT_ADMIN_EMAIL)
     if existing is not None:
         existing.role = ROLE_ADMIN
         existing.is_active = True
-        existing.password_hash = default_hash
-        return
+        if existing.password_hash is None:
+            secret = password or secrets.token_urlsafe(18)
+            existing.password_hash = hash_password(secret)
+            existing.must_change_password = True
+            return secret
+        return None
 
-    await create_agent(
+    secret = password or secrets.token_urlsafe(18)
+    agent = await create_agent(
         session,
         tenant_id=tenant_id,
         email=DEFAULT_ADMIN_EMAIL,
         display_name="Administrador",
         role=ROLE_ADMIN,
-        password_hash=default_hash,
+        password_hash=hash_password(secret),
     )
+    agent.must_change_password = True
+    return secret
 
 
 async def touch_agent_presence(

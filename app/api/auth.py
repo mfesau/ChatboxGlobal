@@ -19,7 +19,13 @@ from app.api.deps import (
 )
 from app.config import Settings
 from app.core.hub import hub, presence_topic
-from app.core.security import hash_password, hash_token, new_session_token, verify_password
+from app.core.security import (
+    WeakPasswordError,
+    hash_password,
+    hash_token,
+    new_session_token,
+    verify_password,
+)
 from app.db import repositories as repo
 from app.db.models import Agent, Tenant
 from app.logging_setup import get_logger
@@ -149,6 +155,59 @@ async def logout(
     return {"status": "ok"}
 
 
+class ChangePasswordIn(BaseModel):
+    current_password: str = Field(min_length=1, max_length=256)
+    new_password: str = Field(min_length=8, max_length=256)
+
+
+@router.post("/password")
+async def change_own_password(
+    body: ChangePasswordIn, session: SessionDep, principal: PrincipalDep
+) -> dict[str, str]:
+    """Cambia la contraseña de quien la pide, comprobando la actual.
+
+    Es además la única salida de ``must_change_password``: la cuenta de
+    arranque entra con una contraseña generada y no puede hacer nada más
+    hasta pasar por aquí.
+    """
+    agent = principal.agent
+    if agent is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="La clave de servicio no tiene contraseña que cambiar",
+        )
+
+    stored = agent.password_hash or _DUMMY_HASH
+    if not await asyncio.to_thread(verify_password, body.current_password, stored):
+        log.warning("password_change_rejected", agent=agent.email)
+        # 422 y no 401: la sesión es válida, lo que no coincide es el cuerpo.
+        # Con un 401 la consola daría la sesión por caducada y rebotaría al
+        # acceso en lugar de mostrar el error dentro del propio formulario.
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="La contraseña actual no coincide",
+        )
+
+    try:
+        agent.password_hash = await asyncio.to_thread(hash_password, body.new_password)
+    except WeakPasswordError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
+    agent.must_change_password = False
+
+    await repo.record_audit(
+        session,
+        tenant_id=agent.tenant_id,
+        actor=f"agent:{agent.email}",
+        action="password_changed",
+        subject_type="agent",
+        subject_id=str(agent.id),
+    )
+    log.info("password_changed", agent=agent.email)
+    return {"status": "ok"}
+
+
 @router.get("/sso")
 async def sso_status(settings: SettingsDep) -> dict[str, bool]:
     """Le dice a la pantalla de acceso qué botones de SSO mostrar.
@@ -208,6 +267,9 @@ def _serialize(agent: Any) -> dict[str, Any]:
         "role": agent.role,
         "is_supervisor": agent.is_supervisor,
         "presence": agent.presence,
+        # La consola lo mira nada más entrar: mientras sea cierto, el resto de
+        # la API responde 403 y solo cabe cambiar la contraseña.
+        "must_change_password": agent.must_change_password,
     }
 
 

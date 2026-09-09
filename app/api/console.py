@@ -1763,6 +1763,10 @@ async def set_password(
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
         ) from exc
+    # Administración acaba de elegir esta contraseña a conciencia, de modo que
+    # levanta la obligación de cambiarla; es también cómo se desatasca una
+    # cuenta de arranque cuya contraseña generada se perdió.
+    agent.must_change_password = False
     return {"status": "ok"}
 
 

@@ -23,12 +23,16 @@ from sqlalchemy import select
 
 from app.channels.base import ChannelRegistry
 from app.channels.whatsapp import WhatsAppAdapter
-from app.config import get_settings
+from app.config import Settings, get_settings
 from app.core import hotel_booking
 from app.core.envelope import ChannelKind, ConversationRef
 from app.core.orchestrator import Orchestrator
 from app.core.pipeline import Handler, NextFn, Pipeline, TurnContext
-from app.core.saml import AgentInactiveError, login_or_provision_agent
+from app.core.saml import (
+    AgentInactiveError,
+    AgentNotProvisionedError,
+    login_or_provision_agent,
+)
 from app.core.secrets import EncryptionNotConfiguredError, decrypt_json, encrypt_json
 from app.core.security import (
     WeakPasswordError,
@@ -2180,9 +2184,11 @@ async def test_saml_login_never_opens_a_redirect_to_another_site(anonymous, monk
     assert query["RelayState"] == ["/console"]
 
 
-def _configure_google(monkeypatch: Any, settings: Any) -> None:
+def _configure_google(monkeypatch: Any, settings: Any, *, domains: str = "empresa.local") -> None:
     monkeypatch.setattr(settings, "google_client_id", "client-id.apps.googleusercontent.com")
     monkeypatch.setattr(settings, "google_client_secret", "client-secret")
+    # Sin lista de dominios, Google autentica pero no da de alta a nadie.
+    monkeypatch.setattr(settings, "sso_allowed_email_domains", domains)
 
 
 async def test_google_routes_are_hidden_when_not_configured(anonymous):
@@ -2256,10 +2262,137 @@ async def test_a_successful_google_callback_actually_opens_the_session(
     assert (await anonymous.get("/api/auth/me")).status_code == 200
 
 
+def _sso_settings(**overrides):
+    """Ajustes aislados del entorno, con la lista de dominios que pida la prueba."""
+    return Settings(_env_file=None, **overrides)
+
+
+# --------------------------------------------------------------------------- #
+# Cuenta de arranque
+# --------------------------------------------------------------------------- #
+async def test_the_bootstrap_admin_gets_a_generated_password_that_must_change():
+    """Ya no hay contraseña fija y documentada, igual en todas las instalaciones."""
+    async with session_scope() as session:
+        tenant = await repo.get_or_create_tenant(session, "default")
+        secret = await repo.ensure_default_admin(session, tenant_id=tenant.id)
+
+    assert secret and len(secret) >= 20
+
+    async with session_scope() as session:
+        tenant = await repo.get_or_create_tenant(session, "default")
+        admin = await repo.find_agent_by_email(
+            session, tenant_id=tenant.id, email=repo.DEFAULT_ADMIN_EMAIL
+        )
+        assert admin is not None
+        assert admin.role == ROLE_ADMIN
+        assert admin.must_change_password is True
+        assert verify_password(secret, admin.password_hash)
+
+
+async def test_the_bootstrap_admin_keeps_the_password_it_was_given():
+    """Antes se reponía en cada arranque, de modo que cambiarla no servía."""
+    async with session_scope() as session:
+        tenant = await repo.get_or_create_tenant(session, "default")
+        await repo.ensure_default_admin(session, tenant_id=tenant.id, password=PASSWORD)
+        admin = await repo.find_agent_by_email(
+            session, tenant_id=tenant.id, email=repo.DEFAULT_ADMIN_EMAIL
+        )
+        admin.password_hash = hash_password("OtraClaveDistinta9")
+        admin.must_change_password = False
+
+    async with session_scope() as session:
+        tenant = await repo.get_or_create_tenant(session, "default")
+        assert await repo.ensure_default_admin(session, tenant_id=tenant.id) is None
+        admin = await repo.find_agent_by_email(
+            session, tenant_id=tenant.id, email=repo.DEFAULT_ADMIN_EMAIL
+        )
+        assert verify_password("OtraClaveDistinta9", admin.password_hash)
+
+
+async def test_the_bootstrap_admin_is_not_recreated_while_another_admin_exists(team):
+    async with session_scope() as session:
+        tenant = await repo.get_or_create_tenant(session, "default")
+        assert await repo.ensure_default_admin(session, tenant_id=tenant.id) is None
+        assert (
+            await repo.find_agent_by_email(
+                session, tenant_id=tenant.id, email=repo.DEFAULT_ADMIN_EMAIL
+            )
+        ) is None
+
+
+async def test_a_pending_password_change_blocks_the_console_but_not_the_change(
+    as_agent, team
+):
+    """La marca retiene la sesión: solo deja salir por el cambio de contraseña."""
+    async with session_scope() as session:
+        tenant = await repo.get_or_create_tenant(session, "default")
+        ana = await repo.find_agent_by_email(
+            session, tenant_id=tenant.id, email=team["ana"]["email"]
+        )
+        ana.must_change_password = True
+
+    cliente = await as_agent(team["ana"]["email"])
+
+    # La consola queda cerrada…
+    assert (await cliente.get("/api/conversations")).status_code == 403
+    # …pero se puede saber por qué, y salir.
+    yo = await cliente.get("/api/auth/me")
+    assert yo.status_code == 200
+    assert yo.json()["agent"]["must_change_password"] is True
+
+    # La contraseña actual se comprueba de verdad.
+    fallido = await cliente.post(
+        "/api/auth/password",
+        json={"current_password": "no-es-esta", "new_password": "ClaveNueva12345"},
+    )
+    assert fallido.status_code == 422
+
+    cambio = await cliente.post(
+        "/api/auth/password",
+        json={"current_password": PASSWORD, "new_password": "ClaveNueva12345"},
+    )
+    assert cambio.status_code == 200
+
+    # Y a partir de ahí la consola vuelve a abrirse con la misma sesión.
+    assert (await cliente.get("/api/conversations")).status_code == 200
+    assert (await cliente.get("/api/auth/me")).json()["agent"]["must_change_password"] is False
+
+
+async def test_a_google_account_outside_the_domain_list_gets_no_console(anonymous, monkeypatch):
+    """Google autentica a cualquiera con cuenta de Google; la consola, no."""
+    import app.api.google_auth as google_auth
+
+    _configure_google(monkeypatch, get_settings())
+
+    async def perfil_ajeno(**kwargs):
+        return {"email": "desconocido@gmail.com", "display_name": "Desconocido"}
+
+    monkeypatch.setattr(google_auth, "exchange_code_for_userinfo", perfil_ajeno)
+
+    inicio = await anonymous.get("/auth/google/login", follow_redirects=False)
+    state, _, _ = inicio.cookies["chatbox_google_state"].strip('"').partition(":")
+
+    respuesta = await anonymous.get(
+        f"/auth/google/callback?code=abc&state={state}", follow_redirects=False
+    )
+    assert respuesta.status_code == 403
+    assert "chatbox_session" not in respuesta.cookies
+
+    # Y tampoco queda la cuenta creada a medias.
+    async with session_scope() as session:
+        tenant = await repo.get_or_create_tenant(session, get_settings().default_tenant_slug)
+        assert (
+            await repo.find_agent_by_email(
+                session, tenant_id=tenant.id, email="desconocido@gmail.com"
+            )
+        ) is None
+
+
 async def test_login_or_provision_agent_creates_a_new_agent_with_the_basic_role(team):
     async with session_scope() as session:
         agent, created = await login_or_provision_agent(
             session,
+            settings=_sso_settings(sso_allowed_email_domains="empresa.local"),
             tenant_id=team["tenant_id"],
             email="nueva.persona@empresa.local",
             display_name="Nueva Persona",
@@ -2280,6 +2413,7 @@ async def test_login_or_provision_agent_does_not_elevate_an_existing_account(tea
     async with session_scope() as session:
         agent, created = await login_or_provision_agent(
             session,
+            settings=_sso_settings(),
             tenant_id=team["tenant_id"],
             email=team["admin"]["email"],
             display_name="Suplantado",
@@ -2299,10 +2433,50 @@ async def test_login_or_provision_agent_rejects_an_inactive_account(as_agent, te
         with pytest.raises(AgentInactiveError):
             await login_or_provision_agent(
                 session,
+                settings=_sso_settings(sso_allowed_email_domains="empresa.local"),
                 tenant_id=team["tenant_id"],
                 email=team["luis"]["email"],
                 display_name=None,
             )
+
+
+async def test_login_or_provision_agent_refuses_an_unknown_email_without_a_domain_list(team):
+    """Sin lista de dominios no se estrena cuenta: es el valor por omisión."""
+    async with session_scope() as session:
+        with pytest.raises(AgentNotProvisionedError):
+            await login_or_provision_agent(
+                session,
+                settings=_sso_settings(),
+                tenant_id=team["tenant_id"],
+                email="cualquiera@gmail.com",
+                display_name="Cualquiera",
+            )
+
+
+async def test_login_or_provision_agent_refuses_a_domain_outside_the_list(team):
+    """Google autentica a todo titular de una cuenta de Google; la lista corta."""
+    async with session_scope() as session:
+        with pytest.raises(AgentNotProvisionedError):
+            await login_or_provision_agent(
+                session,
+                settings=_sso_settings(sso_allowed_email_domains="empresa.local, filial.es"),
+                tenant_id=team["tenant_id"],
+                email="intruso@gmail.com",
+                display_name="Intruso",
+            )
+
+
+async def test_login_or_provision_agent_accepts_any_domain_on_the_list(team):
+    async with session_scope() as session:
+        agent, created = await login_or_provision_agent(
+            session,
+            settings=_sso_settings(sso_allowed_email_domains="empresa.local, filial.es"),
+            tenant_id=team["tenant_id"],
+            email="Alguien@Filial.ES",
+            display_name="Alguien",
+        )
+    assert created is True
+    assert agent.role == ROLE_AGENT
 
 
 # --------------------------------------------------------------------------- #

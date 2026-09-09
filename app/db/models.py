@@ -31,6 +31,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy import (
     Enum as SAEnum,
@@ -384,6 +385,11 @@ class Agent(Base, TimestampMixin):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     #: Derivación ``scrypt$n$r$p$salt$hash``. Nulo mientras no se fije contraseña.
     password_hash: Mapped[str | None] = mapped_column(String(255))
+    #: Obliga a cambiar la contraseña antes de usar la consola. Lo marca la
+    #: cuenta de arranque, cuya contraseña se genera e imprime en el log.
+    must_change_password: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False, server_default=text("false")
+    )
     #: ``available`` | ``away`` | ``offline``; orienta el reparto de la cola.
     presence: Mapped[str] = mapped_column(String(16), default="offline", nullable=False)
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

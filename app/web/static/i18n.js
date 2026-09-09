@@ -57,6 +57,14 @@
       "role.supervisor": "Supervisión",
       "role.agent": "Agente",
 
+      // --- Cambio de contraseña obligatorio ---
+      "password.title": "Cambie su contraseña",
+      "password.intro":
+        "Esta cuenta usa una contraseña provisional. Elija una propia para continuar.",
+      "password.current": "Contraseña actual",
+      "password.new": "Contraseña nueva",
+      "password.submit": "Guardar y continuar",
+
       // --- Filtros ---
       "filter.status": "Filtrar por estado",
       "filter.status.open": "Abiertas",
@@ -522,6 +530,13 @@
       "role.supervisor": "Supervision",
       "role.agent": "Agent",
 
+      "password.title": "Change your password",
+      "password.intro":
+        "This account uses a temporary password. Choose your own to continue.",
+      "password.current": "Current password",
+      "password.new": "New password",
+      "password.submit": "Save and continue",
+
       "filter.status": "Filter by status",
       "filter.status.open": "Open",
       "filter.status.closed": "Closed",
@@ -975,6 +990,13 @@
       "tabs.all": "Alle",
       "role.supervisor": "Aufsicht",
       "role.agent": "Mitarbeiter",
+
+      "password.title": "Ändern Sie Ihr Passwort",
+      "password.intro":
+        "Dieses Konto nutzt ein vorläufiges Passwort. Wählen Sie ein eigenes, um fortzufahren.",
+      "password.current": "Aktuelles Passwort",
+      "password.new": "Neues Passwort",
+      "password.submit": "Speichern und fortfahren",
 
       "filter.status": "Nach Status filtern",
       "filter.status.open": "Offen",

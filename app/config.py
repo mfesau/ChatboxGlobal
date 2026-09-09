@@ -132,6 +132,25 @@ class Settings(BaseSettings):
     def google_enabled(self) -> bool:
         return bool(self.google_client_id and self.google_client_secret)
 
+    # ------------------------------------- alta automática por SSO (SAML/Google)
+    #: Dominios de correo cuyos titulares pueden estrenar cuenta de agente
+    #: entrando por SSO, separados por comas (p. ej. "miempresa.com,filial.es").
+    #: **Vacío —el valor por omisión— significa que nadie se da de alta solo**:
+    #: por SSO entra quien ya tiene cuenta, y el resto recibe un rechazo. Es
+    #: deliberado que no exista un "acepta cualquier dominio": el proveedor de
+    #: identidad de Google autentica a cualquier titular de una cuenta de
+    #: Google, no solo a la plantilla, de modo que sin lista de dominios el
+    #: alta automática abre la consola a todo el mundo.
+    sso_allowed_email_domains: str = ""
+
+    @property
+    def sso_domains(self) -> set[str]:
+        return {
+            domain.strip().lower().lstrip("@")
+            for domain in self.sso_allowed_email_domains.split(",")
+            if domain.strip()
+        }
+
     # --------------------------------------------------- correo saliente ----
     #: Notificaciones de cuenta: confirmación de registro del chatbox e
     #: invitación al crear un supervisor o administrador. Mientras falten
@@ -165,6 +184,11 @@ class Settings(BaseSettings):
     session_cookie_secure: bool = False
     #: Correo del supervisor creado por ``scripts/create_agent.py`` sin argumentos.
     bootstrap_supervisor_email: str | None = None
+    #: Contraseña de la cuenta de arranque ``admin@local``, que solo se crea
+    #: cuando el inquilino se queda sin ningún administrador activo. Si falta,
+    #: se genera una al azar y se imprime una vez en el log del arranque. En
+    #: ambos casos hay que cambiarla en el primer acceso.
+    bootstrap_admin_password: SecretStr | None = None
 
     # ------------------------------------------------------------------ adjuntos
     #: Directorio donde se guardan las imágenes subidas por el chatbox y la

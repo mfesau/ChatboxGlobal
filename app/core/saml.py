@@ -10,6 +10,12 @@ cuenta de agente, se le da de alta automáticamente («aprovisionamiento
 just-in-time») con el rol básico de agente — nunca con más permisos, aunque
 el IdP lo marque como alguien importante. Quien administre la consola ajusta
 el rol después, igual que con cualquier otra cuenta.
+
+Ese alta automática solo alcanza a los dominios de correo que figuren en
+``SSO_ALLOWED_EMAIL_DOMAINS``, y la lista viene vacía: sin configurarla, por
+SSO entra quien ya tiene cuenta y nadie más. La restricción importa sobre todo
+con Google, cuyo proveedor de identidad autentica a cualquier titular de una
+cuenta de Google y no solo a la plantilla de la empresa.
 """
 
 from __future__ import annotations
@@ -46,6 +52,10 @@ DISPLAY_NAME_CLAIMS = (
 
 class AgentInactiveError(Exception):
     """La cuenta existe pero está desactivada; el IdP no reactiva cuentas."""
+
+
+class AgentNotProvisionedError(Exception):
+    """Autenticación válida, pero sin cuenta y sin permiso para estrenarla."""
 
 
 def build_saml_settings(settings: Settings) -> dict[str, Any]:
@@ -112,9 +122,24 @@ def extract_email(auth: OneLogin_Saml2_Auth, attributes: dict[str, list[str]]) -
     return None
 
 
+def may_provision(settings: Settings, email: str) -> bool:
+    """Indica si ese correo puede estrenar cuenta de agente por SSO.
+
+    Sin lista de dominios configurada no se da de alta a nadie. No existe un
+    comodín que acepte cualquier dominio, y es a propósito: ese ajuste
+    equivaldría a abrir la consola a cualquier titular de una cuenta de Google.
+    """
+    domains = settings.sso_domains
+    if not domains:
+        return False
+    _, separator, domain = email.rpartition("@")
+    return bool(separator) and domain.strip().lower() in domains
+
+
 async def login_or_provision_agent(
     session: AsyncSession,
     *,
+    settings: Settings,
     tenant_id: uuid.UUID,
     email: str,
     display_name: str | None,
@@ -126,7 +151,7 @@ async def login_or_provision_agent(
     presencia o la fecha de último acceso.
 
     Aislada de ``python3-saml`` a propósito: así se puede probar la política
-    de aprovisionamiento (alta automática, sin elevar permisos, cuentas
+    de aprovisionamiento (dominios permitidos, sin elevar permisos, cuentas
     desactivadas no reviven) sin necesidad de firmar una aserción SAML real.
     """
     agent = await repo.find_agent_by_email(session, tenant_id=tenant_id, email=email)
@@ -134,6 +159,9 @@ async def login_or_provision_agent(
         if not agent.is_active:
             raise AgentInactiveError(email)
         return agent, False
+
+    if not may_provision(settings, email):
+        raise AgentNotProvisionedError(email)
 
     agent = await repo.create_agent(
         session,

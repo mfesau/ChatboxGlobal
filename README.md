@@ -247,17 +247,31 @@ vez. `--listar` enumera el equipo y `--restablecer` genera una contraseña nueva
 `--departamento <nombre>` fija el departamento principal; debe crearse antes
 desde la consola de administración (`POST /api/departments`).
 
-**Cuenta de administrador por defecto**, para entrar de una vez sin esperar
-el alta del equipo real:
+**Cuenta de administrador de arranque**, para entrar de una vez sin esperar
+el alta del equipo real. Solo se crea cuando el inquilino no tiene ningún
+administrador activo:
 
 ```
 Correo:      admin@local
-Contraseña:  Admin1234
+Contraseña:  la de BOOTSTRAP_ADMIN_PASSWORD, o una generada al azar
 ```
 
-Cámbiela (o bórrela) antes de exponer el servicio fuera de la red local — es
-una contraseña conocida, pensada para arrancar rápido en desarrollo, no para
-producción. Se cambia desde la consola, en «Administrar usuarios», o con
+Sin `BOOTSTRAP_ADMIN_PASSWORD` en el `.env`, el arranque genera una contraseña
+y la escribe **una sola vez** en el log, con nivel `warning`:
+
+```bash
+docker compose logs api | grep bootstrap_admin_created
+```
+
+Esa contraseña es provisional: mientras no se cambie, la consola no deja hacer
+nada más que cambiarla —el servidor responde 403 al resto de la API— y en
+cuanto se entra aparece el formulario para sustituirla. Antes esta cuenta
+tenía una contraseña fija y documentada, idéntica en todas las instalaciones, y
+además se reponía en cada arranque, de modo que cambiarla no servía de nada
+mientras siguiera siendo el único administrador.
+
+Borrar `admin@local` una vez dado de alta un administrador real es seguro: solo
+reaparece si el inquilino se queda sin ninguno. Para restablecerla a mano,
 `python scripts/create_agent.py --email admin@local --restablecer`.
 
 ### Paso 3 — arranque accesible desde la red

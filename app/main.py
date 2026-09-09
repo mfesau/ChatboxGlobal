@@ -100,7 +100,23 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await apply_pending(engine)
     async with session_scope() as session:
         tenant = await repo.get_or_create_tenant(session, settings.default_tenant_slug)
-        await repo.ensure_default_admin(session, tenant_id=tenant.id)
+        bootstrap_password = await repo.ensure_default_admin(
+            session,
+            tenant_id=tenant.id,
+            password=(
+                settings.bootstrap_admin_password.get_secret_value()
+                if settings.bootstrap_admin_password
+                else None
+            ),
+        )
+    if bootstrap_password is not None:
+        # Única ocasión en que se ve: no queda guardada en ninguna parte, solo
+        # su derivación. Hay que cambiarla en el primer acceso.
+        log.warning(
+            "bootstrap_admin_created",
+            email=repo.DEFAULT_ADMIN_EMAIL,
+            password=bootstrap_password,
+        )
 
     registry = ChannelRegistry(settings)
     pipeline = build_default_pipeline(settings)

@@ -18,6 +18,32 @@
   <body class="console-body">
     <!-- Sin acceso propio: "/" es la entrada única (ver console.js, showGate()). -->
 
+    <!-- Cambio de contraseña obligatorio ----------------------------------- -->
+    <!-- La cuenta de arranque entra con una contraseña generada y el servidor
+         responde 403 a todo lo demás hasta que se sustituya. -->
+    <div class="overlay" id="password-change-panel" hidden>
+      <div class="overlay__card overlay__card--narrow">
+        <header class="overlay__header">
+          <h2 data-i18n="password.title">Cambie su contraseña</h2>
+        </header>
+        <p class="console__muted" data-i18n="password.intro">
+          Esta cuenta usa una contraseña provisional. Elija una propia para continuar.
+        </p>
+        <form class="panel" id="password-change-form">
+          <label class="panel__field">
+            <span data-i18n="password.current">Contraseña actual</span>
+            <input type="password" id="password-current" autocomplete="current-password" required />
+          </label>
+          <label class="panel__field">
+            <span data-i18n="password.new">Contraseña nueva</span>
+            <input type="password" id="password-new" minlength="8" autocomplete="new-password" required />
+          </label>
+          <p class="gate__error" id="password-change-error" hidden></p>
+          <button type="submit" class="send-button" data-i18n="password.submit">Guardar y continuar</button>
+        </form>
+      </div>
+    </div>
+
     <!-- Aplicación --------------------------------------------------------- -->
     <div class="console" id="app" hidden>
       <aside class="console__sidebar">
