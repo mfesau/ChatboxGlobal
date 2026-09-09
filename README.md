@@ -1,11 +1,12 @@
 # ChatboxGlobal — chat de equipo en red local
 
 Servicio que reúne en **un único punto de entrada** todos los chats —WhatsApp,
-Facebook Messenger, Microsoft Teams y el chatbox web propio—, los normaliza a
-un formato interno común, les aplica lógica de negocio y de IA, y permite
-**derivarlos entre compañeros conservando el historial íntegro**. De cada
-canal se puede conectar tantas cuentas como se quiera —varios números, varias
-páginas, varios equipos—, cada una con su propio departamento de destino.
+Facebook Messenger, Microsoft Teams, Telegram, correo, SMS y el chatbox web
+propio—, los normaliza a un formato interno común, les aplica lógica de negocio
+y de IA, y permite **derivarlos entre compañeros conservando el historial
+íntegro**. De cada canal se puede conectar tantas cuentas como se quiera —varios
+números, varias páginas, varios buzones—, cada una con su propio departamento de
+destino.
 
 Cada agente ve la cola común y su propia cartera. La supervisión ve todo. Se
 despliega en la red interna: las credenciales locales bastan por sí solas, sin
@@ -19,8 +20,11 @@ opcional, para quien lo quiera además de eso.
 ```
    WhatsApp ─┐
    Facebook ─┤
-   Teams ────┼──▶  ┌──────────────────┐   nadie asignado
-   Chatbox ──┘     │   COLA COMÚN     │◀────────────────────┐
+   Teams ────┤
+   Telegram ─┼──▶  ┌──────────────────┐   nadie asignado
+   Correo ───┤     │   COLA COMÚN     │◀────────────────────┐
+   SMS ──────┤     │ punto único de   │                     │
+   Chatbox ──┘     │ entrada de todo  │                     │ devolver
                    │ punto único de   │                     │
                    │ entrada de todo  │                     │ devolver
                    └────────┬─────────┘                     │
@@ -143,15 +147,22 @@ app/
 │   ├── business_hours.py   Horario de atención y objetivo de primera respuesta
 │   ├── branding.py         Color de marca y derivación de la paleta accesible
 │   ├── localized.py        Textos con una versión por idioma
-│   ├── mailer.py           Correo de invitación a las cuentas nuevas
+│   ├── mailer.py           Correo saliente: invitaciones y canal de correo
+│   ├── mail_poller.py      Recogida por IMAP del canal de correo
+│   ├── knowledge.py        Base de conocimiento del asistente (troceado y vectores)
+│   ├── csat.py             Encuesta de satisfacción al cerrar
+│   ├── rules.py            Motor de las reglas de automatización
+│   ├── privacy.py          Exportación y anonimización de un contacto (RGPD)
 │   ├── google_oauth.py     Inicio de sesión con Google
 │   ├── saml.py             Inicio de sesión único (SAML 2.0)
 │   └── hub.py              Bus de difusión para WebSockets
-├── channels/               WhatsApp, Microsoft Bot Framework, chatbox web
-├── handlers/               Aforo, control humano, comandos, IA, red de seguridad
+├── channels/               WhatsApp, Facebook, Teams, Telegram, correo, SMS, chatbox
+├── handlers/               Aforo, encuesta, control humano, comandos, reglas, IA
 ├── db/
-│   ├── models.py           Esquema relacional (24 tablas)
+│   ├── models.py           Esquema relacional (33 tablas)
 │   ├── repositories.py     Todas las sentencias SQL del dominio
+│   ├── reports.py          Agregados de los informes de supervisión
+│   ├── migrate.py          Aplicación de las migraciones al arrancar
 │   └── engine.py           Motor y unidad de trabajo asíncrona
 ├── api/
 │   ├── webhooks.py         Entrada de los canales externos
@@ -161,6 +172,12 @@ app/
 │   ├── google_auth.py      Entrada con cuenta de Google
 │   ├── saml.py             Entrada por SAML 2.0
 │   ├── console.py          Bandejas, derivación, notas, administración y supervisión
+│   ├── privacy.py          Traza de auditoría y derechos del interesado
+│   ├── reports.py          Informes de supervisión y su exportación
+│   ├── rules.py            Reglas y mensajes programados
+│   ├── knowledge.py        Documentos de la base de conocimiento
+│   ├── csat.py             Página pública de la encuesta
+│   ├── security_headers.py Cabeceras de seguridad de toda respuesta
 │   ├── attachments.py      Descarga de adjuntos, comprobando el acceso al hilo
 │   ├── deps.py             Identidad de la petición y permisos
 │   └── ws.py               WebSockets del chatbox y de la consola
@@ -170,7 +187,7 @@ app/
 
 db/
 ├── migrations/0001_init.sql       Esquema completo, generado desde los modelos
-├── migrations/0002…0012_*.sql     Añadidos incrementales sobre una base existente
+├── migrations/0002…0019_*.sql     Añadidos incrementales, aplicados al arrancar
 └── alembic/                       Entorno de migraciones
 
 scripts/
@@ -187,7 +204,7 @@ docker/
     ├── chatbox.conf        Proxy inverso con TLS (perfil `tls` de Compose)
     └── certs/              Certificado y clave del proxy (fuera del repositorio)
 
-tests/                      328 pruebas sobre SQLite, sin servicios externos
+tests/                      540 pruebas sobre SQLite, sin servicios externos
 ```
 
 ---
@@ -197,7 +214,7 @@ tests/                      328 pruebas sobre SQLite, sin servicios externos
 ### Paso 1 — configuración
 
 ```bash
-cp .env.example .env
+cp example.env .env
 ```
 
 > **Cuidado con los comentarios en línea.** `python-dotenv` toma como valor todo
@@ -209,12 +226,23 @@ En `.env`, ajuste al menos:
 
 ```
 PUBLIC_BASE_URL=http://192.168.1.50:8000
-CORS_ALLOW_ORIGINS=http://192.168.1.50:8000
 SESSION_COOKIE_SECURE=false
 ```
 
 `SESSION_COOKIE_SECURE` debe quedar en `false` mientras sirva por HTTP: el
 navegador descartaría una cookie `Secure` recibida sin TLS.
+
+`CORS_ALLOW_ORIGINS` se deja vacío. La consola y el chatbox los sirve esta misma
+aplicación, así que no hay ninguna petición entre orígenes que permitir; el
+comodín `*` se ignora con un aviso en el log, porque junto con la cookie de
+sesión dejaría que cualquier sitio web llamase a esta API con la sesión de quien
+lo visita. Solo se rellena si algo ajeno —una intranet propia, por ejemplo—
+tiene que llamar a la API desde otro dominio.
+
+`PUBLIC_BASE_URL` no es decorativa: de ahí salen la dirección que se declara
+ante Telegram al dar de alta su webhook, la que Twilio incluye en su firma y el
+enlace de la encuesta de satisfacción que viaja por correo y SMS. Si no coincide
+con la dirección por la que de verdad se entra, esas tres cosas fallan.
 
 **`SECRET_ENCRYPTION_KEY` conviene fijarla desde el principio.** Es la clave con
 la que se cifran las credenciales que se guardan por cuenta de canal —el token
@@ -243,9 +271,10 @@ python scripts/create_agent.py --email ana@empresa.local --nombre "Ana Rodrígue
 ```
 
 Sin `--password` el script genera una contraseña temporal y la muestra una única
-vez. `--listar` enumera el equipo y `--restablecer` genera una contraseña nueva.
-`--departamento <nombre>` fija el departamento principal; debe crearse antes
-desde la consola de administración (`POST /api/departments`).
+vez; quien la reciba tendrá que cambiarla en su primer acceso. `--listar`
+enumera el equipo y `--restablecer` genera una contraseña nueva, también
+provisional. `--departamento <nombre>` fija el departamento principal; debe
+crearse antes desde la consola de administración (`POST /api/departments`).
 
 **Cuenta de administrador de arranque**, para entrar de una vez sin esperar
 el alta del equipo real. Solo se crea cuando el inquilino no tiene ningún
@@ -416,10 +445,12 @@ configurado (ver «Inicio de sesión único» en la sección 6). El de Google si
 las normas de marca del propio Google —logotipo, colores y rótulo oficial en
 cada idioma—, porque el valor de ese botón está justamente en que se reconozca
 igual en todas partes. Los dos son exclusivos del equipo, así que
-siempre entregan en `/console`. Quien entra por SSO por primera vez con un
-correo que todavía no tiene cuenta se da de alta automáticamente como agente
-—nunca con más permisos, aunque el proveedor lo marque como alguien
-importante—; quien ya tenía cuenta conserva su rol tal cual estaba.
+siempre entregan en `/console`. Quien entra por SSO con un correo que todavía
+no tiene cuenta se da de alta solo si su dominio figura en
+`SSO_ALLOWED_EMAIL_DOMAINS` —y entonces con el rol básico, nunca con más
+permisos aunque el proveedor lo marque como alguien importante—; sin esa lista
+no se da de alta a nadie. Quien ya tenía cuenta conserva su rol tal cual
+estaba.
 
 Tres pestañas, con su contador en vivo:
 
@@ -590,6 +621,53 @@ sin que nadie tenga que derivarla a mano. Una cuenta sin departamento sigue
 en la cola común, igual que siempre. Ver «Varias cuentas por canal» en la
 sección 6 para el detalle de credenciales por canal.
 
+### Informes
+
+En el panel de supervisión, además de la carga instantánea del equipo, está lo
+que se pregunta al cerrar un mes: volumen por día y por canal, tiempo de primera
+respuesta (mediana y p90), cumplimiento del objetivo, reparto por agente,
+consumo del asistente y satisfacción del periodo. Cada desglose se exporta en
+CSV para seguir trabajándolo en una hoja de cálculo.
+
+Una supervisión con departamentos otorgados mide los suyos más la cola común,
+la misma regla que aplica su bandeja; pedir la rama ajena de forma explícita
+responde 404. Las gráficas son SVG dibujado por la propia consola: esta
+aplicación no carga nada de fuera, y la política de contenido tampoco lo
+permitiría.
+
+### Encuesta de satisfacción
+
+Se activa por departamento, en «Saludos y mensajes». Al cerrar una conversación
+se pide una nota del 1 al 5 por el mismo canal por el que se atendió: donde hay
+botones —web, Telegram, WhatsApp, Messenger— la nota se pulsa; en correo y SMS
+viaja un enlace a una página pública, porque una respuesta escrita a un SMS
+puede llegar días después y con un «4 gracias!!» que no hay que hacerle
+interpretar a nadie.
+
+Reabrir y volver a cerrar reutiliza la encuesta anterior: no se pregunta dos
+veces lo mismo. Si lo que contestan no es una nota, la conversación sigue su
+curso normal en lugar de insistir.
+
+### Reglas de automatización
+
+En «Reglas», administración describe una vez lo que había que repetir a mano:
+etiquetar lo que hable de facturación, mandarlo a su rama, contestar lo de
+siempre. Se comprueban sobre cada mensaje entrante en orden de prioridad y se
+aplican las que cumplan **todas** sus condiciones —es una «y», no una «o»—. Una
+regla sin condiciones se aplica siempre: es lo que permite una respuesta de
+bienvenida.
+
+Se evalúan después de los comandos, para que «/agente» siga funcionando pase lo
+que pase, y antes del asistente, para que una conversación derivada por regla
+llegue a quien corresponde sin que el modelo gaste un turno contestando algo
+genérico. La acción «no dejar responder al asistente» sirve para lo que tiene
+que ver una persona.
+
+Desde la API se puede además **programar un mensaje** para más tarde
+(`POST /api/conversations/{id}/scheduled`). Si el cliente contesta antes, el
+programado se cancela solo: un «¿sigue ahí?» preparado ayer no debe salir justo
+después de que conteste.
+
 ### Idioma y tema
 
 La interfaz está en **español, inglés y alemán**, y la elección se recuerda en
@@ -618,9 +696,11 @@ que tras una actualización nadie se queda con una versión antigua en caché.
 
 ### Varias cuentas por canal, cada una con su departamento
 
-WhatsApp, Facebook y Teams admiten **tantas cuentas como se quiera** —varios
-números, varias páginas, varios equipos—, cada una conectada desde «Cuentas
-de canal» en el panel de administración. Esa pantalla es el camino previsto:
+Todos los canales admiten **tantas cuentas como se quiera** —varios números,
+varias páginas, varios bots, varios buzones—, cada una conectada desde «Cuentas
+de canal» en el panel de administración. Cada canal pide ahí las credenciales
+que necesita y solo esas: Teams ninguna, Telegram dos, Twilio tres, el correo
+diez. Esa pantalla es el camino previsto:
 conectar un canal más no debería exigir editar el `.env` ni reiniciar nada. Lo
 que queda en `.env` es solo la credencial global de reserva, para el caso de un
 único token de sistema compartido por varios números; una cuenta con token
@@ -633,10 +713,11 @@ conversación nueva de esa cuenta cae directo en esa cola; sin departamento,
 sigue en la cola común, exactamente como si esta función no existiera.
 
 El identificador que pide el formulario es, según el canal: el
-`phone_number_id` en WhatsApp, el id de la página en Facebook, o el id del
-equipo en Teams —este último no se conoce de antemano, así que la cuenta se
-crea sola con el primer mensaje que llegue de ese equipo; luego se le asigna
-un departamento desde la misma pantalla—.
+`phone_number_id` en WhatsApp, el id de la página en Facebook, el id del equipo
+en Teams —este último no se conoce de antemano, así que la cuenta se crea sola
+con el primer mensaje que llegue de ese equipo—, el id numérico del bot en
+Telegram, la dirección del buzón en correo, o el número en formato internacional
+en SMS. La propia pantalla lo explica al elegir el canal.
 
 Las credenciales propias de una cuenta (el token de acceso) se guardan
 cifradas, nunca en claro: hace falta `SECRET_ENCRYPTION_KEY` en `.env` antes
@@ -769,6 +850,60 @@ Cada llamada se valida contra los metadatos OpenID del servicio de canales
 token de Microsoft Entra ID que el adaptador renueva por su cuenta. Frente al
 Bot Framework Emulator, ponga `MICROSOFT_VALIDATE_JWT=false`.
 
+### Telegram
+
+1. Hable con [@BotFather](https://t.me/botfather) y cree un bot; le dará un
+   token con la forma `1234567:AA…`.
+2. Conecte la cuenta desde «Cuentas de canal»: el identificador es la parte
+   anterior a los dos puntos, el **token de acceso** es el token entero, y el
+   **token de verificación** es un secreto que usted inventa.
+3. Pulse «Dar de alta el webhook» en esa misma fila. Telegram no tiene panel de
+   configuración: el webhook se declara llamando a su API, y ese botón lo hace
+   por usted contra `PUBLIC_BASE_URL + /webhooks/telegram`.
+
+El secreto viaja en cada aviso, en la cabecera
+`X-Telegram-Bot-Api-Secret-Token`. Comprobarlo es lo único que impide que quien
+adivine la URL —que es pública— inyecte conversaciones falsas, así que en
+`ENVIRONMENT=prod` es obligatorio.
+
+### Correo
+
+El único canal que no avisa: no hay webhook, hay que ir a mirar el buzón. El
+servicio lo consulta por IMAP cada `IMAP_POLL_INTERVAL_S` segundos (120 por
+omisión; `0` apaga la recogida) y responde por SMTP con las credenciales de esa
+misma cuenta, que no son las de `SMTP_*` del `.env` —esas son para las
+notificaciones de cuenta—.
+
+Conéctelo desde «Cuentas de canal» con la dirección del buzón como
+identificador y los datos de IMAP y SMTP. Marcar el mensaje como leído es lo que
+evita traerlo dos veces; el `Message-ID` es la segunda red, por si el proceso
+muere entre leer y marcar.
+
+**Un hilo por corresponsal, no por asunto.** El identificador de conversación es
+la dirección de quien escribe, igual que en WhatsApp es el número. Encadenar por
+`References` daría un hilo nuevo cada vez que alguien escribe «otra consulta
+más» en lugar de responder, y en un buzón de soporte eso reparte a la misma
+persona entre varios agentes. El `Message-ID` original sí viaja en la respuesta
+como `In-Reply-To`, que es lo que hace que el cliente la vea encadenada en su
+programa de correo.
+
+### SMS (Twilio)
+
+1. En la consola de Twilio, apunte el webhook de mensajes entrantes de su número
+   a `https://SU_DOMINIO/webhooks/sms`.
+2. Conecte la cuenta desde «Cuentas de canal» con el número en formato
+   internacional como identificador, y el SID, el token de autenticación y el
+   número remitente como credenciales.
+
+Twilio se sale del molde en dos cosas: manda un formulario codificado en lugar
+de JSON, y firma **la URL completa** además de los campos. Por eso la dirección
+se reconstruye desde `PUBLIC_BASE_URL` —detrás del proxy inverso, la que ve la
+aplicación es la interna, y Twilio firmó la pública—. Si no cuadran, la firma no
+valida.
+
+Un SMS no tiene botones: las respuestas rápidas se ofrecen numeradas, lo mismo
+que hace WhatsApp cuando se pasa de tres opciones.
+
 ### Inicio de sesión único (SAML 2.0 / Microsoft Entra ID)
 
 Solo para la consola del equipo — el chatbox de clientes no cambia. Convive
@@ -788,8 +923,16 @@ datos del IdP, el botón queda oculto y nada más cambia.
    `.../claims/emailaddress` — y opcionalmente el nombre visible
    (`.../claims/displayname`).
 
-Quien entra por primera vez con un correo sin cuenta previa se da de alta
-automáticamente como agente, con el rol básico y sin contraseña propia
+**El alta automática está apagada de fábrica.** Quien entra con un correo sin
+cuenta previa solo se da de alta si su dominio figura en
+`SSO_ALLOWED_EMAIL_DOMAINS`; si la lista está vacía —lo que viene puesto—, por
+SSO entra quien ya tiene cuenta y el resto recibe un rechazo. No existe un
+comodín que acepte cualquier dominio, y es a propósito: el proveedor de
+identidad de Google autentica a cualquier titular de una cuenta de Google, no
+solo a la plantilla de la empresa, de modo que un alta automática sin lista
+abriría la consola a todo el mundo.
+
+Quien sí pasa el filtro se da de alta con el rol básico y sin contraseña propia
 (`password_hash` queda `NULL`: esa cuenta solo entra por SSO, a menos que
 administración le fije una contraseña aparte). Una cuenta desactivada no
 revive por este camino: sigue rechazada aunque el IdP la autentique.
@@ -833,6 +976,42 @@ conversación —sin recargar la página, por WebSocket—.
 | Un enlace de SSO manipulado redirige tras el login a un sitio ajeno | `next`/`RelayState` solo admite una ruta propia (`/algo`); cualquier otro valor cae a `/console` |
 | Robo de la base expone los tokens de WhatsApp/Facebook de cada cuenta | Se guardan cifrados (`SECRET_ENCRYPTION_KEY`), nunca en claro; los adaptadores no acceden a la base directamente |
 
+### Acceso y contraseñas
+
+- **Freno a la fuerza bruta.** Los fallos seguidos se cuentan sobre la propia
+  cuenta y, pasados `LOGIN_MAX_ATTEMPTS` (8), queda en espera
+  `LOGIN_LOCKOUT_MINUTES` (15). Vale para los tres caminos: la consola, el
+  chatbox y el login unificado de «/». La respuesta a una cuenta en espera es la
+  misma que a unas credenciales erróneas, deliberadamente: un código propio le
+  diría a quien prueba contraseñas cuáles de las direcciones que va probando
+  existen.
+- **Cabeceras.** Toda respuesta lleva política de contenido, `nosniff`,
+  `Referrer-Policy` y `X-Frame-Options`; HSTS solo con
+  `SESSION_COOKIE_SECURE=true`, porque anunciarlo desde una instalación por HTTP
+  dejaría el navegador incapaz de volver a entrar durante meses.
+- **CORS.** Vacío por omisión, y el comodín `*` se ignora con un aviso en el
+  log: junto con la cookie de sesión dejaría que cualquier sitio web llamase a
+  esta API con la sesión de quien lo visita. La consola y el chatbox los sirve
+  esta misma aplicación, así que lo habitual es no necesitarlo.
+
+### Auditoría y datos personales
+
+La traza de `audit_log` se lee desde la pestaña «Auditoría» del panel de
+administración, con filtros por autor, acción y fecha. Está abierta a
+supervisión y no solo a administración: quien responde de un turno necesita ver
+quién reasignó qué, y la traza no contiene el contenido de ninguna conversación.
+
+En la ficha de un contacto, supervisión puede **descargar** todo lo que se
+guarda sobre esa persona (RGPD, artículo 15) y administración puede **borrarlo**
+(artículo 17). El borrado anonimiza en lugar de suprimir filas: se va el dato
+personal —nombre, teléfono, correo, identificadores de canal, el texto de los
+mensajes y los ficheros adjuntos, estos también del disco— y queda el esqueleto,
+para no falsear los informes ni perder la trazabilidad de quién atendió qué. Es
+irreversible y exige confirmación explícita.
+
+`RETENTION_DAYS_MESSAGES` y `RETENTION_DAYS_AUDIT` fijan plazos de conservación;
+ambos vienen a `0`, que conserva el histórico entero.
+
 ### Respaldo de la base de datos
 
 `scripts/backup_db.ps1` ejecuta `pg_dump --clean --if-exists` dentro de
@@ -869,7 +1048,8 @@ ya pasó más de una vez en este proyecto sin que se identificara la causa.
 
 ## 8. Modelo de datos
 
-Veinticuatro tablas, con clave primaria `uuid` y aislamiento por `tenant_id`:
+Treinta y tres tablas, con clave primaria `uuid` y aislamiento por
+`tenant_id`:
 
 | Tabla | Contenido |
 |---|---|
@@ -896,6 +1076,12 @@ Veinticuatro tablas, con clave primaria `uuid` y aislamiento por `tenant_id`:
 | `inbound_dedupe` | Claves de idempotencia |
 | `ai_runs` | Tokens, latencia y motivo de parada de cada llamada al modelo |
 | `audit_log` | Acciones administrativas, accesos y cambios de responsable |
+| `hotel_room_types`, `hotel_rooms`, `hotel_rate_plans`, `hotel_reservations` | Módulo de reservas, activo por departamento |
+| `kb_documents`, `kb_chunks` | Base de conocimiento del asistente, con su vector por fragmento |
+| `csat_surveys` | Encuesta de satisfacción: una viva por conversación |
+| `automation_rules` | Reglas de automatización, con sus condiciones y acciones |
+| `scheduled_messages` | Salientes que esperan su hora |
+| `schema_migrations` | Qué migraciones se aplicaron ya |
 
 Las columnas semiestructuradas usan `JSONB`. Los enumerados se guardan como
 `VARCHAR` y no como tipo `ENUM` nativo: añadir un canal, un estado o un rol no
@@ -903,14 +1089,24 @@ exige `ALTER TYPE` ni migración de datos.
 
 ### Evolución del esquema
 
+**Las migraciones se aplican solas al arrancar.** `app/db/migrate.py` lleva la
+cuenta en la tabla `schema_migrations` y ejecuta lo que falte. Antes solo
+corrían como `initdb` de PostgreSQL, es decir, únicamente sobre un directorio de
+datos vacío: en un despliegue con datos dentro —el caso normal— una migración
+nueva no llegaba nunca a la base.
+
+Sobre una base que ya venía funcionando se da por aplicada la serie histórica
+hasta `0014` sin volver a ejecutarla. De ahí en adelante, **los ficheros deben
+ser idempotentes** (`CREATE TABLE IF NOT EXISTS`, `ADD COLUMN IF NOT EXISTS`),
+porque una instalación desde cero los ejecuta dos veces: primero PostgreSQL al
+inicializar el directorio de datos y después el propio servicio, que no tiene
+forma de distinguir esa base recién creada de una que venía de la serie antigua.
+
 ```bash
 python scripts/generate_ddl.py > db/migrations/0001_init.sql   # regenerar el DDL
-alembic revision --autogenerate -m "descripción del cambio"    # nueva migración
-alembic upgrade head
 ```
 
-Sobre una instalación que ya tenía el esquema anterior, aplique en orden los
-ficheros de `db/migrations/`, del `0002` al `0014`:
+Los ficheros de `db/migrations/`, en orden:
 
 | | |
 |---|---|
@@ -927,6 +1123,11 @@ ficheros de `db/migrations/`, del `0002` al `0014`:
 | `0012_conversation_in_progress.sql` | El estado «en proceso» |
 | `0013_hotel_module.sql` | Módulo de reservas de hotel por departamento |
 | `0014_department_logo.sql` | Logo por departamento |
+| `0015_bootstrap_password_change.sql` | Cambio obligatorio de la contraseña de arranque |
+| `0016_login_throttle.sql` | Freno a la prueba de contraseñas por fuerza bruta |
+| `0017_knowledge_base.sql` | Base de conocimiento del asistente (requiere `pgvector`) |
+| `0018_csat.sql` | Encuesta de satisfacción |
+| `0019_automation_rules.sql` | Reglas de automatización y mensajes programados |
 
 Lo que se guarda en `Tenant.settings` —la respuesta automática, el horario de
 toda la empresa, el color de marca— no lleva migración: es una columna `JSONB` y
@@ -939,20 +1140,27 @@ crece sin tocar el esquema.
 ### Añadir un canal
 
 ```python
-# app/channels/telegram.py
+# app/channels/mi_canal.py
 from app.channels.base import ChannelAdapter, register_channel
 from app.core.envelope import ChannelKind
 
-@register_channel(ChannelKind.TELEGRAM)      # añada el valor al enumerado
-class TelegramAdapter(ChannelAdapter):
-    async def verify_request(self, *, headers, body): ...
+@register_channel(ChannelKind.MI_CANAL)      # añada el valor al enumerado
+class MiCanalAdapter(ChannelAdapter):
+    async def verify_request(self, *, headers, body, credentials=(), url=None): ...
     async def parse(self, *, payload, headers) -> list[InboundMessage]: ...
     async def send(self, *, ref, message) -> DeliveryReceipt: ...
 ```
 
 Impórtelo en `app/channels/__init__.py`. La ruta genérica
-`POST /webhooks/{canal}` ya lo atiende, y sus conversaciones aparecen en la
-misma cola común que el resto.
+`POST /webhooks/{canal}` ya lo atiende —resuelve además las credenciales de las
+cuentas dadas de alta, para que el adaptador pueda comprobar su firma— y sus
+conversaciones aparecen en la misma cola común que el resto.
+
+Quedan tres sitios más, todos en una lista: el `Literal` del alta de cuentas y
+el mapa `CHANNEL_CREDENTIAL_FIELDS` en [console.py](app/api/console.py), el
+mismo mapa en [console.js](app/web/static/console.js), y las etiquetas en
+[i18n.js](app/web/static/i18n.js). No hace falta migración: los enumerados se
+guardan como `VARCHAR`.
 
 ### Añadir lógica de negocio
 
@@ -972,20 +1180,48 @@ deterministas resuelven sin gastar una llamada al modelo.
 
 ### Capa de IA
 
-[handlers/ai.py](app/handlers/ai.py) invoca a Claude con el SDK oficial de
-Anthropic: transmisión por fragmentos que el chatbox muestra en directo,
-pensamiento adaptativo, caché de prompt sobre el prefijo estable y reintento en
-servidor ante una declinación de seguridad. Expone la herramienta
-`derivar_a_agente`, con la que el modelo devuelve la conversación a la cola
-humana. Sin `ANTHROPIC_API_KEY` el handler se desactiva y el servicio sigue
+[handlers/ai.py](app/handlers/ai.py) invoca a Gemini con el SDK oficial de
+Google (`google-genai`), con transmisión por fragmentos que el chatbox muestra
+en directo. Expone tres grupos de herramientas:
+
+- `derivar_a_agente`, con la que el modelo devuelve la conversación a la cola
+  humana;
+- `buscar_en_base_de_conocimiento`, que consulta la documentación de la empresa
+  (ver más abajo) y solo se ofrece si hay algo dentro;
+- las de reserva de hotel, únicamente en los departamentos que tengan el módulo
+  activo.
+
+Cada llamada queda anotada en `ai_runs` con su consumo, su latencia y su motivo
+de parada. Sin `GOOGLE_API_KEY` el handler se desactiva y el servicio sigue
 funcionando con lógica determinista.
+
+### Base de conocimiento
+
+El modelo no sabe cuánto cuesta la habitación superior ni qué dice la política
+de cancelación de esta casa, y sin nada que consultar se lo inventa con aplomo.
+Administración sube documentos —texto, markdown o PDF— desde «Conocimiento», y
+quedan troceados con un vector de significado por trozo. La búsqueda es por
+significado y no por palabras: quien pregunta «¿puedo anular?» encuentra el
+párrafo que habla de «cancelación» aunque no compartan ni una.
+
+Se ofrece como herramienta y no como contexto pegado al prompt: así el modelo
+solo paga la búsqueda cuando la necesita —un «buenos días» no la dispara— y de
+cada respuesta queda anotado en qué trozos se apoyó. Cuando la búsqueda no
+devuelve nada, la propia herramienta le pide que lo reconozca y ofrezca derivar,
+en lugar de dejarle rellenar el hueco.
+
+Un documento puede ser de toda la empresa o de un departamento: las tarifas del
+hotel no ayudan en soporte técnico y no aparecen allí.
+
+Requiere la extensión `pgvector`, que trae la imagen `pgvector/pgvector:pg17`
+del `docker-compose.yml`, y `GOOGLE_API_KEY` para calcular los vectores.
 
 ---
 
 ## 10. Pruebas y verificación
 
 ```bash
-python -m pytest tests/ -q      # 328 pruebas
+python -m pytest tests/ -q      # 540 pruebas
 python -m ruff check .
 ```
 
@@ -1017,6 +1253,8 @@ aprobadas, y que borrar una cuenta deje el historial en pie aunque sin nombre.
 | `POST` | `/webhooks/facebook` | Mensajes y acuses de Facebook Messenger |
 | `POST` | `/api/messages` | *Activities* del Bot Framework |
 | `POST` | `/api/web/messages` | Mensaje del chatbox por REST |
+| `POST` | `/webhooks/telegram` | Actualizaciones de la Bot API |
+| `POST` | `/webhooks/sms` | Mensajes y acuses de Twilio (formulario) |
 | `POST` | `/webhooks/{canal}` | Ruta genérica para canales nuevos |
 | `WS` | `/ws/chat` | Conversación del chatbox web |
 | `WS` | `/ws/inbox` | Novedades para la consola del equipo |
@@ -1028,6 +1266,7 @@ aprobadas, y que borrar una cuenta deje el historial en pie aunque sin nombre.
 | `POST` | `/api/session/login` | **Login unificado** (formulario de «/»): agente o cliente, según la cuenta |
 | `POST` | `/api/auth/login` | Entrada del agente por su cuenta, sin pasar por el login unificado |
 | `POST` | `/api/auth/logout` | Cierre y revocación de la sesión |
+| `POST` | `/api/auth/password` | Cambio de la propia contraseña |
 | `GET` | `/api/auth/me` | Identidad y rol efectivos |
 | `GET` | `/api/auth/sso` | Si hay que mostrar los botones de SSO y de Google |
 | `POST` | `/api/auth/presence` | Disponibilidad: `available`, `away`, `offline` |
@@ -1092,8 +1331,10 @@ aprobadas, y que borrar una cuenta deje el historial en pie aunque sin nombre.
 | `POST` | `/api/departments` | Crea un departamento (solo administración) |
 | `PUT` | `/api/agents/{id}/departments` | Fija el principal y los adicionales de una persona (solo administración) |
 | `PUT` | `/api/departments/{id}/business-hours` | Horario y objetivo del departamento (solo administración) |
+| `GET`/`PUT` | `/api/departments/{id}/csat` | Encuesta de satisfacción de la rama (solo administración) |
 | `GET` | `/api/channel-accounts` | Lista de cuentas de canal (solo administración) |
-| `POST` | `/api/channel-accounts` | Conecta una cuenta de WhatsApp, Facebook o Teams (solo administración) |
+| `POST` | `/api/channel-accounts` | Conecta una cuenta de cualquier canal (solo administración) |
+| `POST` | `/api/channel-accounts/{id}/telegram/webhook` | Declara el webhook ante Telegram (solo administración) |
 | `PATCH` | `/api/channel-accounts/{id}` | Cambia nombre, departamento, estado o token propio (solo administración) |
 | `DELETE` | `/api/channel-accounts/{id}` | Desconecta la cuenta; sus conversaciones quedan (solo administración) |
 | `GET`/`PUT` | `/api/admin/settings` | Texto de la respuesta automática (solo administración para editar) |
@@ -1108,6 +1349,25 @@ aprobadas, y que borrar una cuenta deje el historial en pie aunque sin nombre.
 | `DELETE` | `/api/macros/{id}` | Borra una macro |
 | `GET`/`POST` | `/api/saved-views` | Vistas guardadas de la bandeja, propias o del equipo |
 | `DELETE` | `/api/saved-views/{id}` | Borra una vista guardada |
+
+### Auditoría, informes y automatización
+
+| Método | Ruta | Uso |
+|---|---|---|
+| `GET` | `/api/audit` | Traza de acciones, con filtros (supervisión) |
+| `GET` | `/api/audit/actions` | Acciones presentes en la traza (supervisión) |
+| `GET` | `/api/contacts/{id}/export` | Copia de los datos de un contacto (supervisión) |
+| `POST` | `/api/contacts/{id}/erase?confirm=true` | Anonimiza a un contacto (solo administración) |
+| `GET` | `/api/reports/summary` | Informe del periodo: cifras, series y desgloses (supervisión) |
+| `GET` | `/api/reports/export.csv` | Un desglose en CSV (supervisión) |
+| `GET`/`POST` | `/api/rules` | Reglas de automatización (leer: supervisión; escribir: administración) |
+| `PATCH`/`DELETE` | `/api/rules/{id}` | Edita o borra una regla (solo administración) |
+| `GET`/`POST` | `/api/conversations/{id}/scheduled` | Mensajes programados de una conversación |
+| `DELETE` | `/api/scheduled/{id}` | Cancela un programado que no salió |
+| `GET`/`POST` | `/api/knowledge/documents` | Base de conocimiento (leer: cualquier agente; subir: administración) |
+| `POST` | `/api/knowledge/documents/upload` | Alta desde `.txt`, `.md` o `.pdf` (solo administración) |
+| `DELETE` | `/api/knowledge/documents/{id}` | Borra un documento y sus fragmentos (solo administración) |
+| `GET`/`POST` | `/csat/{token}` | Página pública de la encuesta (sin sesión; el testigo es la credencial) |
 | `GET` | `/api/supervisor/overview` | Carga por agente y derivaciones (supervisión) |
 | `GET` | `/api/stats` | Mensajes por canal |
 
@@ -1132,8 +1392,21 @@ integraciones.
   réplica A. Sustitúyalo por Redis Pub/Sub o por `LISTEN`/`NOTIFY` de PostgreSQL
   conservando la misma interfaz. La cola de salida ya es segura entre procesos.
 - **Retención.** El mantenimiento purga las claves de idempotencia a los tres
-  días. Defina además su política para `messages` y `raw`, que conservan datos
-  personales, y para `audit_log`.
+  días. Para `messages` y `audit_log`, que conservan datos personales, fije
+  `RETENTION_DAYS_MESSAGES` y `RETENTION_DAYS_AUDIT`; vienen a `0`, que conserva
+  el histórico entero.
+- **Alta por SSO.** Revise `SSO_ALLOWED_EMAIL_DOMAINS` **antes** de publicar el
+  servicio. Vacío significa que por SSO solo entra quien ya tiene cuenta, que es
+  lo correcto; con una lista, cualquiera de esos dominios estrena cuenta de
+  agente al primer acceso.
+- **Cuenta de arranque.** `admin@local` solo se crea si el inquilino se queda sin
+  ningún administrador activo, y su contraseña se genera y se anuncia una vez en
+  el log. Bórrela en cuanto haya un administrador real; no hay ninguna
+  contraseña conocida de fábrica.
+- **Recogida de correo.** El canal de correo consulta el buzón desde el propio
+  proceso. Con varias réplicas, ponga `IMAP_POLL_INTERVAL_S=0` en todas menos
+  una: marcar el mensaje como leído evita el duplicado, pero dos procesos
+  mirando a la vez se pisan igualmente.
 - **Copias de seguridad.** Todo el historial del que depende una derivación vive
   en PostgreSQL. Programe `pg_dump` y compruebe la restauración.
 - **Observabilidad.** El registro sale en JSON por la salida estándar. Los
