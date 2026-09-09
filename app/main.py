@@ -31,6 +31,7 @@ from app.api import (
     knowledge,
     privacy,
     reports,
+    rules,
     saml,
     session,
     webhooks,
@@ -197,6 +198,7 @@ def create_app() -> FastAPI:
     application.include_router(knowledge.router)
     application.include_router(privacy.router)
     application.include_router(reports.router)
+    application.include_router(rules.router)
     application.include_router(console.router)
     application.include_router(attachments.router)
 

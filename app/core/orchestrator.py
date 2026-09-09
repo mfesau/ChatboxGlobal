@@ -160,6 +160,11 @@ class Orchestrator:
                 session, conversation.id, limit=self.settings.ai_history_turns * 2
             )
 
+            # Quien escribe cancela lo que estuviera programado para él: un
+            # «¿sigue ahí?» preparado ayer no debe salir justo después de que
+            # conteste.
+            await repo.cancel_scheduled_messages(session, conversation_id=conversation.id)
+
             await self._broadcast_inbound(tenant.slug, conversation, inbound)
 
             ctx = TurnContext(

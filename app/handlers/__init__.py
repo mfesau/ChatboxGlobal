@@ -15,6 +15,7 @@ from app.handlers.builtin import (
     RateLimitHandler,
     UnsupportedContentHandler,
 )
+from app.handlers.rules import RulesHandler
 
 __all__ = ["build_default_pipeline"]
 
@@ -38,6 +39,11 @@ def build_default_pipeline(settings: Settings) -> Pipeline:
             FallbackHandler(),
             CommandHandler(),
             UnsupportedContentHandler(),
+            # Después de los comandos —«/agente» debe funcionar pase lo que
+            # pase— y antes del asistente: una conversación derivada por regla
+            # llega a quien corresponde sin que el modelo gaste un turno
+            # contestando algo genérico por el camino.
+            RulesHandler(),
             AIHandler(settings),
         ]
     )

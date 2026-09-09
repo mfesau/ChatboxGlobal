@@ -207,6 +207,17 @@
     hotelReservationNotes: document.getElementById("hotel-reservation-notes"),
     hotelStatusFilter: document.getElementById("hotel-status-filter"),
     hotelReservationsTable: document.querySelector("#hotel-reservations-table tbody"),
+    ruleForm: document.getElementById("rule-form"),
+    ruleName: document.getElementById("rule-name"),
+    rulePriority: document.getElementById("rule-priority"),
+    ruleDepartment: document.getElementById("rule-department"),
+    ruleKeywords: document.getElementById("rule-keywords"),
+    ruleFirstOnly: document.getElementById("rule-first-only"),
+    ruleReply: document.getElementById("rule-reply"),
+    ruleLabel: document.getElementById("rule-label"),
+    ruleRoute: document.getElementById("rule-route"),
+    ruleStop: document.getElementById("rule-stop"),
+    rulesTable: document.querySelector("#rules-table tbody"),
     csatDepartment: document.getElementById("csat-department"),
     csatSettings: document.getElementById("csat-settings"),
     csatEnabled: document.getElementById("csat-enabled"),
@@ -3570,8 +3581,175 @@
       if (tab.dataset.adminTab === "knowledge") {
         loadKnowledge();
       }
+      if (tab.dataset.adminTab === "rules") {
+        loadRules();
+      }
     }),
   );
+
+  /* ---------------------------------------------------------- reglas */
+
+  /* El formulario ofrece un subconjunto deliberado: las cuatro acciones que se
+     repiten a mano en un buzón. La API admite listas de acciones más largas y
+     expresiones regulares; quien las necesite las manda por ahí. Un
+     constructor visual completo sería mucha interfaz para muy pocos casos. */
+  function ruleActionsFromForm() {
+    const actions = [];
+    if (dom.ruleLabel.value) {
+      actions.push({ action: "add_label", label_id: dom.ruleLabel.value });
+    }
+    if (dom.ruleRoute.value) {
+      actions.push({ action: "assign_department", department_id: dom.ruleRoute.value });
+    }
+    if (dom.ruleReply.value.trim()) {
+      actions.push({ action: "reply", body: dom.ruleReply.value.trim() });
+    }
+    if (dom.ruleStop.checked) {
+      actions.push({ action: "stop" });
+    }
+    return actions;
+  }
+
+  function describeRule(rule) {
+    const partes = [];
+    for (const accion of rule.actions || []) {
+      if (accion.action === "add_label") {
+        const etiqueta = state.labels.find((row) => row.id === accion.label_id);
+        partes.push(`${i18n.t("rules.label")}: ${etiqueta ? etiqueta.name : "—"}`);
+      } else if (accion.action === "assign_department") {
+        const department = state.departments.find((row) => row.id === accion.department_id);
+        partes.push(`${i18n.t("rules.route")}: ${department ? department.name : "—"}`);
+      } else if (accion.action === "reply") {
+        partes.push(`${i18n.t("rules.reply")}: ${accion.body}`);
+      } else if (accion.action === "stop") {
+        partes.push(i18n.t("rules.stop"));
+      }
+    }
+    return partes.join(" · ");
+  }
+
+  async function loadRules() {
+    const fill = (select, placeholder, rows) => {
+      const elegido = select.value;
+      select.replaceChildren();
+      const vacio = document.createElement("option");
+      vacio.value = "";
+      vacio.textContent = placeholder;
+      select.appendChild(vacio);
+      for (const row of rows) {
+        const option = document.createElement("option");
+        option.value = row.id;
+        option.textContent = row.name;
+        select.appendChild(option);
+      }
+      select.value = elegido;
+    };
+    fill(dom.ruleDepartment, i18n.t("knowledge.wholeCompany"), state.departments);
+    fill(dom.ruleRoute, i18n.t("rules.none"), state.departments);
+    fill(dom.ruleLabel, i18n.t("rules.none"), state.labels);
+
+    let reglas;
+    try {
+      reglas = await api("/api/rules");
+    } catch (error) {
+      showAdminError(error.message);
+      return;
+    }
+
+    dom.rulesTable.replaceChildren();
+    for (const rule of reglas) {
+      const row = document.createElement("tr");
+      const department = state.departments.find((d) => d.id === rule.department_id);
+      for (const value of [
+        String(rule.priority),
+        rule.name,
+        department ? department.name : i18n.t("knowledge.wholeCompany"),
+        describeRule(rule),
+        rule.is_active ? i18n.t("rules.active") : i18n.t("rules.inactive"),
+      ]) {
+        const cell = document.createElement("td");
+        cell.textContent = value;
+        row.appendChild(cell);
+      }
+
+      const actions = document.createElement("td");
+      const toggle = document.createElement("button");
+      toggle.type = "button";
+      toggle.className = "ghost-button";
+      toggle.textContent = rule.is_active ? i18n.t("rules.disable") : i18n.t("rules.enable");
+      toggle.addEventListener("click", async () => {
+        try {
+          await api(`/api/rules/${rule.id}`, {
+            method: "PATCH",
+            body: JSON.stringify({ is_active: !rule.is_active }),
+          });
+          await loadRules();
+        } catch (error) {
+          showAdminError(error.message);
+        }
+      });
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "ghost-button";
+      remove.textContent = i18n.t("common.delete");
+      remove.addEventListener("click", async () => {
+        if (!window.confirm(i18n.t("rules.confirmDelete", { name: rule.name }))) {
+          return;
+        }
+        try {
+          await api(`/api/rules/${rule.id}`, { method: "DELETE" });
+          await loadRules();
+        } catch (error) {
+          showAdminError(error.message);
+        }
+      });
+      actions.append(toggle, remove);
+      row.appendChild(actions);
+      dom.rulesTable.appendChild(row);
+    }
+  }
+
+  dom.ruleForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    showAdminError("");
+
+    const actions = ruleActionsFromForm();
+    if (actions.length === 0) {
+      showAdminError(i18n.t("rules.needAction"));
+      return;
+    }
+
+    const keywords = dom.ruleKeywords.value
+      .split(",")
+      .map((palabra) => palabra.trim())
+      .filter(Boolean);
+    const conditions = {};
+    if (keywords.length) {
+      conditions.keywords = keywords;
+    }
+    if (dom.ruleFirstOnly.checked) {
+      conditions.only_first_message = true;
+    }
+
+    try {
+      await api("/api/rules", {
+        method: "POST",
+        body: JSON.stringify({
+          name: dom.ruleName.value.trim(),
+          priority: Number(dom.rulePriority.value) || 100,
+          department_id: dom.ruleDepartment.value || null,
+          conditions,
+          actions,
+        }),
+      });
+      dom.ruleForm.reset();
+      dom.rulePriority.value = "100";
+      await loadRules();
+      setStatus(i18n.t("rules.created"));
+    } catch (error) {
+      showAdminError(error.message);
+    }
+  });
 
   /* ------------------------------------------ encuesta de satisfacción */
 

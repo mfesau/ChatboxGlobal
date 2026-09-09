@@ -319,6 +319,8 @@
                     data-i18n="admin.tab.hotel">Hotel</button>
             <button type="button" role="tab" data-admin-tab="appearance" aria-selected="false"
                     data-i18n="admin.tab.appearance">Apariencia</button>
+            <button type="button" role="tab" data-admin-tab="rules" aria-selected="false"
+                    data-i18n="admin.tab.rules">Reglas</button>
             <button type="button" role="tab" data-admin-tab="knowledge" aria-selected="false"
                     data-i18n="admin.tab.knowledge">Conocimiento</button>
             <button type="button" role="tab" data-admin-tab="audit" aria-selected="false"
@@ -714,6 +716,74 @@
                         data-i18n="brand.save">Guardar color</button>
                 <button type="button" class="ghost-button" id="brand-reset"
                         data-i18n="brand.reset">Volver al color de partida</button>
+              </div>
+            </section>
+          </div>
+
+          <div class="admin-tab-panel" id="admin-tab-rules" hidden>
+            <section class="panel">
+              <h3 data-i18n="rules.title">Reglas de automatización</h3>
+              <p class="console__muted" data-i18n="rules.hint">
+                Se comprueban sobre cada mensaje que entra, en orden de
+                prioridad, y se aplican las que cumplan todas sus condiciones.
+                Una regla sin condiciones se aplica siempre: es lo que permite
+                una respuesta de bienvenida.
+              </p>
+              <form id="rule-form">
+                <label class="panel__field">
+                  <span data-i18n="rules.name">Nombre</span>
+                  <input type="text" id="rule-name" maxlength="120" required />
+                </label>
+                <label class="panel__field">
+                  <span data-i18n="rules.priority">Prioridad</span>
+                  <input type="number" id="rule-priority" min="0" max="10000" value="100" />
+                </label>
+                <label class="panel__field">
+                  <span data-i18n="table.department">Departamento</span>
+                  <select id="rule-department">
+                    <option value="" data-i18n="knowledge.wholeCompany">Toda la empresa</option>
+                  </select>
+                </label>
+                <label class="panel__field">
+                  <span data-i18n="rules.keywords">Palabras clave (separadas por comas)</span>
+                  <input type="text" id="rule-keywords" data-i18n-placeholder="rules.keywordsPlaceholder" />
+                </label>
+                <label class="panel__field panel__field--checkbox">
+                  <input type="checkbox" id="rule-first-only" />
+                  <span data-i18n="rules.firstOnly">Solo en el primer mensaje</span>
+                </label>
+                <label class="panel__field">
+                  <span data-i18n="rules.reply">Responder (opcional)</span>
+                  <textarea id="rule-reply" rows="2" maxlength="2000"></textarea>
+                </label>
+                <label class="panel__field">
+                  <span data-i18n="rules.label">Poner etiqueta (opcional)</span>
+                  <select id="rule-label"><option value="" data-i18n="rules.none">Ninguna</option></select>
+                </label>
+                <label class="panel__field">
+                  <span data-i18n="rules.route">Derivar a (opcional)</span>
+                  <select id="rule-route"><option value="" data-i18n="rules.none">Ninguno</option></select>
+                </label>
+                <label class="panel__field panel__field--checkbox">
+                  <input type="checkbox" id="rule-stop" />
+                  <span data-i18n="rules.stop">No dejar responder al asistente</span>
+                </label>
+                <button type="submit" class="send-button" data-i18n="rules.add">Crear regla</button>
+              </form>
+              <div class="table-scroll">
+                <table class="data-table" id="rules-table">
+                  <thead>
+                    <tr>
+                      <th data-i18n="rules.priority">Prioridad</th>
+                      <th data-i18n="rules.name">Nombre</th>
+                      <th data-i18n="table.department">Departamento</th>
+                      <th data-i18n="rules.summary">Qué hace</th>
+                      <th data-i18n="table.status">Estado</th>
+                      <th data-i18n="table.actions">Acciones</th>
+                    </tr>
+                  </thead>
+                  <tbody></tbody>
+                </table>
               </div>
             </section>
           </div>

@@ -204,6 +204,8 @@ class OutboxDispatcher:
                         sla_breached=breached,
                     )
 
+                await self._release_scheduled()
+
                 now = asyncio.get_running_loop().time()
                 if now >= next_retention:
                     next_retention = now + RETENTION_INTERVAL_S
@@ -212,6 +214,26 @@ class OutboxDispatcher:
                 raise
             except Exception:
                 log.exception("janitor_error")
+
+    async def _release_scheduled(self) -> None:
+        """Pasa a la cola de salida los mensajes programados que ya vencieron.
+
+        El retraso máximo es el propio intervalo de esta tarea. Es de sobra
+        para lo que se programa aquí —un seguimiento, un aviso de ausencia—, y
+        evita un segundo temporizador solo para esto.
+        """
+        async with session_scope() as session:
+            vencidos = await repo.due_scheduled_messages(session)
+            for item in vencidos:
+                conversation = await repo.get_conversation(session, item.conversation_id)
+                if conversation is None:
+                    item.status = "cancelled"
+                    continue
+                await repo.enqueue_scheduled(session, item=item, conversation=conversation)
+
+        if vencidos:
+            log.info("scheduled_released", count=len(vencidos))
+            self.kick()
 
     async def _apply_retention(self) -> None:
         """Aplica los plazos de conservación configurados.

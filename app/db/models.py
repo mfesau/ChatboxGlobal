@@ -1156,3 +1156,79 @@ class CsatSurvey(Base):
     #: De 1 a 5. Nulo mientras no conteste.
     score: Mapped[int | None] = mapped_column(Integer)
     comment: Mapped[str | None] = mapped_column(Text)
+
+
+# --------------------------------------------------------------------------- #
+# Automatización
+# --------------------------------------------------------------------------- #
+class AutomationRule(Base, TimestampMixin):
+    """Regla que se aplica sola sobre los mensajes que entran.
+
+    Lo que había que repetir a mano en cada conversación —etiquetar las que
+    hablan de facturación, mandarlas a su rama, contestar lo de siempre— se
+    describe aquí una vez. Se evalúan delante del asistente, de modo que una
+    conversación derivada por regla llega a quien corresponde antes de que el
+    modelo gaste un turno contestando algo genérico.
+    """
+
+    __tablename__ = "automation_rules"
+    __table_args__ = (
+        Index("ix_automation_rules_tenant", "tenant_id", "is_active", "priority"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=new_id)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False
+    )
+    #: Nulo = rige en toda la empresa; con departamento, solo en esa rama.
+    department_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("departments.id", ondelete="CASCADE")
+    )
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    #: Menor primero. Con el mismo valor decide el orden de creación.
+    priority: Mapped[int] = mapped_column(
+        Integer, default=100, nullable=False, server_default=text("100")
+    )
+    #: Qué tiene que cumplirse; ver ``app/core/rules.py``.
+    conditions: Mapped[dict[str, Any]] = mapped_column(JSONBType, default=dict, nullable=False)
+    #: Qué se hace entonces, en orden.
+    actions: Mapped[list[Any]] = mapped_column(JSONBType, default=list, nullable=False)
+    created_by: Mapped[str | None] = mapped_column(String(160))
+
+    department: Mapped[Department | None] = relationship()
+
+
+class ScheduledMessage(Base):
+    """Saliente que espera su hora.
+
+    Lo despacha la misma tarea de mantenimiento que recupera envíos atascados
+    (``app/core/dispatcher.py``): al vencer, la carga se copia tal cual a la
+    cola de salida, que ya sabe entregar por cualquier canal.
+    """
+
+    __tablename__ = "scheduled_messages"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending', 'sent', 'cancelled')", name="ck_scheduled_status"
+        ),
+        Index("ix_scheduled_due", "status", "send_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=new_id)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False
+    )
+    conversation_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False
+    )
+    #: ``OutboundMessage`` serializado, el mismo formato de la cola de salida.
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONBType, nullable=False)
+    send_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    #: ``pending`` | ``sent`` | ``cancelled``
+    status: Mapped[str] = mapped_column(String(16), default="pending", nullable=False)
+    created_by: Mapped[str | None] = mapped_column(String(160))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now(), nullable=False
+    )
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

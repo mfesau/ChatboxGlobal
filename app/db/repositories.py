@@ -59,6 +59,7 @@ from app.db.models import (
     MessageEvent,
     OutboxItem,
     SavedView,
+    ScheduledMessage,
     Tenant,
 )
 
@@ -1249,6 +1250,88 @@ async def tenant_has_knowledge(session: AsyncSession, *, tenant_id: uuid.UUID) -
         .limit(1)
     )
     return found.scalar_one_or_none() is not None
+
+
+async def schedule_message(
+    session: AsyncSession,
+    *,
+    conversation: Conversation,
+    outbound: OutboundMessage,
+    send_at: datetime,
+    created_by: str | None = None,
+) -> ScheduledMessage:
+    """Deja un saliente esperando su hora."""
+    item = ScheduledMessage(
+        tenant_id=conversation.tenant_id,
+        conversation_id=conversation.id,
+        payload=outbound.to_dict(),
+        send_at=send_at,
+        created_by=created_by,
+    )
+    session.add(item)
+    await session.flush()
+    return item
+
+
+async def enqueue_scheduled(
+    session: AsyncSession, *, item: ScheduledMessage, conversation: Conversation
+) -> None:
+    """Pasa un programado vencido a la cola de salida, y lo marca enviado.
+
+    Recorre el mismo camino que cualquier otro saliente —queda su fila en
+    ``messages`` y su entrada en ``outbox``—, de modo que en el hilo se ve
+    igual que si lo hubiera escrito alguien.
+    """
+    outbound = OutboundMessage.from_dict(item.payload)
+    message = await record_outbound(session, conversation=conversation, outbound=outbound)
+    await enqueue_outbound(
+        session,
+        conversation=conversation,
+        message=message,
+        ref=ConversationRef.from_dict(conversation.conversation_ref),
+        outbound=outbound,
+    )
+    item.status = "sent"
+    item.sent_at = utcnow()
+
+
+async def due_scheduled_messages(
+    session: AsyncSession, *, limit: int = 50
+) -> list[ScheduledMessage]:
+    """Mensajes programados cuya hora ya pasó, de todos los inquilinos.
+
+    Sin acotar por inquilino igual que el resto del mantenimiento: la tarea que
+    los despacha no atiende la petición de nadie.
+    """
+    stmt = (
+        select(ScheduledMessage)
+        .where(
+            ScheduledMessage.status == "pending",
+            ScheduledMessage.send_at <= utcnow(),
+        )
+        .order_by(ScheduledMessage.send_at)
+        .limit(limit)
+    )
+    return list((await session.execute(stmt)).scalars())
+
+
+async def cancel_scheduled_messages(
+    session: AsyncSession, *, conversation_id: uuid.UUID
+) -> int:
+    """Cancela lo que quedara pendiente de una conversación.
+
+    Se llama cuando el cliente vuelve a escribir: un recordatorio de «¿sigue
+    ahí?» programado ayer no debe salir justo después de que conteste.
+    """
+    result = await session.execute(
+        update(ScheduledMessage)
+        .where(
+            ScheduledMessage.conversation_id == conversation_id,
+            ScheduledMessage.status == "pending",
+        )
+        .values(status="cancelled")
+    )
+    return result.rowcount or 0
 
 
 async def list_audit(
