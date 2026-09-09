@@ -76,6 +76,7 @@ class TelegramAdapter(ChannelAdapter):
         headers: Mapping[str, str],
         body: bytes,
         credentials: Sequence[Mapping[str, str]] = (),
+        url: str | None = None,
     ) -> None:
         """Comprueba el secreto declarado en ``setWebhook``.
 

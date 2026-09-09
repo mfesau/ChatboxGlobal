@@ -62,18 +62,20 @@ class Orchestrator:
         raw_body: bytes = b"",
         verify: bool = True,
         credentials: Sequence[Mapping[str, str]] = (),
+        url: str | None = None,
     ) -> dict[str, Any]:
         """Recibe la carga de un canal y procesa cuantos mensajes contenga.
 
         ``credentials`` son las credenciales propias de las cuentas dadas de
         alta desde la consola; las resuelve quien atiende el webhook, que es
         donde hay acceso a la base, y viajan hasta el adaptador para comprobar
-        la firma (ver ``ChannelAdapter.verify_request``).
+        la firma (ver ``ChannelAdapter.verify_request``). ``url`` es la
+        dirección completa de la petición, que Twilio necesita para lo mismo.
         """
         adapter = self.registry.get(channel)
         if verify:
             await adapter.verify_request(
-                headers=headers, body=raw_body, credentials=credentials
+                headers=headers, body=raw_body, credentials=credentials, url=url
             )
 
         inbound_messages = await adapter.parse(payload=payload, headers=headers)

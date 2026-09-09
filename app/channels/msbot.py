@@ -82,6 +82,7 @@ class MicrosoftBotAdapter(ChannelAdapter):
         headers: Mapping[str, str],
         body: bytes,
         credentials: Sequence[Mapping[str, str]] = (),
+        url: str | None = None,
     ) -> None:
         # `credentials` no se usa: Teams autentica con un JWT firmado por
         # Microsoft, no con un secreto compartido por cuenta.

@@ -10,6 +10,7 @@ from app.channels import (  # noqa: F401  (registro por efecto lateral)
     facebook,
     msbot,
     telegram,
+    twilio,
     web,
     whatsapp,
 )

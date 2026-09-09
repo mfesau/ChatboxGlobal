@@ -93,6 +93,7 @@ class FacebookAdapter(ChannelAdapter):
         headers: Mapping[str, str],
         body: bytes,
         credentials: Sequence[Mapping[str, str]] = (),
+        url: str | None = None,
     ) -> None:
         secretos = [c["app_secret"] for c in credentials if c.get("app_secret")]
         if (global_secret := self.settings.facebook_app_secret) is not None:
