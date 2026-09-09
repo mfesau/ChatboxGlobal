@@ -1,11 +1,12 @@
 # Entorno local completo: PostgreSQL más el orquestador.
 services:
   postgres:
-    # pgvector y no la imagen oficial a secas: la base de conocimiento del
-    # asistente guarda vectores de significado (ver 0017_knowledge_base.sql).
-    # Misma versión mayor de PostgreSQL, así que el ./pgdata existente sirve
-    # tal cual; solo hay que reconstruir el contenedor.
-    image: pgvector/pgvector:pg17
+    # postgres:17-alpine con la extensión `vector` compilada dentro: la base de
+    # conocimiento del asistente guarda vectores de significado (ver
+    # 0017_knowledge_base.sql). No se usa la imagen pgvector/pgvector porque es
+    # Debian, y cambiar de musl a glibc bajo el mismo ./pgdata desordena los
+    # índices de texto. Ver docker/postgres/Dockerfile.
+    build: ./docker/postgres
     container_name: chatbox-postgres
     environment:
       POSTGRES_USER: chatbox

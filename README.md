@@ -1125,7 +1125,7 @@ Los ficheros de `db/migrations/`, en orden:
 | `0014_department_logo.sql` | Logo por departamento |
 | `0015_bootstrap_password_change.sql` | Cambio obligatorio de la contraseña de arranque |
 | `0016_login_throttle.sql` | Freno a la prueba de contraseñas por fuerza bruta |
-| `0017_knowledge_base.sql` | Base de conocimiento del asistente (requiere `pgvector`) |
+| `0017_knowledge_base.sql` | Base de conocimiento del asistente (requiere la extensión `vector`) |
 | `0018_csat.sql` | Encuesta de satisfacción |
 | `0019_automation_rules.sql` | Reglas de automatización y mensajes programados |
 
@@ -1213,8 +1213,15 @@ en lugar de dejarle rellenar el hueco.
 Un documento puede ser de toda la empresa o de un departamento: las tarifas del
 hotel no ayudan en soporte técnico y no aparecen allí.
 
-Requiere la extensión `pgvector`, que trae la imagen `pgvector/pgvector:pg17`
-del `docker-compose.yml`, y `GOOGLE_API_KEY` para calcular los vectores.
+Requiere la extensión `pgvector` y `GOOGLE_API_KEY` para calcular los vectores.
+La extensión la trae la imagen que Compose construye desde
+[docker/postgres](docker/postgres/Dockerfile): es `postgres:17-alpine` con
+`vector` compilada dentro. No se usa la imagen `pgvector/pgvector:pg17`, que es
+Debian, porque PostgreSQL delega la ordenación de texto en la biblioteca C del
+sistema: pasar de musl a glibc sobre el mismo `./pgdata` deja los índices de
+texto en un orden que ya no corresponde —las búsquedas dejan de encontrar filas
+que están ahí— y arreglarlo exigiría un `REINDEX` completo o un volcado y una
+restauración. La primera construcción tarda un minuto; después queda en caché.
 
 ---
 
