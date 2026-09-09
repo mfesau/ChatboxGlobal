@@ -9,6 +9,12 @@
   "use strict";
 
   const WIDTHS = ["comfortable", "wide", "full"];
+  //: Cada cuánto se manda un latido. Un WebSocket en silencio lo corta el
+  //: proxy inverso —nginx lo hace al minuto si no se le dice otra cosa—, y
+  //: cada corte trae una reconexión. El servidor ya contesta a `ping` con
+  //: `pong` (ver app/api/ws.py); solo faltaba que alguien preguntara.
+  const HEARTBEAT_MS = 25_000;
+
   const MAX_RECONNECT_DELAY_MS = 15000;
   const CHAR_LIMIT = 4000;
 
@@ -76,6 +82,7 @@
   const state = {
     socket: null,
     reconnectAttempt: 0,
+    heartbeat: null,
     streamingBubble: null,
     typingTimer: null,
     clientName: null,
@@ -614,6 +621,7 @@
       state.reconnectAttempt = 0;
       setStatus("online", i18n.t("chat.online"));
       updateSendButton();
+      startHeartbeat(socket);
     });
 
     socket.addEventListener("message", (event) => {
@@ -630,6 +638,7 @@
     });
 
     socket.addEventListener("close", (event) => {
+      stopHeartbeat();
       if (state.socket !== socket) return;
       if (event.code === 4401) {
         showGate();
@@ -641,6 +650,24 @@
     });
 
     socket.addEventListener("error", () => socket.close());
+  }
+
+  function startHeartbeat(socket) {
+    stopHeartbeat();
+    state.heartbeat = window.setInterval(() => {
+      if (socket.readyState !== WebSocket.OPEN) {
+        stopHeartbeat();
+        return;
+      }
+      socket.send(JSON.stringify({ type: "ping" }));
+    }, HEARTBEAT_MS);
+  }
+
+  function stopHeartbeat() {
+    if (state.heartbeat) {
+      window.clearInterval(state.heartbeat);
+      state.heartbeat = null;
+    }
   }
 
   function scheduleReconnect() {
@@ -656,6 +683,13 @@
   function handleEvent(payload) {
     switch (payload.type) {
       case "ready":
+        // El hilo se vacía antes de volver a pintarlo. `ready` llega en cada
+        // conexión, no solo en la primera, y una reconexión es de lo más
+        // normal: basta un rato en silencio para que el proxy corte el
+        // WebSocket. Pintando encima de lo que ya había, el historial entero
+        // se duplicaba solo, sin que nadie tocara nada.
+        dom.thread.textContent = "";
+        state.streamingBubble = null;
         (payload.history || []).forEach((row) => {
           if (row.text || (row.attachments || []).length > 0) {
             addBubble(
