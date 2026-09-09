@@ -176,6 +176,12 @@ class Contact(Base, TimestampMixin):
     #: Derivación ``scrypt$n$r$p$salt$hash`` del chatbox público. Nulo para los
     #: contactos que solo existen por WhatsApp o Teams, sin cuenta propia.
     password_hash: Mapped[str | None] = mapped_column(String(255))
+    #: Fallos de contraseña seguidos y espera impuesta al superar el tope.
+    #: Un acceso correcto los pone a cero (ver ``app/db/repositories.py``).
+    failed_login_count: Mapped[int] = mapped_column(
+        Integer, default=0, nullable=False, server_default=text("0")
+    )
+    locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     identities: Mapped[list[ContactIdentity]] = relationship(
         back_populates="contact", cascade="all, delete-orphan"
@@ -390,6 +396,12 @@ class Agent(Base, TimestampMixin):
     must_change_password: Mapped[bool] = mapped_column(
         Boolean, default=False, nullable=False, server_default=text("false")
     )
+    #: Fallos de contraseña seguidos y espera impuesta al superar el tope.
+    #: Un acceso correcto los pone a cero (ver ``app/db/repositories.py``).
+    failed_login_count: Mapped[int] = mapped_column(
+        Integer, default=0, nullable=False, server_default=text("0")
+    )
+    locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     #: ``available`` | ``away`` | ``offline``; orienta el reparto de la cola.
     presence: Mapped[str] = mapped_column(String(16), default="offline", nullable=False)
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

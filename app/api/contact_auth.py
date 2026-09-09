@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from datetime import timedelta
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request, Response, UploadFile, status
@@ -230,12 +231,29 @@ async def login(
     # revela qué correos están registrados.
     valid = await asyncio.to_thread(verify_password, body.password, stored)
 
+    if contact is not None and repo.login_is_locked(contact):
+        # Mismo criterio que en la consola (ver ``app/api/auth.py``): la
+        # respuesta no distingue una cuenta en espera de unas credenciales
+        # erróneas, para no delatar qué correos están registrados.
+        log.warning("contact_login_rejected_locked", email=body.email, tenant=tenant.slug)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Credenciales no válidas"
+        )
+
     if contact is None or contact.is_blocked or not valid:
+        if contact is not None and await repo.note_failed_login(
+            session,
+            contact,
+            max_attempts=settings.login_max_attempts,
+            lockout=timedelta(minutes=settings.login_lockout_minutes),
+        ):
+            log.warning("contact_login_locked", email=body.email, tenant=tenant.slug)
         log.warning("contact_login_rejected", email=body.email, tenant=tenant.slug)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Credenciales no válidas"
         )
 
+    repo.clear_failed_logins(contact)
     await issue_contact_session(
         contact=contact, request=request, response=response, session=session, settings=settings
     )

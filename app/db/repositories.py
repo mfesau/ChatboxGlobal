@@ -1351,6 +1351,50 @@ async def ensure_default_admin(
     return secret
 
 
+# --------------------------------------------------------------------------- #
+# Freno a la prueba de contraseñas
+# --------------------------------------------------------------------------- #
+def login_is_locked(account: Agent | Contact) -> bool:
+    """Indica si la cuenta está en espera por fallos seguidos."""
+    return account.locked_until is not None and as_utc(account.locked_until) > utcnow()
+
+
+def register_failed_login(
+    account: Agent | Contact, *, max_attempts: int, lockout: timedelta
+) -> bool:
+    """Anota un fallo. Devuelve si ese fallo ha dejado la cuenta en espera.
+
+    No emite consulta alguna: modifica la fila ya cargada y la sesión la
+    escribe al confirmar, dentro de la misma transacción del login.
+    """
+    account.failed_login_count = (account.failed_login_count or 0) + 1
+    if account.failed_login_count >= max_attempts:
+        account.locked_until = utcnow() + lockout
+        account.failed_login_count = 0
+        return True
+    return False
+
+
+def clear_failed_logins(account: Agent | Contact) -> None:
+    """Un acceso correcto borra el rastro de los intentos anteriores."""
+    account.failed_login_count = 0
+    account.locked_until = None
+
+
+async def note_failed_login(
+    session: AsyncSession, account: Agent | Contact, *, max_attempts: int, lockout: timedelta
+) -> bool:
+    """Anota el fallo y lo confirma en el acto. Devuelve si dejó la cuenta en espera.
+
+    La confirmación explícita es imprescindible: la dependencia de sesión
+    revierte la transacción en cuanto el endpoint lanza la excepción del 401, y
+    sin esto se perdería justo el apunte que hace subir el contador.
+    """
+    locked = register_failed_login(account, max_attempts=max_attempts, lockout=lockout)
+    await session.commit()
+    return locked
+
+
 async def touch_agent_presence(
     session: AsyncSession, agent_id: uuid.UUID, presence: str
 ) -> None:

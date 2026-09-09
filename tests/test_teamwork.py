@@ -2268,6 +2268,110 @@ def _sso_settings(**overrides):
 
 
 # --------------------------------------------------------------------------- #
+# Cabeceras de seguridad y CORS
+# --------------------------------------------------------------------------- #
+async def test_every_response_carries_the_security_headers(anonymous):
+    """También las de error: el middleware envuelve la respuesta, no el endpoint."""
+    for response in (
+        await anonymous.get("/health"),
+        await anonymous.get("/api/conversations"),  # 401
+    ):
+        headers = response.headers
+        assert "script-src 'self'" in headers["content-security-policy"]
+        assert "frame-ancestors 'none'" in headers["content-security-policy"]
+        assert headers["x-content-type-options"] == "nosniff"
+        assert headers["x-frame-options"] == "DENY"
+        assert headers["referrer-policy"] == "same-origin"
+
+
+async def test_hsts_only_travels_when_the_cookie_is_secure(anonymous):
+    """Anunciarlo desde una instalación por HTTP dejaría el navegador fuera."""
+    response = await anonymous.get("/health")
+    esperado = get_settings().session_cookie_secure
+    assert ("strict-transport-security" in response.headers) is esperado
+
+
+def test_the_cors_wildcard_is_not_taken_as_an_origin():
+    """`*` con credenciales dejaría llamar a la API desde cualquier sitio web."""
+    con_comodin = Settings(_env_file=None, cors_allow_origins="*")
+    assert con_comodin.cors_origins == []
+    assert con_comodin.cors_wildcard_requested is True
+
+    concretos = Settings(_env_file=None, cors_allow_origins="https://a.local, https://b.local")
+    assert concretos.cors_origins == ["https://a.local", "https://b.local"]
+    assert concretos.cors_wildcard_requested is False
+
+
+# --------------------------------------------------------------------------- #
+# Freno a la prueba de contraseñas
+# --------------------------------------------------------------------------- #
+async def test_repeated_failures_leave_the_account_waiting(anonymous, team, monkeypatch):
+    """Pasado el tope, la contraseña correcta tampoco entra durante un rato."""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "login_max_attempts", 3)
+    monkeypatch.setattr(settings, "login_lockout_minutes", 15)
+
+    email = team["ana"]["email"]
+    for _ in range(3):
+        fallo = await anonymous.post(
+            "/api/auth/login", json={"email": email, "password": "no-es-esta"}
+        )
+        assert fallo.status_code == 401
+
+    # La buena tampoco vale ahora, y la respuesta es indistinguible de la
+    # anterior: un código propio delataría qué correos existen.
+    bloqueado = await anonymous.post(
+        "/api/auth/login", json={"email": email, "password": PASSWORD}
+    )
+    assert bloqueado.status_code == 401
+    assert bloqueado.json()["detail"] == "Credenciales no válidas"
+
+    async with session_scope() as session:
+        tenant = await repo.get_or_create_tenant(session, "default")
+        ana = await repo.find_agent_by_email(session, tenant_id=tenant.id, email=email)
+        assert repo.login_is_locked(ana) is True
+        # Cumplida la espera, se vuelve a entrar sin intervención de nadie.
+        ana.locked_until = datetime.now(UTC) - timedelta(seconds=1)
+
+    assert (
+        await anonymous.post("/api/auth/login", json={"email": email, "password": PASSWORD})
+    ).status_code == 200
+
+
+async def test_a_correct_password_clears_the_failure_count(anonymous, team, monkeypatch):
+    monkeypatch.setattr(get_settings(), "login_max_attempts", 3)
+    email = team["luis"]["email"]
+
+    for _ in range(2):
+        await anonymous.post("/api/auth/login", json={"email": email, "password": "mal"})
+    assert (
+        await anonymous.post("/api/auth/login", json={"email": email, "password": PASSWORD})
+    ).status_code == 200
+
+    async with session_scope() as session:
+        tenant = await repo.get_or_create_tenant(session, "default")
+        luis = await repo.find_agent_by_email(session, tenant_id=tenant.id, email=email)
+        assert luis.failed_login_count == 0
+        assert luis.locked_until is None
+
+
+async def test_the_unified_login_also_counts_the_failures(anonymous, team, monkeypatch):
+    """«/» es la entrada real del equipo: sin esto, el freno se rodeaba por ahí."""
+    monkeypatch.setattr(get_settings(), "login_max_attempts", 3)
+    email = team["marta"]["email"]
+
+    for _ in range(3):
+        fallo = await anonymous.post(
+            "/api/session/login", json={"email": email, "password": "mal"}
+        )
+        assert fallo.status_code == 401
+
+    assert (
+        await anonymous.post("/api/session/login", json={"email": email, "password": PASSWORD})
+    ).status_code == 401
+
+
+# --------------------------------------------------------------------------- #
 # Cuenta de arranque
 # --------------------------------------------------------------------------- #
 async def test_the_bootstrap_admin_gets_a_generated_password_that_must_change():

@@ -178,7 +178,18 @@ class Settings(BaseSettings):
 
     # ------------------------------------------------------------------ consola
     admin_api_key: SecretStr | None = None
-    cors_allow_origins: str = "*"
+    #: Orígenes permitidos para peticiones entre sitios, separados por comas.
+    #: Vacío —lo normal— significa que no se instala CORS en absoluto: la
+    #: consola y el chatbox los sirve esta misma aplicación, así que no hay
+    #: petición entre orígenes que permitir. El comodín ``*`` se trata como
+    #: vacío y se avisa por el log: junto con las credenciales de sesión
+    #: dejaría que cualquier sitio llamase a la API con la cookie de quien lo
+    #: visita (ver ``app/main.py``).
+    cors_allow_origins: str = ""
+    #: Fallos de contraseña seguidos que dejan una cuenta en espera, y cuántos
+    #: minutos dura esa espera. Vale para los agentes y para los clientes.
+    login_max_attempts: int = 8
+    login_lockout_minutes: int = 15
     #: Marca la cookie de sesión como ``Secure``. En una red local sin TLS debe
     #: quedar en falso, pues el navegador descartaría la cookie sobre HTTP.
     session_cookie_secure: bool = False
@@ -231,7 +242,16 @@ class Settings(BaseSettings):
 
     @property
     def cors_origins(self) -> list[str]:
-        return [origin.strip() for origin in self.cors_allow_origins.split(",") if origin.strip()]
+        """Orígenes concretos. El comodín no cuenta: ver ``cors_allow_origins``."""
+        return [
+            origin.strip()
+            for origin in self.cors_allow_origins.split(",")
+            if origin.strip() and origin.strip() != "*"
+        ]
+
+    @property
+    def cors_wildcard_requested(self) -> bool:
+        return "*" in {origin.strip() for origin in self.cors_allow_origins.split(",")}
 
     @property
     def is_sqlite(self) -> bool:

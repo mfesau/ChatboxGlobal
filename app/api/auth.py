@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import secrets
+from datetime import timedelta
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request, Response, status
@@ -78,12 +79,30 @@ async def login(
     # revela qué direcciones están registradas.
     valid = await asyncio.to_thread(verify_password, body.password, stored)
 
+    if agent is not None and repo.login_is_locked(agent):
+        # Se responde lo mismo que a unas credenciales erróneas, no un 429.
+        # Un código propio para las cuentas en espera diría, a quien prueba
+        # contraseñas, cuáles de las direcciones que va probando existen —
+        # justo lo que el resto de este endpoint se esfuerza en no revelar.
+        log.warning("login_rejected_locked", email=body.email, tenant=tenant.slug)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Credenciales no válidas"
+        )
+
     if agent is None or not agent.is_active or not valid:
+        if agent is not None and await repo.note_failed_login(
+            session,
+            agent,
+            max_attempts=settings.login_max_attempts,
+            lockout=timedelta(minutes=settings.login_lockout_minutes),
+        ):
+            log.warning("login_locked", email=body.email, tenant=tenant.slug)
         log.warning("login_rejected", email=body.email, tenant=tenant.slug)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Credenciales no válidas"
         )
 
+    repo.clear_failed_logins(agent)
     await issue_session(
         agent=agent, tenant=tenant, request=request, response=response,
         session=session, settings=settings,

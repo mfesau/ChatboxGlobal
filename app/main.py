@@ -32,6 +32,7 @@ from app.api import (
     webhooks,
     ws,
 )
+from app.api.security_headers import install_security_headers
 from app.channels.base import ChannelRegistry
 from app.config import get_settings
 from app.core.branding import brand_css, read_accent
@@ -157,13 +158,22 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
-    application.add_middleware(
-        CORSMiddleware,
-        allow_origins=settings.cors_origins,
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+    install_security_headers(application, hsts=settings.session_cookie_secure)
+
+    # CORS solo cuando se pide de verdad. La consola y el chatbox los sirve
+    # esta misma aplicación, así que lo habitual es no necesitarlo. El comodín
+    # se rechaza: junto con `allow_credentials` haría que cualquier sitio web
+    # pudiera llamar a esta API con la cookie de sesión de quien lo visita.
+    if settings.cors_wildcard_requested:
+        log.warning("cors_wildcard_ignored", configured=settings.cors_allow_origins)
+    if settings.cors_origins:
+        application.add_middleware(
+            CORSMiddleware,
+            allow_origins=settings.cors_origins,
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
 
     application.include_router(webhooks.router)
     application.include_router(ws.router)
