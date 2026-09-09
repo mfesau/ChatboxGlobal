@@ -146,9 +146,8 @@
     newAccountExternalId: document.getElementById("new-account-external-id"),
     newAccountName: document.getElementById("new-account-name"),
     newAccountDepartment: document.getElementById("new-account-department"),
-    newAccountToken: document.getElementById("new-account-token"),
-    newAccountVerifyToken: document.getElementById("new-account-verify-token"),
-    newAccountAppSecret: document.getElementById("new-account-app-secret"),
+    newAccountCredentials: document.getElementById("new-account-credentials"),
+    newAccountHint: document.getElementById("new-account-hint"),
     channelAccountsTable: document.querySelector("#channel-accounts-table tbody"),
     contactsButton: document.getElementById("contacts-button"),
     contactsPanel: document.getElementById("contacts-panel"),
@@ -249,9 +248,15 @@
     contactProfileId: null,
   };
 
+  // Facebook faltaba aquí desde que existe el adaptador: sus hilos salían en
+  // la lista con el nombre interno del canal.
   const CHANNEL_LABELS = {
     whatsapp: "WhatsApp",
+    facebook: "Facebook",
     msbot: "Microsoft",
+    telegram: "Telegram",
+    email: "Correo",
+    sms: "SMS",
     web: "Web",
     internal: "Interno",
   };
@@ -2458,7 +2463,52 @@
 
   /* ------------------------------------------------------------ cuentas de canal */
 
-  const CHANNEL_ACCOUNT_LABELS = { whatsapp: "WhatsApp", facebook: "Facebook", msbot: "Teams" };
+  const CHANNEL_ACCOUNT_LABELS = {
+    whatsapp: "WhatsApp",
+    facebook: "Facebook",
+    msbot: "Teams",
+    telegram: "Telegram",
+    email: "Correo",
+    sms: "SMS (Twilio)",
+  };
+
+  /* Credenciales que pide cada canal. Es el reflejo de CHANNEL_CREDENTIAL_FIELDS
+     en app/api/console.py: si allí se añade un canal, aquí va su entrada y el
+     formulario se arma solo. `secret` decide si el campo se escribe a ciegas. */
+  const CHANNEL_CREDENTIAL_FIELDS = {
+    whatsapp: [
+      { name: "access_token", secret: true },
+      { name: "verify_token", secret: true },
+      { name: "app_secret", secret: true },
+    ],
+    facebook: [
+      { name: "access_token", secret: true },
+      { name: "verify_token", secret: true },
+      { name: "app_secret", secret: true },
+    ],
+    msbot: [],
+    telegram: [
+      { name: "access_token", secret: true },
+      { name: "verify_token", secret: true },
+    ],
+    sms: [
+      { name: "account_sid", secret: false },
+      { name: "auth_token", secret: true },
+      { name: "from_number", secret: false },
+    ],
+    email: [
+      { name: "imap_host", secret: false },
+      { name: "imap_port", secret: false },
+      { name: "imap_username", secret: false },
+      { name: "imap_password", secret: true },
+      { name: "imap_folder", secret: false },
+      { name: "smtp_host", secret: false },
+      { name: "smtp_port", secret: false },
+      { name: "smtp_username", secret: false },
+      { name: "smtp_password", secret: true },
+      { name: "from_email", secret: false },
+    ],
+  };
 
   function buildChannelAccountRow(account) {
     const row = document.createElement("tr");
@@ -2498,14 +2548,30 @@
     departmentCell.appendChild(departmentSelect);
     row.appendChild(departmentCell);
 
+    // Antes esta columna era un único campo que siempre mandaba `access_token`.
+    // Con canales de diez credenciales eso no vale: se elige cuál se cambia.
     const tokenCell = document.createElement("td");
+    const fields = CHANNEL_CREDENTIAL_FIELDS[account.channel] || [];
+    const fieldSelect = document.createElement("select");
+    fields.forEach((field) => {
+      const option = document.createElement("option");
+      option.value = field.name;
+      option.textContent = i18n.t(`accounts.field.${field.name}`);
+      fieldSelect.appendChild(option);
+    });
+    fieldSelect.setAttribute("aria-label", `Credencial de ${account.external_id}`);
     const tokenInput = document.createElement("input");
     tokenInput.type = "password";
     tokenInput.maxLength = 4096;
     tokenInput.autocomplete = "off";
-    tokenInput.placeholder = account.has_own_credentials ? "Reemplazar" : "Sin token propio";
-    tokenInput.setAttribute("aria-label", `Nuevo token de ${account.external_id}`);
-    tokenCell.appendChild(tokenInput);
+    tokenInput.placeholder = account.has_own_credentials ? "Reemplazar" : "Sin valor propio";
+    tokenInput.setAttribute("aria-label", `Nuevo valor de ${account.external_id}`);
+    if (fields.length === 0) {
+      // Teams no guarda credenciales; el hueco se deja explicado, no vacío.
+      tokenCell.textContent = i18n.t("accounts.noCredentials");
+    } else {
+      tokenCell.append(fieldSelect, tokenInput);
+    }
     row.appendChild(tokenCell);
 
     const statusCell = document.createElement("td");
@@ -2524,8 +2590,8 @@
         display_name: displayName || null,
         department_id: departmentSelect.value || null,
       };
-      if (tokenInput.value) {
-        body.access_token = tokenInput.value;
+      if (tokenInput.value && fieldSelect.value) {
+        body.credentials = { [fieldSelect.value]: tokenInput.value };
       }
       saveButton.disabled = true;
       try {
@@ -2618,14 +2684,36 @@
     accounts.forEach((account) => dom.channelAccountsTable.appendChild(buildChannelAccountRow(account)));
   }
 
-  /* Teams no usa ni token de verificación ni clave de app: su autenticación es
-     un JWT firmado por Microsoft. Enseñar los campos invitaría a rellenarlos
-     con algo, y ese algo no serviría para nada. */
+  /* Cada canal pide lo suyo y solo lo suyo. Teams no pide nada: su
+     autenticación es un JWT firmado por Microsoft, y enseñar campos invitaría a
+     rellenarlos con algo que no serviría para nada. */
   function reflectAccountChannel() {
-    const esMeta = dom.newAccountChannel.value !== "msbot";
-    document.querySelectorAll("[data-meta-only]").forEach((campo) => {
-      campo.hidden = !esMeta;
-    });
+    const channel = dom.newAccountChannel.value;
+    dom.newAccountCredentials.replaceChildren();
+    for (const field of CHANNEL_CREDENTIAL_FIELDS[channel] || []) {
+      const label = document.createElement("label");
+      label.className = "panel__field";
+      const caption = document.createElement("span");
+      caption.textContent = i18n.t(`accounts.field.${field.name}`);
+      const input = document.createElement("input");
+      input.type = field.secret ? "password" : "text";
+      input.autocomplete = field.secret ? "new-password" : "off";
+      input.maxLength = 4096;
+      input.dataset.credential = field.name;
+      label.append(caption, input);
+      dom.newAccountCredentials.appendChild(label);
+    }
+    dom.newAccountHint.textContent = i18n.t(`accounts.idHint.${channel}`);
+  }
+
+  function collectAccountCredentials() {
+    const credentials = {};
+    for (const input of dom.newAccountCredentials.querySelectorAll("[data-credential]")) {
+      if (input.value.trim()) {
+        credentials[input.dataset.credential] = input.value.trim();
+      }
+    }
+    return credentials;
   }
 
   dom.newAccountChannel.addEventListener("change", reflectAccountChannel);
@@ -2642,9 +2730,7 @@
           external_id: dom.newAccountExternalId.value.trim(),
           display_name: dom.newAccountName.value.trim() || null,
           department_id: dom.newAccountDepartment.value || null,
-          access_token: dom.newAccountToken.value || null,
-          verify_token: dom.newAccountVerifyToken.value || null,
-          app_secret: dom.newAccountAppSecret.value || null,
+          credentials: collectAccountCredentials(),
         }),
       });
       dom.createChannelAccountForm.reset();

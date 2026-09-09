@@ -3464,27 +3464,89 @@ class ChannelAccountOut(BaseModel):
     has_own_credentials: bool
 
 
-#: Las tres credenciales que una cuenta de Meta puede tener propias. Se guardan
-#: juntas y cifradas en ``ChannelAccount.credentials_ciphertext``; cualquiera
+#: Credenciales propias que admite cada canal. Se guardan juntas y cifradas en
+#: ``ChannelAccount.credentials_ciphertext``. En los canales de Meta, cualquiera
 #: que falte se resuelve con el valor global de ``.env``, de modo que una
-#: instalación con un solo número sigue funcionando sin tocar la consola.
-CHANNEL_CREDENTIAL_FIELDS = ("access_token", "verify_token", "app_secret")
+#: instalación con un solo número sigue funcionando sin tocar la consola; los
+#: demás canales no tienen valor global y lo exigen aquí.
+#:
+#: Teams aparece con la tupla vacía a propósito: su autenticación va contra
+#: Entra ID con los datos de ``.env``, y una cuenta de ese canal no guarda
+#: secreto alguno.
+CHANNEL_CREDENTIAL_FIELDS: dict[str, tuple[str, ...]] = {
+    "whatsapp": ("access_token", "verify_token", "app_secret"),
+    "facebook": ("access_token", "verify_token", "app_secret"),
+    "msbot": (),
+    # Telegram: el token del bot que da BotFather y el secreto que se declara
+    # en `setWebhook`, con el que Telegram firma cada aviso.
+    "telegram": ("access_token", "verify_token"),
+    # Twilio: la cuenta, su testigo y el número desde el que se escribe.
+    "sms": ("account_sid", "auth_token", "from_number"),
+    # Correo: entrada por IMAP y salida por SMTP, cada una con lo suyo.
+    "email": (
+        "imap_host",
+        "imap_port",
+        "imap_username",
+        "imap_password",
+        "imap_folder",
+        "smtp_host",
+        "smtp_port",
+        "smtp_username",
+        "smtp_password",
+        "from_email",
+    ),
+}
+
+#: Canales que se dan de alta desde la consola. El chatbox web y los mensajes
+#: internos no son cuentas que nadie configure.
+MANAGED_CHANNELS = tuple(CHANNEL_CREDENTIAL_FIELDS)
+
+
+def _credential_payload(channel: str, body: ChannelAccountIn | ChannelAccountUpdateIn) -> dict:
+    """Reúne las credenciales enviadas y comprueba que el canal las admite.
+
+    Los tres campos con nombre propio —los de Meta— conviven con el diccionario
+    ``credentials``, que es por donde llegan las de los canales que necesitan
+    más de tres. Se aceptan las dos formas para no romper a quien ya llamaba a
+    esta API con los campos sueltos.
+    """
+    allowed = CHANNEL_CREDENTIAL_FIELDS.get(channel, ())
+    sent: dict[str, str] = {}
+    for field in ("access_token", "verify_token", "app_secret"):
+        value = getattr(body, field, None)
+        if value is not None:
+            sent[field] = value
+    sent.update(body.credentials or {})
+
+    unknown = sorted(set(sent) - set(allowed))
+    if unknown:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"El canal {channel} no admite: {', '.join(unknown)}",
+        )
+    return sent
 
 
 class ChannelAccountIn(BaseModel):
-    channel: Literal["whatsapp", "facebook", "msbot"]
+    channel: Literal["whatsapp", "facebook", "msbot", "telegram", "email", "sms"]
     external_id: str = Field(min_length=1, max_length=128)
     display_name: str | None = Field(default=None, max_length=160)
     department_id: uuid.UUID | None = None
-    #: Obligatorio en Facebook (cada página tiene el suyo); opcional en
-    #: WhatsApp (si falta, se usa el token global de .env); ignorado en Teams.
+    #: Obligatorio en Facebook (cada página tiene el suyo) y en Telegram (es el
+    #: token del bot); opcional en WhatsApp (si falta, se usa el global de
+    #: .env); ignorado en Teams.
     access_token: str | None = Field(default=None, max_length=4096)
-    #: El que se escribe en el panel de Meta al dar de alta el webhook. Propio
-    #: por cuenta cuando cada número vive en una aplicación de Meta distinta.
+    #: El que se escribe en el panel de Meta, o el `secret_token` de Telegram,
+    #: al dar de alta el webhook. Propio por cuenta cuando cada número vive en
+    #: una aplicación distinta.
     verify_token: str | None = Field(default=None, max_length=512)
     #: Clave con la que Meta firma el cuerpo del webhook. Ídem: una por
     #: aplicación de Meta, no una por instalación.
     app_secret: str | None = Field(default=None, max_length=512)
+    #: Las demás credenciales del canal, por nombre. Correo y Twilio necesitan
+    #: más de tres valores y no tendría sentido darles a cada uno un campo
+    #: propio en este modelo.
+    credentials: dict[str, str] = Field(default_factory=dict)
 
 
 class ChannelAccountUpdateIn(BaseModel):
@@ -3493,11 +3555,12 @@ class ChannelAccountUpdateIn(BaseModel):
     department_id: uuid.UUID | None = None
     is_active: bool | None = None
     #: Cadena vacía = quitar ese valor propio y volver al global de ``.env``;
-    #: ausente = no tocarlo. Los tres se editan por separado: cambiar el token
-    #: de acceso no debe obligar a volver a escribir el secreto de la app.
+    #: ausente = no tocarlo. Se editan por separado: cambiar el token de acceso
+    #: no debe obligar a volver a escribir el secreto de la app.
     access_token: str | None = Field(default=None, max_length=4096)
     verify_token: str | None = Field(default=None, max_length=512)
     app_secret: str | None = Field(default=None, max_length=512)
+    credentials: dict[str, str] = Field(default_factory=dict)
 
 
 def _channel_account_out(account: ChannelAccount) -> ChannelAccountOut:
@@ -3534,10 +3597,29 @@ async def create_channel_account(
 ) -> ChannelAccountOut:
     """Alta manual de una cuenta de canal. Reservado a administración."""
     channel = ChannelKind(body.channel)
-    if channel is ChannelKind.FACEBOOK and not body.access_token:
+    credentials = _credential_payload(body.channel, body)
+
+    # Canales sin valor global en ``.env``: lo que no llegue aquí no llega de
+    # ninguna otra parte, así que se exige en el alta y no en el primer fallo
+    # de entrega, cuando ya nadie está mirando.
+    required = {
+        ChannelKind.FACEBOOK: ("access_token",),
+        ChannelKind.TELEGRAM: ("access_token",),
+        ChannelKind.SMS: ("account_sid", "auth_token", "from_number"),
+        ChannelKind.EMAIL: (
+            "imap_host",
+            "imap_username",
+            "imap_password",
+            "smtp_host",
+            "smtp_username",
+            "smtp_password",
+        ),
+    }.get(channel, ())
+    missing = [field for field in required if not credentials.get(field)]
+    if missing:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Facebook exige el token de acceso de la página",
+            detail=f"El canal {body.channel} exige: {', '.join(missing)}",
         )
 
     tenant_row = await repo.get_or_create_tenant(session, tenant or settings.default_tenant_slug)
@@ -3548,11 +3630,7 @@ async def create_channel_account(
                 status_code=status.HTTP_404_NOT_FOUND, detail="El departamento no existe"
             )
 
-    credentials = {
-        campo: valor
-        for campo in CHANNEL_CREDENTIAL_FIELDS
-        if (valor := getattr(body, campo))
-    }
+    credentials = {campo: valor for campo, valor in credentials.items() if valor}
     credentials_ciphertext = None
     if credentials and channel is not ChannelKind.MSBOT:
         try:
@@ -3603,7 +3681,12 @@ async def update_channel_account(
                 status_code=status.HTTP_404_NOT_FOUND, detail="El departamento no existe"
             )
 
-    tocadas = [campo for campo in CHANNEL_CREDENTIAL_FIELDS if campo in changes]
+    # Lo que llegó por su nombre propio y lo que llegó en el diccionario son la
+    # misma cosa una vez guardadas; se comprueban juntas contra el canal.
+    changes.pop("credentials", None)
+    tocadas = _credential_payload(str(account.channel), body)
+    for campo in ("access_token", "verify_token", "app_secret"):
+        changes.pop(campo, None)
     if tocadas:
         # Se parte de lo que ya había y se aplica solo lo que llegó: así,
         # cambiar el token de acceso no borra el secreto de la app guardado
@@ -3614,8 +3697,7 @@ async def update_channel_account(
                 if account.credentials_ciphertext
                 else {}
             )
-            for campo in tocadas:
-                valor = changes.pop(campo)
+            for campo, valor in tocadas.items():
                 if valor:
                     actuales[campo] = valor
                 else:

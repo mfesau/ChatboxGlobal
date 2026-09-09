@@ -2269,6 +2269,100 @@ def _sso_settings(**overrides):
 
 
 # --------------------------------------------------------------------------- #
+# Credenciales por canal
+# --------------------------------------------------------------------------- #
+async def test_each_channel_only_accepts_its_own_credentials(as_agent, team):
+    """Un canal no guarda un valor que su adaptador nunca va a leer."""
+    admin = await as_agent(team["admin"]["email"])
+
+    rechazado = await admin.post(
+        "/api/channel-accounts",
+        json={
+            "channel": "telegram",
+            "external_id": "7654321",
+            "credentials": {"access_token": "123:ABC", "imap_host": "imap.ejemplo.local"},
+        },
+    )
+    assert rechazado.status_code == 422
+    assert "imap_host" in rechazado.json()["detail"]
+
+
+async def test_a_channel_without_a_global_fallback_demands_its_credentials(
+    as_agent, team, monkeypatch
+):
+    """Telegram, Twilio y el correo no tienen valor global en .env."""
+    from cryptography.fernet import Fernet
+    from pydantic import SecretStr
+
+    monkeypatch.setattr(
+        get_settings(), "secret_encryption_key", SecretStr(Fernet.generate_key().decode())
+    )
+    admin = await as_agent(team["admin"]["email"])
+
+    sin_token = await admin.post(
+        "/api/channel-accounts", json={"channel": "telegram", "external_id": "7654321"}
+    )
+    assert sin_token.status_code == 422
+    assert "access_token" in sin_token.json()["detail"]
+
+    con_token = await admin.post(
+        "/api/channel-accounts",
+        json={
+            "channel": "telegram",
+            "external_id": "7654321",
+            "credentials": {"access_token": "7654321:ABCdef", "verify_token": "secreto"},
+        },
+    )
+    assert con_token.status_code == 201, con_token.text
+    assert con_token.json()["has_own_credentials"] is True
+
+
+async def test_a_mailbox_stores_its_ten_settings(as_agent, team, monkeypatch):
+    """El correo no cabía en los tres campos con nombre propio que había."""
+    from cryptography.fernet import Fernet
+    from pydantic import SecretStr
+
+    monkeypatch.setattr(
+        get_settings(), "secret_encryption_key", SecretStr(Fernet.generate_key().decode())
+    )
+    admin = await as_agent(team["admin"]["email"])
+    alta = await admin.post(
+        "/api/channel-accounts",
+        json={
+            "channel": "email",
+            "external_id": "soporte@empresa.local",
+            "credentials": {
+                "imap_host": "imap.empresa.local",
+                "imap_username": "soporte",
+                "imap_password": "clave-imap",
+                "smtp_host": "smtp.empresa.local",
+                "smtp_username": "soporte",
+                "smtp_password": "clave-smtp",
+                "from_email": "soporte@empresa.local",
+            },
+        },
+    )
+    assert alta.status_code == 201, alta.text
+
+    async with session_scope() as session:
+        account = await repo.get_channel_account(session, uuid.UUID(alta.json()["id"]))
+        guardadas = decrypt_json(account.credentials_ciphertext, settings=get_settings())
+    assert guardadas["imap_password"] == "clave-imap"
+    assert guardadas["smtp_password"] == "clave-smtp"
+
+    # Y se cambia una sola sin tener que reescribir las otras nueve.
+    await admin.patch(
+        f"/api/channel-accounts/{alta.json()['id']}",
+        json={"credentials": {"smtp_password": "otra-clave"}},
+    )
+    async with session_scope() as session:
+        account = await repo.get_channel_account(session, uuid.UUID(alta.json()["id"]))
+        guardadas = decrypt_json(account.credentials_ciphertext, settings=get_settings())
+    assert guardadas["smtp_password"] == "otra-clave"
+    assert guardadas["imap_password"] == "clave-imap"
+
+
+# --------------------------------------------------------------------------- #
 # Cabeceras de seguridad y CORS
 # --------------------------------------------------------------------------- #
 async def test_every_response_carries_the_security_headers(anonymous):

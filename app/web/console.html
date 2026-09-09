@@ -91,7 +91,14 @@
             <select id="channel-filter" data-i18n-aria="filter.channel">
               <option value="" data-i18n="filter.channel.all">Todos los canales</option>
               <option value="whatsapp">WhatsApp</option>
+              <!-- Facebook faltaba aquí desde que existe el adaptador: sus
+                   hilos no se podían filtrar y en la lista salía el nombre
+                   interno del canal en vez de una etiqueta. -->
+              <option value="facebook">Facebook</option>
               <option value="msbot">Microsoft</option>
+              <option value="telegram">Telegram</option>
+              <option value="email">Correo</option>
+              <option value="sms">SMS</option>
               <option value="web">Web</option>
             </select>
             <!-- Fuente de verdad del filtro de departamento: sigue existiendo,
@@ -381,6 +388,9 @@
                   <option value="whatsapp">WhatsApp</option>
                   <option value="facebook">Facebook</option>
                   <option value="msbot">Teams</option>
+                  <option value="telegram">Telegram</option>
+                  <option value="email">Correo</option>
+                  <option value="sms">SMS (Twilio)</option>
                 </select>
               </label>
               <label class="panel__field">
@@ -396,33 +406,13 @@
                 <span>Departamento</span>
                 <select id="new-account-department"><option value="">Sin departamento</option></select>
               </label>
-              <label class="panel__field">
-                <span data-i18n="accounts.accessToken">Token de acceso</span>
-                <input type="password" id="new-account-token" maxlength="4096"
-                       autocomplete="new-password" />
-              </label>
-              <!-- Los dos que faltaban para no tener que tocar el .env: el
-                   token del reto de alta del webhook y la clave con la que Meta
-                   firma el cuerpo. Se ocultan en Teams, que no usa ninguno. -->
-              <label class="panel__field" data-meta-only>
-                <span data-i18n="accounts.verifyToken">Token de verificación del webhook</span>
-                <input type="password" id="new-account-verify-token" maxlength="512"
-                       autocomplete="new-password" />
-              </label>
-              <label class="panel__field" data-meta-only>
-                <span data-i18n="accounts.appSecret">Clave secreta de la app</span>
-                <input type="password" id="new-account-app-secret" maxlength="512"
-                       autocomplete="new-password" />
-              </label>
+              <!-- Cada canal pide credenciales distintas —Teams ninguna, el
+                   correo diez—, así que los campos los arma console.js desde un
+                   solo mapa en lugar de estar escritos aquí uno a uno. -->
+              <div id="new-account-credentials"></div>
               <button type="submit" class="send-button" data-i18n="accounts.connect">Conectar cuenta</button>
             </form>
-            <p class="console__muted" id="new-account-hint" data-i18n-html="accounts.idHint">
-              El identificador es el <code>phone_number_id</code> en WhatsApp,
-              el id de la página en Facebook, o el id del equipo en Teams (se
-              ve solo tras el primer mensaje de ese equipo). El token es
-              obligatorio en Facebook; en WhatsApp, si falta, se usa el token
-              global de <code>.env</code>; en Teams no hace falta ninguno.
-            </p>
+            <p class="console__muted" id="new-account-hint"></p>
             <div class="table-scroll">
               <table class="data-table" id="channel-accounts-table">
                 <thead>

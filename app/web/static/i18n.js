@@ -419,12 +419,36 @@
       "start.sentHidden":
         "Conversación iniciada. Está en la cola común, fuera de la bandeja que mira ahora.",
       "start.noTemplates": "Esta cuenta de WhatsApp no tiene ninguna plantilla aprobada.",
-      "accounts.hint": "Conecte tantos números de WhatsApp, páginas de Facebook o equipos de Teams como necesite. Con departamento asignado, una conversación nueva de esa cuenta cae directo en su cola, sin que nadie tenga que derivarla a mano; sin departamento, sigue en la cola común.",
-      "accounts.accessToken": "Token de acceso",
-      "accounts.verifyToken": "Token de verificación del webhook",
-      "accounts.appSecret": "Clave secreta de la app",
-      "accounts.idHint":
-        "El identificador es el <code>phone_number_id</code> en WhatsApp, el id de la página en Facebook, o el id del equipo en Teams (se ve solo tras el primer mensaje de ese equipo). Los tres valores de Meta —token de acceso, token de verificación y clave secreta— se guardan cifrados y valen solo para esta cuenta; el que deje en blanco se resuelve con el global de <code>.env</code>. Teams no usa ninguno: se autentica con un JWT de Microsoft.",
+      "accounts.hint": "Conecte tantas cuentas como necesite: números de WhatsApp, páginas de Facebook, equipos de Teams, bots de Telegram, buzones de correo o números de Twilio. Con departamento asignado, una conversación nueva de esa cuenta cae directo en su cola, sin que nadie tenga que derivarla a mano; sin departamento, sigue en la cola común.",
+      "accounts.noCredentials": "No usa credenciales propias",
+      "accounts.field.access_token": "Token de acceso",
+      "accounts.field.verify_token": "Token de verificación del webhook",
+      "accounts.field.app_secret": "Clave secreta de la app",
+      "accounts.field.account_sid": "SID de la cuenta de Twilio",
+      "accounts.field.auth_token": "Token de autenticación de Twilio",
+      "accounts.field.from_number": "Número remitente",
+      "accounts.field.imap_host": "Servidor IMAP",
+      "accounts.field.imap_port": "Puerto IMAP",
+      "accounts.field.imap_username": "Usuario IMAP",
+      "accounts.field.imap_password": "Contraseña IMAP",
+      "accounts.field.imap_folder": "Carpeta IMAP",
+      "accounts.field.smtp_host": "Servidor SMTP",
+      "accounts.field.smtp_port": "Puerto SMTP",
+      "accounts.field.smtp_username": "Usuario SMTP",
+      "accounts.field.smtp_password": "Contraseña SMTP",
+      "accounts.field.from_email": "Dirección remitente",
+      "accounts.idHint.whatsapp":
+        "El identificador es el phone_number_id del número. Los tres valores se guardan cifrados y valen solo para esta cuenta; el que deje en blanco se resuelve con el global de .env.",
+      "accounts.idHint.facebook":
+        "El identificador es el id de la página. El token de acceso es obligatorio: cada página tiene el suyo y no hay valor global.",
+      "accounts.idHint.msbot":
+        "El identificador es el id del equipo, visible solo tras su primer mensaje. Teams no guarda credenciales: se autentica con un JWT de Microsoft.",
+      "accounts.idHint.telegram":
+        "El identificador es el id numérico del bot, la parte anterior a los dos puntos del token que da BotFather. El token de acceso es ese mismo token. El de verificación es el secret_token que se declara en setWebhook: sin él, cualquiera podría enviar avisos falsos.",
+      "accounts.idHint.email":
+        "El identificador es la dirección del buzón. La entrada se consulta por IMAP cada pocos minutos —no hay webhook en el correo— y la salida se envía por SMTP.",
+      "accounts.idHint.sms":
+        "El identificador es el número de Twilio en formato internacional, el mismo que se pone en Número remitente. El token de autenticación firma cada aviso entrante.",
 
       // --- Módulo Hotel: administración ---
       "admin.tab.hotel": "Hotel",
@@ -899,12 +923,36 @@
       "start.sentHidden":
         "Conversation started. It is in the common queue, outside the inbox you are viewing.",
       "start.noTemplates": "This WhatsApp account has no approved templates.",
-      "accounts.hint": "Connect as many WhatsApp numbers, Facebook pages or Teams teams as you need. With a department assigned, a new conversation from that account lands straight in its queue, with nobody having to hand it over; without one, it stays in the shared queue.",
-      "accounts.accessToken": "Access token",
-      "accounts.verifyToken": "Webhook verify token",
-      "accounts.appSecret": "App secret",
-      "accounts.idHint":
-        "The identifier is the <code>phone_number_id</code> on WhatsApp, the page id on Facebook, or the team id on Teams (only visible after that team’s first message). All three Meta values — access token, verify token and app secret — are stored encrypted and apply to this account alone; whichever you leave blank falls back to the global one in <code>.env</code>. Teams uses none of them: it authenticates with a Microsoft JWT.",
+      "accounts.hint": "Connect as many accounts as you need: WhatsApp numbers, Facebook pages, Teams teams, Telegram bots, mailboxes or Twilio numbers. With a department assigned, a new conversation from that account lands straight in its queue, with nobody having to hand it over; without one, it stays in the shared queue.",
+      "accounts.noCredentials": "Uses no credentials of its own",
+      "accounts.field.access_token": "Access token",
+      "accounts.field.verify_token": "Webhook verify token",
+      "accounts.field.app_secret": "App secret",
+      "accounts.field.account_sid": "Twilio account SID",
+      "accounts.field.auth_token": "Twilio auth token",
+      "accounts.field.from_number": "Sender number",
+      "accounts.field.imap_host": "IMAP server",
+      "accounts.field.imap_port": "IMAP port",
+      "accounts.field.imap_username": "IMAP username",
+      "accounts.field.imap_password": "IMAP password",
+      "accounts.field.imap_folder": "IMAP folder",
+      "accounts.field.smtp_host": "SMTP server",
+      "accounts.field.smtp_port": "SMTP port",
+      "accounts.field.smtp_username": "SMTP username",
+      "accounts.field.smtp_password": "SMTP password",
+      "accounts.field.from_email": "Sender address",
+      "accounts.idHint.whatsapp":
+        "The identifier is the number's phone_number_id. All three values are stored encrypted and apply to this account alone; whichever you leave blank falls back to the global one in .env.",
+      "accounts.idHint.facebook":
+        "The identifier is the page id. The access token is required: every page has its own and there is no global fallback.",
+      "accounts.idHint.msbot":
+        "The identifier is the team id, visible only after that team's first message. Teams stores no credentials: it authenticates with a Microsoft JWT.",
+      "accounts.idHint.telegram":
+        "The identifier is the bot's numeric id, the part before the colon in the token BotFather gives you. The access token is that same token. The verify token is the secret_token you declare in setWebhook: without it, anyone could post fake updates.",
+      "accounts.idHint.email":
+        "The identifier is the mailbox address. Incoming mail is polled over IMAP every few minutes — email has no webhook — and replies go out over SMTP.",
+      "accounts.idHint.sms":
+        "The identifier is the Twilio number in international format, the same one you put in Sender number. The auth token signs every incoming request.",
 
       // --- Hotel module: administration ---
       "admin.tab.hotel": "Hotel",
@@ -1382,12 +1430,36 @@
       "start.sentHidden":
         "Gespräch begonnen. Es liegt in der gemeinsamen Warteschlange, außerhalb des Postfachs, das Sie gerade sehen.",
       "start.noTemplates": "Dieses WhatsApp-Konto hat keine genehmigten Vorlagen.",
-      "accounts.hint": "Verbinden Sie so viele WhatsApp-Nummern, Facebook-Seiten oder Teams-Teams, wie Sie brauchen. Mit zugewiesener Abteilung landet ein neues Gespräch dieses Kontos direkt in deren Warteschlange, ohne dass es jemand übergeben muss; ohne Abteilung bleibt es in der gemeinsamen Warteschlange.",
-      "accounts.accessToken": "Zugriffstoken",
-      "accounts.verifyToken": "Webhook-Verify-Token",
-      "accounts.appSecret": "App-Secret",
-      "accounts.idHint":
-        "Die Kennung ist die <code>phone_number_id</code> bei WhatsApp, die Seiten-ID bei Facebook oder die Team-ID bei Teams (erst nach der ersten Nachricht dieses Teams sichtbar). Alle drei Meta-Werte — Zugriffstoken, Verify-Token und App-Secret — werden verschlüsselt gespeichert und gelten nur für dieses Konto; was Sie leer lassen, fällt auf den globalen Wert aus <code>.env</code> zurück. Teams nutzt keinen davon: es authentifiziert sich mit einem Microsoft-JWT.",
+      "accounts.hint": "Verbinden Sie so viele Konten, wie Sie brauchen: WhatsApp-Nummern, Facebook-Seiten, Teams-Teams, Telegram-Bots, Postfächer oder Twilio-Nummern. Mit zugewiesener Abteilung landet ein neues Gespräch dieses Kontos direkt in deren Warteschlange, ohne dass es jemand übergeben muss; ohne Abteilung bleibt es in der gemeinsamen Warteschlange.",
+      "accounts.noCredentials": "Nutzt keine eigenen Zugangsdaten",
+      "accounts.field.access_token": "Zugriffstoken",
+      "accounts.field.verify_token": "Webhook-Verify-Token",
+      "accounts.field.app_secret": "App-Secret",
+      "accounts.field.account_sid": "Twilio-Account-SID",
+      "accounts.field.auth_token": "Twilio-Auth-Token",
+      "accounts.field.from_number": "Absendernummer",
+      "accounts.field.imap_host": "IMAP-Server",
+      "accounts.field.imap_port": "IMAP-Port",
+      "accounts.field.imap_username": "IMAP-Benutzer",
+      "accounts.field.imap_password": "IMAP-Passwort",
+      "accounts.field.imap_folder": "IMAP-Ordner",
+      "accounts.field.smtp_host": "SMTP-Server",
+      "accounts.field.smtp_port": "SMTP-Port",
+      "accounts.field.smtp_username": "SMTP-Benutzer",
+      "accounts.field.smtp_password": "SMTP-Passwort",
+      "accounts.field.from_email": "Absenderadresse",
+      "accounts.idHint.whatsapp":
+        "Die Kennung ist die phone_number_id der Nummer. Alle drei Werte werden verschlüsselt gespeichert und gelten nur für dieses Konto; was Sie leer lassen, fällt auf den globalen Wert aus .env zurück.",
+      "accounts.idHint.facebook":
+        "Die Kennung ist die Seiten-ID. Das Zugriffstoken ist Pflicht: jede Seite hat ihr eigenes, einen globalen Wert gibt es nicht.",
+      "accounts.idHint.msbot":
+        "Die Kennung ist die Team-ID, sichtbar erst nach der ersten Nachricht dieses Teams. Teams speichert keine Zugangsdaten: es authentifiziert sich mit einem Microsoft-JWT.",
+      "accounts.idHint.telegram":
+        "Die Kennung ist die numerische Bot-ID, der Teil vor dem Doppelpunkt im Token von BotFather. Das Zugriffstoken ist eben dieses Token. Das Verify-Token ist das secret_token aus setWebhook: ohne es könnte jeder gefälschte Meldungen schicken.",
+      "accounts.idHint.email":
+        "Die Kennung ist die Adresse des Postfachs. Eingehende Post wird alle paar Minuten per IMAP abgeholt — E-Mail kennt keinen Webhook — und Antworten gehen per SMTP hinaus.",
+      "accounts.idHint.sms":
+        "Die Kennung ist die Twilio-Nummer im internationalen Format, dieselbe wie unter Absendernummer. Das Auth-Token signiert jede eingehende Meldung.",
 
       // --- Modul Hotel: Verwaltung ---
       "admin.tab.hotel": "Hotel",
