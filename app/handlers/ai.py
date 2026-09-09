@@ -14,7 +14,9 @@ que cambiar de proveedor no obligue a reescribir cada módulo de negocio.
 
 from __future__ import annotations
 
+import json
 import time
+from dataclasses import dataclass
 from typing import Any, ClassVar
 
 from google import genai
@@ -82,6 +84,33 @@ BUSCAR_CONOCIMIENTO_TOOL: dict[str, Any] = {
     },
     "strict": True,
 }
+
+@dataclass(slots=True)
+class ToolCall:
+    """Llamada a una herramienta, ya rearmada a partir de los eventos del flujo."""
+
+    id: str | None
+    name: str
+    arguments: dict[str, Any]
+
+
+def _parse_arguments(raw: str, *, name: str | None = None) -> dict[str, Any]:
+    """Convierte los argumentos, que llegan como trozos sueltos de JSON.
+
+    Un JSON que no cierra significa que el flujo se cortó a mitad. Se devuelve
+    vacío en lugar de reventar: la herramienta se quejará de que le falta un
+    dato, que es un error que el modelo sabe contarle a quien escribe, y no una
+    excepción que deje el turno sin respuesta.
+    """
+    if not raw:
+        return {}
+    try:
+        cargado = json.loads(raw)
+    except json.JSONDecodeError:
+        log.warning("tool_arguments_unreadable", tool=name, raw=raw[:200])
+        return {}
+    return cargado if isinstance(cargado, dict) else {}
+
 
 #: Cota superior de vueltas del bucle de herramientas; evita bucles infinitos.
 MAX_TOOL_ITERATIONS = 3
@@ -275,30 +304,11 @@ class AIHandler(Handler):
                 stream=True,
             )
 
-            interaction = None
-            async for event in stream:
-                # Solo el chatbox web puede pintar el texto conforme llega; los
-                # demás canales entregan el mensaje entero al final.
-                if stream_to_client:
-                    delta = getattr(event, "delta", None)
-                    if getattr(delta, "type", None) == "text" and delta.text:
-                        await hub.publish(
-                            conversation_topic(ctx.conversation.channel_conversation_id),
-                            {"type": "delta", "text": delta.text},
-                        )
-                if getattr(event, "interaction", None) is not None:
-                    interaction = event.interaction
-
-            if interaction is None:
-                break
-
-            stop_reason = getattr(interaction, "status", None)
-            _accumulate_usage(usage_total, getattr(interaction, "usage", None))
-            if interaction.output_text:
-                collected.append(interaction.output_text)
-
-            steps = list(getattr(interaction, "steps", None) or [])
-            calls = [step for step in steps if getattr(step, "type", None) == "function_call"]
+            text, calls, status, usage = await self._read_stream(ctx, stream, stream_to_client)
+            stop_reason = status or stop_reason
+            _accumulate_usage(usage_total, usage)
+            if text.strip():
+                collected.append(text)
             if not calls:
                 break
 
@@ -307,12 +317,80 @@ class AIHandler(Handler):
             # o el modelo no sabe a qué contesta.
             messages.extend(
                 {"type": "function_call", "id": call.id, "name": call.name,
-                 "arguments": dict(call.arguments or {})}
+                 "arguments": call.arguments}
                 for call in calls
             )
             messages.extend(await self._run_tools(ctx, calls))
 
         return "\n\n".join(part for part in collected if part.strip()), usage_total, stop_reason
+
+    async def _read_stream(
+        self, ctx: TurnContext, stream: Any, stream_to_client: bool
+    ) -> tuple[str, list[ToolCall], str | None, Any]:
+        """Rearma la respuesta a partir de los eventos del flujo.
+
+        En modo transmitido el objeto ``interaction`` solo trae metadatos —
+        identificador, estado y consumo—: **el texto no está ahí**. Llega
+        troceado en los deltas de un paso ``model_output``, y una llamada a
+        herramienta se reparte entre el ``step.start``, que trae su nombre e
+        identificador, y unos deltas de argumentos que son trozos sueltos de
+        JSON. Las dos cosas hay que rearmarlas por el camino.
+
+        Los pasos de tipo ``thought`` también emiten deltas, pero de firma y no
+        de texto; se ignoran, o el razonamiento interno acabaría en el chat.
+        """
+        partes: list[str] = []
+        #: Índice del paso -> llamada a medio construir.
+        pendientes: dict[int, dict[str, Any]] = {}
+        status: str | None = None
+        usage: Any = None
+
+        async for event in stream:
+            tipo = getattr(event, "event_type", None)
+
+            if tipo == "step.start":
+                paso = getattr(event, "step", None)
+                if getattr(paso, "type", None) == "function_call":
+                    pendientes[event.index] = {
+                        "id": getattr(paso, "id", None),
+                        "name": getattr(paso, "name", None),
+                        "arguments": "",
+                    }
+                continue
+
+            if tipo == "step.delta":
+                delta = getattr(event, "delta", None)
+                clase = getattr(delta, "type", None)
+                if clase == "text" and getattr(delta, "text", None):
+                    partes.append(delta.text)
+                    # Solo el chatbox web puede pintar el texto conforme llega;
+                    # los demás canales reciben el mensaje entero al final.
+                    if stream_to_client:
+                        await hub.publish(
+                            conversation_topic(ctx.conversation.channel_conversation_id),
+                            {"type": "delta", "text": delta.text},
+                        )
+                elif clase == "arguments_delta" and event.index in pendientes:
+                    pendientes[event.index]["arguments"] += (
+                        getattr(delta, "arguments", "") or ""
+                    )
+                continue
+
+            interaction = getattr(event, "interaction", None)
+            if interaction is not None:
+                status = getattr(interaction, "status", None) or status
+                usage = getattr(interaction, "usage", None) or usage
+
+        calls = [
+            ToolCall(
+                id=datos["id"],
+                name=datos["name"],
+                arguments=_parse_arguments(datos["arguments"], name=datos["name"]),
+            )
+            for datos in pendientes.values()
+            if datos["name"]
+        ]
+        return "".join(partes), calls, status, usage
 
     async def _run_tools(self, ctx: TurnContext, calls: list[Any]) -> list[dict[str, Any]]:
         """Ejecuta las herramientas pedidas y devuelve un paso por resultado.
@@ -453,21 +531,23 @@ def _as_function_tool(tool: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _accumulate_usage(total: dict[str, int], usage: Any) -> None:
-    """Suma el gasto de cada vuelta del bucle de herramientas.
+#: Cómo se llama cada cifra de consumo en el proveedor y con qué nombre se
+#: guarda. La traducción hace falta: el proveedor las publica con el prefijo
+#: ``total_`` y ``record_ai_run`` espera los nombres de la derecha.
+USAGE_FIELDS = {
+    "total_input_tokens": "input_tokens",
+    "total_output_tokens": "output_tokens",
+    "total_cached_tokens": "cached_content_token_count",
+    "total_thought_tokens": "thoughts_token_count",
+    "total_tokens": "total_tokens",
+}
 
-    Los nombres se guardan como los publica el proveedor; ``record_ai_run`` los
-    almacena tal cual y nadie más los interpreta.
-    """
+
+def _accumulate_usage(total: dict[str, int], usage: Any) -> None:
+    """Suma el gasto de cada vuelta del bucle de herramientas."""
     if usage is None:
         return
-    for field in (
-        "input_tokens",
-        "output_tokens",
-        "total_tokens",
-        "cached_content_token_count",
-        "thoughts_token_count",
-    ):
-        value = getattr(usage, field, None)
+    for origen, destino in USAGE_FIELDS.items():
+        value = getattr(usage, origen, None)
         if isinstance(value, int):
-            total[field] = total.get(field, 0) + value
+            total[destino] = total.get(destino, 0) + value
