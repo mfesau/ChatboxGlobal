@@ -1246,6 +1246,9 @@ async def tenant_has_knowledge(session: AsyncSession, *, tenant_id: uuid.UUID) -
         .where(
             KnowledgeDocument.tenant_id == tenant_id,
             KnowledgeDocument.is_active.is_(True),
+            # Uno que aún se está procesando no tiene trozos: ofrecer la
+            # herramienta por él sería mandar al modelo a buscar en el vacío.
+            KnowledgeDocument.status == "ready",
         )
         .limit(1)
     )
@@ -1381,24 +1384,6 @@ async def list_audit_actions(session: AsyncSession, *, tenant_id: uuid.UUID) -> 
 async def purge_audit(session: AsyncSession, *, older_than: datetime) -> int:
     """Descarta la traza anterior a esa fecha. Devuelve cuántas filas se fueron."""
     result = await session.execute(delete(AuditLog).where(AuditLog.created_at < older_than))
-    return result.rowcount or 0
-
-
-async def purge_message_bodies(session: AsyncSession, *, older_than: datetime) -> int:
-    """Vacía el contenido de los mensajes antiguos, sin borrar las filas.
-
-    La fila se conserva porque de ella salen los recuentos de los informes; lo
-    que caduca es el contenido. Solo toca las que aún tienen algo dentro, de
-    modo que pasar la escoba dos veces no vuelve a escribir nada.
-    """
-    result = await session.execute(
-        update(Message)
-        .where(
-            Message.created_at < older_than,
-            or_(Message.text.is_not(None), Message.attachments != []),
-        )
-        .values(text=None, attachments=[], action=None)
-    )
     return result.rowcount or 0
 
 

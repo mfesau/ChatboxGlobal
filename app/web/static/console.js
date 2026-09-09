@@ -3836,10 +3836,20 @@
     for (const document_ of documents) {
       const row = document.createElement("tr");
       const department = state.departments.find((d) => d.id === document_.department_id);
+      // Trocear y vectorizar ocurre en segundo plano, así que un documento
+      // recién subido aparece «procesando» hasta que termina.
+      const estado =
+        document_.status === "ready"
+          ? i18n.t("knowledge.ready")
+          : document_.status === "failed"
+            ? `${i18n.t("knowledge.failed")}: ${document_.error || ""}`
+            : i18n.t("knowledge.processing");
+
       for (const value of [
         document_.title,
         department ? department.name : i18n.t("knowledge.wholeCompany"),
         String(document_.chunk_count),
+        estado,
       ]) {
         const cell = document.createElement("td");
         cell.textContent = value;
@@ -3913,6 +3923,10 @@
       dom.knowledgeForm.reset();
       await loadKnowledge();
       setStatus(i18n.t("knowledge.added"));
+      // El troceado corre en segundo plano; se vuelve a mirar en unos segundos
+      // para que la tabla no se quede diciendo «procesando» hasta que alguien
+      // cambie de pestaña.
+      window.setTimeout(() => loadKnowledge(), 4000);
     } catch (error) {
       showAdminError(error.message);
     }

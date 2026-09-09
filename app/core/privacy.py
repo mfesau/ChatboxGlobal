@@ -14,10 +14,11 @@ esqueleto: que hubo una conversación, por qué canal, cuándo y quién la atend
 
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
@@ -267,6 +268,45 @@ async def anonymise_contact(
     }
     log.warning("contact_anonymised", contact_id=str(contact.id), **summary)
     return summary
+
+
+# --------------------------------------------------------------------------- #
+# Caducidad del contenido
+# --------------------------------------------------------------------------- #
+async def purge_expired_messages(
+    session: AsyncSession, *, older_than: datetime, settings: Settings
+) -> dict[str, int]:
+    """Vacía los mensajes anteriores a esa fecha, ficheros incluidos.
+
+    La fila se conserva porque de ella salen los recuentos de los informes; lo
+    que caduca es el contenido. Vive aquí y no en ``repositories.py`` porque
+    hay que borrar también del disco, y eso necesita ``Settings`` y el mismo
+    cuidado con las rutas que el borrado por petición del interesado.
+
+    Solo toca lo que aún tiene algo dentro, de modo que pasar la escoba dos
+    veces no vuelve a escribir nada.
+    """
+    caducados = list(
+        (
+            await session.execute(
+                select(Message).where(
+                    Message.created_at < older_than,
+                    or_(Message.text.is_not(None), Message.attachments != []),
+                )
+            )
+        ).scalars()
+    )
+
+    ficheros = 0
+    for message in caducados:
+        ficheros += _delete_attachments(message.attachments, settings=settings)
+        message.text = None
+        message.attachments = []
+        message.action = None
+
+    if caducados:
+        log.info("messages_expired", messages=len(caducados), files=ficheros)
+    return {"messages": len(caducados), "files": ficheros}
 
 
 def _delete_attachments(attachments: Any, *, settings: Settings) -> int:

@@ -1073,6 +1073,14 @@ class KnowledgeDocument(Base, TimestampMixin):
     source_type: Mapped[str] = mapped_column(String(16), default="text", nullable=False)
     filename: Mapped[str | None] = mapped_column(String(255))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    #: ``pending`` mientras se trocea y se vectoriza —ocurre en segundo plano,
+    #: porque un PDF grande no cabe en el plazo de una petición—, ``ready``
+    #: cuando el asistente ya puede consultarlo, ``failed`` si algo salió mal.
+    status: Mapped[str] = mapped_column(
+        String(16), default="pending", nullable=False, server_default=text("'ready'")
+    )
+    #: Motivo del fallo, para que en la consola se vea qué pasó.
+    error: Mapped[str | None] = mapped_column(Text)
     #: En cuántos trozos quedó. Se guarda para no contarlos en cada listado.
     chunk_count: Mapped[int] = mapped_column(
         Integer, default=0, nullable=False, server_default=text("0")

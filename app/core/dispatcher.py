@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.channels.base import ChannelRegistry
 from app.config import Settings
+from app.core import privacy
 from app.core.envelope import ChannelKind, ConversationRef, OutboundMessage, utcnow
 from app.core.secrets import DecryptionError, decrypt_json
 from app.db import repositories as repo
@@ -248,15 +249,26 @@ class OutboxDispatcher:
             return
 
         async with session_scope() as session:
-            blanked = 0
+            purgados = {"messages": 0, "files": 0}
             discarded = 0
             if messages_days > 0:
-                blanked = await repo.purge_message_bodies(
-                    session, older_than=utcnow() - timedelta(days=messages_days)
+                # Por `privacy` y no por el repositorio: al caducar un mensaje
+                # hay que llevarse también sus ficheros del disco, y eso pide
+                # el mismo cuidado con las rutas que el borrado a petición del
+                # interesado. Vaciar solo la fila dejaba los adjuntos ahí.
+                purgados = await privacy.purge_expired_messages(
+                    session,
+                    older_than=utcnow() - timedelta(days=messages_days),
+                    settings=self.settings,
                 )
             if audit_days > 0:
                 discarded = await repo.purge_audit(
                     session, older_than=utcnow() - timedelta(days=audit_days)
                 )
-        if blanked or discarded:
-            log.info("retention_pass", blanked_messages=blanked, discarded_audit=discarded)
+        if purgados["messages"] or discarded:
+            log.info(
+                "retention_pass",
+                blanked_messages=purgados["messages"],
+                removed_files=purgados["files"],
+                discarded_audit=discarded,
+            )

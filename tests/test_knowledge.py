@@ -278,12 +278,63 @@ async def test_only_administration_uploads_documents(as_agent, team, monkeypatch
 
     alta = await admin.post("/api/knowledge/documents", json=cuerpo)
     assert alta.status_code == 201, alta.text
-    assert alta.json()["chunk_count"] > 0
 
     # Cualquier agente sí puede ver qué sabe el bot.
     listado = await ana.get("/api/knowledge/documents")
     assert listado.status_code == 200
     assert [d["title"] for d in listado.json()] == ["Normas"]
+
+
+async def test_the_upload_answers_before_vectorising(as_agent, team, monkeypatch):
+    """Un PDF de varias páginas son decenas de llamadas al modelo.
+
+    Esperarlas dentro de la petición la hacía agotar el plazo, así que la
+    respuesta sale enseguida y el troceado ocurre después.
+    """
+    monkeypatch.setattr(knowledge, "embed", _make_fake_embed())
+    admin = await as_agent(team["admin"]["email"])
+
+    alta = await admin.post(
+        "/api/knowledge/documents", json={"title": "Normas", "text": DOCUMENTO}
+    )
+    assert alta.status_code == 201
+    # Nace pendiente y todavía sin trozos.
+    assert alta.json()["status"] == "pending"
+    assert alta.json()["chunk_count"] == 0
+
+    # La tarea de fondo lo deja listo.
+    listado = (await admin.get("/api/knowledge/documents")).json()
+    assert listado[0]["status"] == "ready"
+    assert listado[0]["chunk_count"] > 0
+    assert listado[0]["error"] is None
+
+
+async def test_a_document_that_cannot_be_vectorised_says_why(as_agent, team, monkeypatch):
+    """Sin clave de IA el fallo tiene que verse, no desaparecer en el log."""
+    admin = await as_agent(team["admin"]["email"])
+
+    alta = await admin.post(
+        "/api/knowledge/documents", json={"title": "Normas", "text": DOCUMENTO}
+    )
+    assert alta.status_code == 201
+
+    listado = (await admin.get("/api/knowledge/documents")).json()
+    assert listado[0]["status"] == "failed"
+    assert "GOOGLE_API_KEY" in listado[0]["error"]
+
+
+async def test_a_document_still_processing_does_not_offer_the_tool(team):
+    """Ofrecerla por uno sin trozos manda al modelo a buscar en el vacío."""
+    async with session_scope() as session:
+        await knowledge.register(
+            session,
+            tenant_id=team["tenant_id"],
+            department_id=None,
+            title="A medias",
+        )
+
+    async with session_scope() as session:
+        assert await repo.tenant_has_knowledge(session, tenant_id=team["tenant_id"]) is False
 
 
 async def test_deleting_a_document_takes_its_chunks(as_agent, team, monkeypatch):

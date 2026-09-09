@@ -141,6 +141,87 @@ async def embed(
 # --------------------------------------------------------------------------- #
 # Alta y baja de documentos
 # --------------------------------------------------------------------------- #
+async def register(
+    session: AsyncSession,
+    *,
+    tenant_id: uuid.UUID,
+    department_id: uuid.UUID | None,
+    title: str,
+    source_type: str = "text",
+    filename: str | None = None,
+    created_by: str | None = None,
+) -> KnowledgeDocument:
+    """Deja constancia del documento antes de procesarlo.
+
+    Se separa de :func:`process` para que la petición que sube un fichero
+    devuelva enseguida: trocear y vectorizar un PDF de varias páginas son
+    decenas de llamadas al modelo, y esperarlas dentro de la petición la hacía
+    agotar el plazo. La fila nace en ``pending`` y la consola lo enseña.
+    """
+    document = KnowledgeDocument(
+        tenant_id=tenant_id,
+        department_id=department_id,
+        title=title.strip()[:200],
+        source_type=source_type,
+        filename=filename,
+        created_by=created_by,
+        status="pending",
+        chunk_count=0,
+    )
+    session.add(document)
+    await session.flush()
+    return document
+
+
+async def process(
+    session: AsyncSession,
+    document: KnowledgeDocument,
+    *,
+    settings: Settings,
+    text: str,
+    client: Any | None = None,
+) -> KnowledgeDocument:
+    """Trocea, vectoriza y guarda el contenido de un documento ya registrado.
+
+    Deja la fila en ``ready`` o en ``failed`` con su motivo. No lanza: quien la
+    llama suele ser una tarea de fondo, sin nadie a quien devolverle el error.
+    """
+    try:
+        trozos = split(text)
+        if not trozos:
+            raise KnowledgeError("El documento no tiene texto aprovechable")
+        vectores = await embed(trozos, settings=settings, client=client)
+    except Exception as exc:  # noqa: BLE001 - red, cuota, clave o texto inservible
+        document.status = "failed"
+        document.error = str(exc)[:500]
+        log.warning(
+            "knowledge_document_failed", document_id=str(document.id), error=str(exc)[:200]
+        )
+        return document
+
+    for orden, (contenido, vector) in enumerate(zip(trozos, vectores, strict=False)):
+        session.add(
+            KnowledgeChunk(
+                document_id=document.id,
+                tenant_id=document.tenant_id,
+                ord=orden,
+                content=contenido,
+                embedding=vector,
+            )
+        )
+    document.chunk_count = len(trozos)
+    document.status = "ready"
+    document.error = None
+
+    log.info(
+        "knowledge_document_ingested",
+        document_id=str(document.id),
+        title=document.title,
+        chunks=len(trozos),
+    )
+    return document
+
+
 async def ingest(
     session: AsyncSession,
     *,
@@ -154,41 +235,24 @@ async def ingest(
     created_by: str | None = None,
     client: Any | None = None,
 ) -> KnowledgeDocument:
-    """Trocea, vectoriza y guarda un documento. Devuelve la fila creada."""
-    trozos = split(text)
-    if not trozos:
-        raise KnowledgeError("El documento no tiene texto aprovechable")
+    """Registra y procesa de una vez, en la misma transacción.
 
-    vectores = await embed(trozos, settings=settings, client=client)
-
-    document = KnowledgeDocument(
+    Es el camino corto, para las pruebas y para quien llame desde un script.
+    La consola usa :func:`register` y :func:`process` por separado, porque ahí
+    hay una petición esperando.
+    """
+    document = await register(
+        session,
         tenant_id=tenant_id,
         department_id=department_id,
-        title=title.strip()[:200],
+        title=title,
         source_type=source_type,
         filename=filename,
         created_by=created_by,
-        chunk_count=len(trozos),
     )
-    session.add(document)
-    await session.flush()
-
-    for orden, (contenido, vector) in enumerate(zip(trozos, vectores, strict=False)):
-        session.add(
-            KnowledgeChunk(
-                document_id=document.id,
-                tenant_id=tenant_id,
-                ord=orden,
-                content=contenido,
-                embedding=vector,
-            )
-        )
-    log.info(
-        "knowledge_document_ingested",
-        document_id=str(document.id),
-        title=document.title,
-        chunks=len(trozos),
-    )
+    await process(session, document, settings=settings, text=text, client=client)
+    if document.status == "failed":
+        raise KnowledgeError(document.error or "No se pudo procesar el documento")
     return document
 
 
@@ -239,6 +303,7 @@ async def search(
     condiciones = [
         KnowledgeDocument.tenant_id == tenant_id,
         KnowledgeDocument.is_active.is_(True),
+        KnowledgeDocument.status == "ready",
     ]
     if department_id is None:
         condiciones.append(KnowledgeDocument.department_id.is_(None))

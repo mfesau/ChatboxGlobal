@@ -214,3 +214,80 @@ async def test_erasing_leaves_its_own_trace(as_agent, team):
     trace = await admin.get("/api/audit?action=contact_erased")
     assert trace.status_code == 200
     assert trace.json()[0]["subject_id"] == contact_id
+
+
+# --------------------------------------------------------------------------- #
+# Caducidad del contenido
+# --------------------------------------------------------------------------- #
+async def test_expiring_a_message_also_removes_its_files(team):
+    """Vaciar solo la fila dejaba los adjuntos acumulándose en el disco."""
+    from datetime import UTC, datetime, timedelta
+
+    from app.core.privacy import purge_expired_messages
+
+    contact_id, stored_path = await _a_contact_with_a_conversation(team)
+
+    # El mensaje se envejece para que caiga dentro del plazo.
+    async with session_scope() as session:
+        mensajes = list((await session.execute(select(Message))).scalars())
+        for mensaje in mensajes:
+            mensaje.created_at = datetime.now(UTC) - timedelta(days=400)
+
+    assert Path(stored_path).exists()
+
+    async with session_scope() as session:
+        resumen = await purge_expired_messages(
+            session,
+            older_than=datetime.now(UTC) - timedelta(days=365),
+            settings=get_settings(),
+        )
+
+    assert resumen["messages"] == 1
+    assert resumen["files"] == 1
+    assert not Path(stored_path).exists()
+
+    async with session_scope() as session:
+        [mensaje] = list((await session.execute(select(Message))).scalars())
+        assert mensaje.text is None
+        assert mensaje.attachments == []
+        # La fila sigue ahí: de ella salen los recuentos de los informes.
+        assert mensaje.conversation_id is not None
+
+
+async def test_a_recent_message_is_left_alone(team):
+    from datetime import UTC, datetime, timedelta
+
+    from app.core.privacy import purge_expired_messages
+
+    contact_id, stored_path = await _a_contact_with_a_conversation(team)
+
+    async with session_scope() as session:
+        resumen = await purge_expired_messages(
+            session,
+            older_than=datetime.now(UTC) - timedelta(days=365),
+            settings=get_settings(),
+        )
+
+    assert resumen == {"messages": 0, "files": 0}
+    assert Path(stored_path).exists()
+
+
+async def test_sweeping_twice_does_not_rewrite_anything(team):
+    """Solo toca lo que aún tiene algo dentro."""
+    from datetime import UTC, datetime, timedelta
+
+    from app.core.privacy import purge_expired_messages
+
+    await _a_contact_with_a_conversation(team)
+    async with session_scope() as session:
+        for mensaje in (await session.execute(select(Message))).scalars():
+            mensaje.created_at = datetime.now(UTC) - timedelta(days=400)
+
+    limite = datetime.now(UTC) - timedelta(days=365)
+    async with session_scope() as session:
+        primera = await purge_expired_messages(session, older_than=limite, settings=get_settings())
+    async with session_scope() as session:
+        segunda = await purge_expired_messages(session, older_than=limite, settings=get_settings())
+
+    assert primera["messages"] == 1
+    assert segunda == {"messages": 0, "files": 0}
