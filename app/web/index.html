@@ -227,6 +227,16 @@
       <div class="quick-replies" id="quick-replies" hidden></div>
 
       <footer class="composer">
+        <!-- Cuando el equipo da la conversación por resuelta, el cliente lo ve
+             aquí en lugar de seguir escribiendo en un hilo que ya nadie mira. -->
+        <div class="composer__closed" id="closed-notice" hidden>
+          <span data-i18n="chat.closedNotice">
+            Esta conversación se dio por resuelta.
+          </span>
+          <button type="button" class="send-button" id="new-chat-button"
+                  data-i18n="chat.startNew">Iniciar una conversación nueva</button>
+        </div>
+
         <form id="composer-form" class="composer__form">
           <label class="visually-hidden" for="composer-input" data-i18n="chat.messageLabel">Mensaje</label>
           <textarea

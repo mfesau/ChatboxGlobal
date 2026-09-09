@@ -812,3 +812,17 @@ audio.bubble__media {
     max-width: 90%;
   }
 }
+
+/* Conversación resuelta: el compositor se retira y en su lugar queda el aviso
+   con la salida. Dejar el campo escribible invitaría a mandar un mensaje a un
+   hilo que el equipo ya cerró. */
+.composer__closed {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 4px;
+  color: var(--text-muted);
+  font-size: 14px;
+}

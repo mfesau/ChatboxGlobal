@@ -9,6 +9,7 @@ from typing import Any
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 
 from app.api.deps import CONTACT_SESSION_COOKIE, SESSION_COOKIE
+from app.core import web_thread
 from app.core.envelope import ChannelKind, Direction
 from app.core.hub import agent_topic, conversation_topic, hub, inbox_topic, presence_topic
 from app.core.security import hash_token
@@ -210,7 +211,10 @@ async def _authenticate_contact_socket(
             if contact is not None:
                 tenant = await session.get(Tenant, contact.tenant_id)
                 if tenant is not None:
-                    return str(contact.id), tenant.slug, contact.display_name, contact.primary_email
+                    # El hilo vigente, que ya no tiene por qué ser el primero:
+                    # tras cerrar uno, el cliente puede estrenar otro.
+                    hilo = await web_thread.current_thread_id(session, contact)
+                    return hilo, tenant.slug, contact.display_name, contact.primary_email
 
     await websocket.close(code=4401)
     return None
@@ -232,7 +236,7 @@ async def _thread_snapshot(session_id: str, tenant_slug: str) -> dict[str, Any]:
             channel_conversation_id=session_id,
         )
         if conversation is None:
-            return {"history": [], "control": "bot", "assignee_name": None}
+            return {"history": [], "control": "bot", "assignee_name": None, "status": "open"}
 
         messages = await repo.recent_messages(session, conversation.id, limit=HISTORY_LIMIT)
         assignee_name = None
@@ -254,4 +258,7 @@ async def _thread_snapshot(session_id: str, tenant_slug: str) -> dict[str, Any]:
             ],
             "control": conversation.control,
             "assignee_name": assignee_name,
+            # Para que el chatbox sepa, ya al abrir, si esta conversación se
+            # dio por resuelta mientras no estaba mirando.
+            "status": conversation.status,
         }

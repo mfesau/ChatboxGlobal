@@ -17,6 +17,7 @@ from app.api.deps import ContactDep, OrchestratorDep, SessionDep, SettingsDep
 from app.channels.base import SignatureError
 from app.channels.facebook import FacebookAdapter
 from app.channels.whatsapp import WhatsAppAdapter
+from app.core import web_thread
 from app.core.envelope import ChannelKind
 from app.core.secrets import DecryptionError, EncryptionNotConfiguredError, decrypt_json
 from app.db import repositories as repo
@@ -214,7 +215,11 @@ async def bot_framework_webhook(
 # --------------------------------------------------------------------------- #
 @router.post("/api/web/messages")
 async def web_message(
-    request: Request, orchestrator: OrchestratorDep, settings: SettingsDep, contact: ContactDep
+    request: Request,
+    session: SessionDep,
+    orchestrator: OrchestratorDep,
+    settings: SettingsDep,
+    contact: ContactDep,
 ) -> dict[str, Any]:
     """Recibe un mensaje del widget cuando el WebSocket no está disponible.
 
@@ -223,9 +228,15 @@ async def web_message(
     """
     payload, raw = await _read_body(request)
     payload.setdefault("tenant", settings.default_tenant_slug)
-    payload["session_id"] = str(contact.id)
+    payload["session_id"] = await web_thread.current_thread_id(session, contact)
     payload["display_name"] = contact.display_name
     payload["email"] = contact.primary_email
+
+    # Se suelta la transacción de la petición antes de entregar el mensaje: el
+    # orquestador abre la suya para escribir, y sostener las dos a la vez sobre
+    # la misma base es el interbloqueo que ya documenta ``send_from_agent``.
+    # Lo que hacía falta de ``contact`` ya está copiado arriba.
+    await session.rollback()
     result = await orchestrator.handle_event(
         ChannelKind.WEB,
         payload=payload,

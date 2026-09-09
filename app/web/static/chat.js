@@ -47,6 +47,8 @@
     bookingSearch: document.getElementById("booking-search"),
     bookingResults: document.getElementById("booking-results"),
     bookingError: document.getElementById("booking-error"),
+    closedNotice: document.getElementById("closed-notice"),
+    newChatButton: document.getElementById("new-chat-button"),
     departmentCard: document.getElementById("department-card"),
     departmentOptions: document.getElementById("department-options"),
     departmentError: document.getElementById("department-error"),
@@ -87,6 +89,7 @@
     typingTimer: null,
     clientName: null,
     department: null,
+    closed: false,
     pendingAttachment: null,
   };
 
@@ -702,6 +705,11 @@
         });
         scrollToEnd(true);
         updateHeaderIdentity({ control: payload.control, assigneeName: payload.assignee_name });
+        setClosed(payload.status === "closed");
+        break;
+
+      case "state_changed":
+        setClosed(payload.status === "closed");
         break;
 
       case "control_changed":
@@ -838,8 +846,19 @@
   function updateSendButton() {
     const hasText = dom.input.value.trim().length > 0;
     const connected = state.socket && state.socket.readyState === WebSocket.OPEN;
-    dom.sendButton.disabled = (!hasText && !state.pendingAttachment) || !connected;
+    dom.sendButton.disabled =
+      state.closed || (!hasText && !state.pendingAttachment) || !connected;
     dom.charCount.textContent = `${dom.input.value.length} / ${CHAR_LIMIT}`;
+  }
+
+  /* El equipo puede dar la conversación por resuelta desde su consola. Sin
+     enseñarlo aquí, el cliente seguía con el hilo abierto delante y al escribir
+     la reabría sin que nadie se enterase. */
+  function setClosed(closed) {
+    state.closed = Boolean(closed);
+    dom.closedNotice.hidden = !state.closed;
+    dom.form.hidden = state.closed;
+    updateSendButton();
   }
 
   /* -------------------------------------------------------------- escuchas */
@@ -879,6 +898,33 @@
     const next = WIDTHS[(WIDTHS.indexOf(current) + 1) % WIDTHS.length];
     dom.shell.dataset.width = next;
     localStorage.setItem("chatbox.width", next);
+  });
+
+  dom.newChatButton.addEventListener("click", async () => {
+    dom.newChatButton.disabled = true;
+    try {
+      const respuesta = await fetch("/api/contact/conversations", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+      });
+      if (!respuesta.ok) {
+        throw new Error(await respuesta.text());
+      }
+    } catch (error) {
+      console.warn("No se pudo empezar una conversación nueva", error);
+      dom.newChatButton.disabled = false;
+      return;
+    }
+    // Reconectar es lo que trae el hilo nuevo: el socket vuelve a preguntar
+    // cuál es el vigente y llega su `ready`, ya vacío.
+    setClosed(false);
+    dom.thread.textContent = "";
+    dom.newChatButton.disabled = false;
+    if (state.socket) {
+      state.socket.close();
+    }
+    connect();
   });
 
   dom.resetButton.addEventListener("click", () => {

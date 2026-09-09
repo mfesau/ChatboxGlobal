@@ -1621,6 +1621,7 @@ async def close_conversation(
         by_agent_id=principal.id,
     )
     await _ask_for_a_score(conversation, session, settings, orchestrator)
+    await _publish_state_change(conversation, status="closed")
     return {"status": "ok", "conversation_status": "closed"}
 
 
@@ -1674,6 +1675,9 @@ async def set_conversation_state(
         )
     if target == "closed":
         await _ask_for_a_score(conversation, session, settings, orchestrator)
+    # También al reabrir: el cliente tiene que poder volver a escribir.
+    if target == "closed" or was_closed:
+        await _publish_state_change(conversation, status=target)
 
     log.info(
         "conversation_state_set",
@@ -4339,6 +4343,19 @@ async def _notify_assignment(
             control=conversation.control,
             assignee_name=target.label if target else None,
         )
+
+
+async def _publish_state_change(conversation: Conversation, *, status: str) -> None:
+    """Avisa al chatbox del cliente de que su conversación se cerró o se reabrió.
+
+    Sin esto, marcarla como resuelta no cambiaba nada de lo que el cliente ve:
+    seguía con el hilo abierto delante y podía escribir, reabriéndola sin que
+    nadie se enterara.
+    """
+    await hub.publish(
+        conversation_topic(conversation.channel_conversation_id),
+        {"type": "state_changed", "status": status},
+    )
 
 
 async def _publish_control_change(

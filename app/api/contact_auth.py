@@ -22,7 +22,8 @@ from app.api.deps import (
     SessionDep,
     SettingsDep,
 )
-from app.core.envelope import ChannelKind, ConversationRef
+from app.core import web_thread
+from app.core.envelope import ChannelKind
 from app.core.mailer import send_email, welcome_email_body
 from app.core.security import (
     WeakPasswordError,
@@ -45,30 +46,12 @@ _EXPIRES_IN_S = int(CONTACT_SESSION_TTL.total_seconds())
 #: Identificador de la cuenta de canal del chatbox web. El mismo que pone el
 #: adaptador (ver app/channels/web.py): si no coincidiera, elegir departamento
 #: crearía una conversación distinta de aquella en la que el cliente escribe.
-_WEB_ACCOUNT = "web"
-
-
-def _web_ref(contact: Any) -> ConversationRef:
-    """Referencia del hilo del chatbox de ese contacto.
-
-    El hilo es uno por contacto —no por navegador ni por sesión—, igual que
-    resuelve ``app/api/ws.py`` al abrir el socket.
-    """
-    return ConversationRef(
-        channel=ChannelKind.WEB,
-        channel_conversation_id=str(contact.id),
-        channel_account_id=_WEB_ACCOUNT,
-    )
+_WEB_ACCOUNT = web_thread.WEB_ACCOUNT
 
 
 async def _web_conversation(session: Any, contact: Any) -> Any:
-    """Conversación del chatbox de ese contacto, o ``None`` si aún no escribió."""
-    return await repo.find_conversation(
-        session,
-        tenant_id=contact.tenant_id,
-        channel=ChannelKind.WEB,
-        channel_conversation_id=str(contact.id),
-    )
+    """Hilo vigente del chatbox de ese contacto, o ``None`` si aún no escribió."""
+    return await web_thread.current(session, contact)
 
 
 def _normalise_email(value: str) -> str:
@@ -310,6 +293,50 @@ def _department_out(row: Any) -> dict[str, Any]:
     }
 
 
+@router.post("/conversations", status_code=status.HTTP_201_CREATED)
+async def start_new_conversation(contact: ContactDep, session: SessionDep) -> dict[str, Any]:
+    """Estrena un hilo nuevo para este cliente.
+
+    Solo cuando el anterior está cerrado. Mientras siga abierto, abandonarlo a
+    medias dejaría a quien lo esté atendiendo hablando solo con una
+    conversación que el cliente ya no mira; para eso está seguir escribiendo en
+    el mismo hilo.
+
+    El departamento se hereda: quien ya eligió con qué rama habla no tiene por
+    qué volver a elegir para hacer otra consulta.
+    """
+    anterior = await web_thread.current(session, contact)
+    if anterior is not None and anterior.status != "closed":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="La conversación actual sigue abierta",
+        )
+
+    account = await repo.get_or_create_channel_account(
+        session,
+        tenant_id=contact.tenant_id,
+        channel=ChannelKind.WEB,
+        external_id=_WEB_ACCOUNT,
+    )
+    conversation = await repo.resolve_conversation(
+        session,
+        tenant_id=contact.tenant_id,
+        ref=web_thread.ref_for(web_thread.new_thread_id(contact)),
+        contact_id=contact.id,
+        channel_account=account,
+    )
+    if anterior is not None:
+        conversation.department_id = anterior.department_id
+    await session.flush()
+
+    log.info(
+        "contact_started_new_conversation",
+        contact=str(contact.id),
+        conversation=str(conversation.id),
+    )
+    return {"status": "ok", "conversation_id": str(conversation.id)}
+
+
 @router.get("/departments")
 async def list_contact_departments(
     contact: ContactDep, session: SessionDep
@@ -355,7 +382,7 @@ async def choose_department(
         conversation = await repo.resolve_conversation(
             session,
             tenant_id=contact.tenant_id,
-            ref=_web_ref(contact),
+            ref=web_thread.ref_for(web_thread.first_thread_id(contact)),
             contact_id=contact.id,
             channel_account=account,
         )
