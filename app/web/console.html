@@ -319,6 +319,8 @@
                     data-i18n="admin.tab.hotel">Hotel</button>
             <button type="button" role="tab" data-admin-tab="appearance" aria-selected="false"
                     data-i18n="admin.tab.appearance">Apariencia</button>
+            <button type="button" role="tab" data-admin-tab="knowledge" aria-selected="false"
+                    data-i18n="admin.tab.knowledge">Conocimiento</button>
             <button type="button" role="tab" data-admin-tab="audit" aria-selected="false"
                     data-i18n="admin.tab.audit">Auditoría</button>
           </nav>
@@ -688,6 +690,52 @@
                         data-i18n="brand.save">Guardar color</button>
                 <button type="button" class="ghost-button" id="brand-reset"
                         data-i18n="brand.reset">Volver al color de partida</button>
+              </div>
+            </section>
+          </div>
+
+          <div class="admin-tab-panel" id="admin-tab-knowledge" hidden>
+            <section class="panel">
+              <h3 data-i18n="knowledge.title">Base de conocimiento</h3>
+              <p class="console__muted" data-i18n="knowledge.hint">
+                Lo que suba aquí es lo que el asistente responderá como palabra
+                de la casa. Busca por significado, así que conviene redactarlo
+                en frases completas y no en telegramas.
+              </p>
+              <form id="knowledge-form">
+                <label class="panel__field">
+                  <span data-i18n="knowledge.docTitle">Título</span>
+                  <input type="text" id="knowledge-title" maxlength="200" required />
+                </label>
+                <label class="panel__field">
+                  <span data-i18n="knowledge.department">Departamento</span>
+                  <select id="knowledge-department">
+                    <option value="" data-i18n="knowledge.wholeCompany">Toda la empresa</option>
+                  </select>
+                </label>
+                <label class="panel__field">
+                  <span data-i18n="knowledge.text">Contenido</span>
+                  <textarea id="knowledge-text" rows="8"
+                            data-i18n-placeholder="knowledge.textPlaceholder"></textarea>
+                </label>
+                <label class="panel__field">
+                  <span data-i18n="knowledge.file">…o un fichero (.txt, .md, .pdf)</span>
+                  <input type="file" id="knowledge-file" accept=".txt,.md,.pdf" />
+                </label>
+                <button type="submit" class="send-button" data-i18n="knowledge.add">Añadir</button>
+              </form>
+              <div class="table-scroll">
+                <table class="data-table" id="knowledge-table">
+                  <thead>
+                    <tr>
+                      <th data-i18n="knowledge.docTitle">Título</th>
+                      <th data-i18n="table.department">Departamento</th>
+                      <th data-i18n="knowledge.chunks">Fragmentos</th>
+                      <th data-i18n="table.actions">Acciones</th>
+                    </tr>
+                  </thead>
+                  <tbody></tbody>
+                </table>
               </div>
             </section>
           </div>

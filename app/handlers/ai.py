@@ -20,7 +20,7 @@ from typing import Any, ClassVar
 from google import genai
 from google.genai import errors as genai_errors
 
-from app.core import hotel_booking
+from app.core import hotel_booking, knowledge
 from app.core.envelope import Direction
 from app.core.hub import conversation_topic, hub, inbox_topic
 from app.core.pipeline import Handler, NextFn, TurnContext
@@ -51,6 +51,33 @@ HANDOFF_TOOL: dict[str, Any] = {
             },
         },
         "required": ["motivo", "urgencia"],
+        "additionalProperties": False,
+    },
+    "strict": True,
+}
+
+BUSCAR_CONOCIMIENTO_TOOL: dict[str, Any] = {
+    "name": "buscar_en_base_de_conocimiento",
+    "description": (
+        "Busca en la documentación interna de la empresa —normas, tarifas, "
+        "preguntas frecuentes, procedimientos— los pasajes que responden a una "
+        "pregunta. Úsala SIEMPRE que te pregunten algo propio de esta empresa "
+        "en vez de contestar de memoria, y responde solo con lo que devuelva. "
+        "Si no devuelve nada útil, dilo y ofrece derivar a un agente."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "pregunta": {
+                "type": "string",
+                "description": (
+                    "Lo que hay que averiguar, redactado como una pregunta "
+                    "completa. La búsqueda es por significado, así que conviene "
+                    "una frase entera antes que dos palabras sueltas."
+                ),
+            }
+        },
+        "required": ["pregunta"],
         "additionalProperties": False,
     },
     "strict": True,
@@ -194,13 +221,21 @@ class AIHandler(Handler):
         común: no hay una rama de negocio concreta a la que ofrecer un módulo,
         así que no se agrega ninguna herramienta extra.
         """
+        tools: list[dict[str, Any]] = []
+
+        # La base de conocimiento no depende del departamento: los documentos
+        # de toda la empresa valen en cualquier rama. Se ofrece solo si hay
+        # algo dentro, para no invitar al modelo a buscar en el vacío.
+        if await repo.tenant_has_knowledge(ctx.session, tenant_id=ctx.tenant.id):
+            tools.append(BUSCAR_CONOCIMIENTO_TOOL)
+
         department_id = ctx.conversation.department_id
         if department_id is None:
-            return []
+            return tools
         department = await repo.get_department(ctx.session, department_id)
         if department is None or not repo.hotel_module_enabled(department):
-            return []
-        return hotel_booking.HOTEL_TOOLS
+            return tools
+        return [*tools, *hotel_booking.HOTEL_TOOLS]
 
     @staticmethod
     def _describe_non_text(row: Any) -> str:
@@ -337,10 +372,52 @@ class AIHandler(Handler):
             )
             return "Derivación registrada. Un agente humano atenderá la conversación."
 
+        if name == "buscar_en_base_de_conocimiento":
+            return await self._search_knowledge(ctx, arguments)
+
         hotel_result = await hotel_booking.dispatch(ctx, name, arguments)
         if hotel_result is not None:
             return hotel_result
         raise ValueError(f"Herramienta desconocida: {name}")
+
+    async def _search_knowledge(self, ctx: TurnContext, arguments: dict[str, Any]) -> str:
+        """Devuelve los pasajes que responden a la pregunta, ya con su origen.
+
+        Cada pasaje va encabezado por el título de su documento para que el
+        modelo pueda citarlo: «según las condiciones de reserva…» ayuda mucho
+        más a quien pregunta que una afirmación sin respaldo.
+        """
+        pregunta = (arguments.get("pregunta") or "").strip()
+        if not pregunta:
+            return "No se indicó qué buscar."
+
+        try:
+            pasajes = await knowledge.search(
+                ctx.session,
+                settings=self.settings,
+                tenant_id=ctx.tenant.id,
+                department_id=ctx.conversation.department_id,
+                query=pregunta,
+            )
+        except knowledge.KnowledgeError as exc:
+            log.warning("knowledge_search_unavailable", error=str(exc))
+            return "La base de conocimiento no está disponible en este momento."
+
+        if not pasajes:
+            return (
+                "La documentación interna no dice nada sobre eso. No inventes una "
+                "respuesta: reconócelo y ofrece derivar la conversación a un agente."
+            )
+
+        # Los identificadores se dejan anotados en el turno para que queden en
+        # `ai_runs` junto con el consumo: así se puede reconstruir en qué se
+        # apoyó una respuesta concreta.
+        ctx.scratch.setdefault("knowledge_chunks", []).extend(
+            str(pasaje.chunk_id) for pasaje in pasajes
+        )
+        return "\n\n---\n\n".join(
+            f"[{pasaje.title}]\n{pasaje.content}" for pasaje in pasajes
+        )
 
     async def _record_error(self, ctx: TurnContext, error: str, started: float) -> None:
         log.warning("ai_call_failed", error=error[:300])

@@ -52,6 +52,7 @@ from app.db.models import (
     HotelRoomType,
     InboundDedupe,
     InternalNote,
+    KnowledgeDocument,
     Label,
     Macro,
     Message,
@@ -1230,6 +1231,24 @@ async def record_audit(
             detail=detail or {},
         )
     )
+
+
+async def tenant_has_knowledge(session: AsyncSession, *, tenant_id: uuid.UUID) -> bool:
+    """Indica si el inquilino tiene algún documento activo en la base.
+
+    Lo consulta el asistente antes de ofrecerle al modelo la herramienta de
+    búsqueda: sin documentos, ofrecerla solo lo invitaría a buscar en el vacío
+    y a gastar una vuelta del bucle en nada.
+    """
+    found = await session.execute(
+        select(KnowledgeDocument.id)
+        .where(
+            KnowledgeDocument.tenant_id == tenant_id,
+            KnowledgeDocument.is_active.is_(True),
+        )
+        .limit(1)
+    )
+    return found.scalar_one_or_none() is not None
 
 
 async def list_audit(

@@ -349,6 +349,27 @@
       "chat.customerNamed": "Cliente {name}",
       "common.close": "Cerrar",
       "common.save": "Guardar",
+      "common.delete": "Eliminar",
+
+      // --- Base de conocimiento ---
+      "admin.tab.knowledge": "Conocimiento",
+      "knowledge.title": "Base de conocimiento",
+      "knowledge.hint":
+        "Lo que suba aquí es lo que el asistente responderá como palabra de la casa. Busca por significado, así que conviene redactarlo en frases completas y no en telegramas.",
+      "knowledge.docTitle": "Título",
+      "knowledge.department": "Departamento",
+      "knowledge.wholeCompany": "Toda la empresa",
+      "knowledge.text": "Contenido",
+      "knowledge.textPlaceholder":
+        "Escriba aquí las normas, tarifas o preguntas frecuentes, separadas por párrafos…",
+      "knowledge.file": "…o un fichero (.txt, .md, .pdf)",
+      "knowledge.add": "Añadir",
+      "knowledge.chunks": "Fragmentos",
+      "knowledge.needContent": "Escriba un contenido o elija un fichero.",
+      "knowledge.working": "Procesando el documento…",
+      "knowledge.added": "Documento añadido a la base de conocimiento.",
+      "knowledge.confirmDelete":
+        "Se eliminará «{title}» y el asistente dejará de poder consultarlo. ¿Continuar?",
       "admin.passwordHint": "Supervisión y administración reciben una contraseña generada automáticamente, enviada por correo de invitación.",
       "admin.usersTableHint": "El nombre, el departamento principal, los adicionales y la contraseña se guardan juntos con un solo «Guardar» por fila. Dejar la contraseña en blanco la conserva sin cambios.",
       "table.name": "Nombre",
@@ -856,6 +877,26 @@
       "chat.customerNamed": "Customer {name}",
       "common.close": "Close",
       "common.save": "Save",
+      "common.delete": "Delete",
+
+      "admin.tab.knowledge": "Knowledge",
+      "knowledge.title": "Knowledge base",
+      "knowledge.hint":
+        "Whatever you add here is what the assistant will answer as the house position. It searches by meaning, so write full sentences rather than notes.",
+      "knowledge.docTitle": "Title",
+      "knowledge.department": "Department",
+      "knowledge.wholeCompany": "Whole company",
+      "knowledge.text": "Content",
+      "knowledge.textPlaceholder":
+        "Write the policies, rates or frequently asked questions here, one per paragraph…",
+      "knowledge.file": "…or a file (.txt, .md, .pdf)",
+      "knowledge.add": "Add",
+      "knowledge.chunks": "Fragments",
+      "knowledge.needContent": "Write some content or choose a file.",
+      "knowledge.working": "Processing the document…",
+      "knowledge.added": "Document added to the knowledge base.",
+      "knowledge.confirmDelete":
+        "This removes “{title}” and the assistant will no longer be able to consult it. Continue?",
       "admin.passwordHint": "Supervision and administration receive an automatically generated password, sent by invitation email.",
       "admin.usersTableHint": "The name, main department, extra departments and password are saved together with a single “Save” per row. Leaving the password blank keeps it unchanged.",
       "table.name": "Name",
@@ -1364,6 +1405,26 @@
       "chat.customerNamed": "Kunde {name}",
       "common.close": "Schließen",
       "common.save": "Speichern",
+      "common.delete": "Löschen",
+
+      "admin.tab.knowledge": "Wissen",
+      "knowledge.title": "Wissensbasis",
+      "knowledge.hint":
+        "Was Sie hier hinterlegen, antwortet der Assistent als verbindliche Auskunft des Hauses. Er sucht nach Bedeutung, schreiben Sie also ganze Sätze statt Stichworte.",
+      "knowledge.docTitle": "Titel",
+      "knowledge.department": "Abteilung",
+      "knowledge.wholeCompany": "Gesamtes Unternehmen",
+      "knowledge.text": "Inhalt",
+      "knowledge.textPlaceholder":
+        "Regeln, Preise oder häufige Fragen hier eintragen, je Absatz eine…",
+      "knowledge.file": "…oder eine Datei (.txt, .md, .pdf)",
+      "knowledge.add": "Hinzufügen",
+      "knowledge.chunks": "Fragmente",
+      "knowledge.needContent": "Schreiben Sie einen Inhalt oder wählen Sie eine Datei.",
+      "knowledge.working": "Dokument wird verarbeitet…",
+      "knowledge.added": "Dokument zur Wissensbasis hinzugefügt.",
+      "knowledge.confirmDelete":
+        "„{title}“ wird entfernt und der Assistent kann es nicht mehr abfragen. Fortfahren?",
       "admin.passwordHint": "Aufsicht und Verwaltung erhalten ein automatisch erzeugtes Passwort, das per Einladungs-E-Mail zugestellt wird.",
       "admin.usersTableHint": "Name, Hauptabteilung, zusätzliche Abteilungen und Passwort werden gemeinsam mit einem einzigen „Speichern“ pro Zeile gesichert. Bleibt das Passwort leer, wird es nicht geändert.",
       "table.name": "Name",

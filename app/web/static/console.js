@@ -207,6 +207,12 @@
     hotelReservationNotes: document.getElementById("hotel-reservation-notes"),
     hotelStatusFilter: document.getElementById("hotel-status-filter"),
     hotelReservationsTable: document.querySelector("#hotel-reservations-table tbody"),
+    knowledgeForm: document.getElementById("knowledge-form"),
+    knowledgeTitle: document.getElementById("knowledge-title"),
+    knowledgeDepartment: document.getElementById("knowledge-department"),
+    knowledgeText: document.getElementById("knowledge-text"),
+    knowledgeFile: document.getElementById("knowledge-file"),
+    knowledgeTable: document.querySelector("#knowledge-table tbody"),
     auditActor: document.getElementById("audit-actor"),
     auditAction: document.getElementById("audit-action"),
     auditSince: document.getElementById("audit-since"),
@@ -3389,8 +3395,122 @@
       if (tab.dataset.adminTab === "audit") {
         loadAudit({ reset: true });
       }
+      if (tab.dataset.adminTab === "knowledge") {
+        loadKnowledge();
+      }
     }),
   );
+
+  /* --------------------------------------------- base de conocimiento */
+
+  async function loadKnowledge() {
+    // El desplegable se rellena con los departamentos ya cargados; «toda la
+    // empresa» queda como primera opción, que es el caso más común.
+    dom.knowledgeDepartment.replaceChildren();
+    const todos = document.createElement("option");
+    todos.value = "";
+    todos.textContent = i18n.t("knowledge.wholeCompany");
+    dom.knowledgeDepartment.appendChild(todos);
+    for (const department of state.departments) {
+      const option = document.createElement("option");
+      option.value = department.id;
+      option.textContent = department.name;
+      dom.knowledgeDepartment.appendChild(option);
+    }
+
+    let documents;
+    try {
+      documents = await api("/api/knowledge/documents");
+    } catch (error) {
+      showAdminError(error.message);
+      return;
+    }
+
+    dom.knowledgeTable.replaceChildren();
+    for (const document_ of documents) {
+      const row = document.createElement("tr");
+      const department = state.departments.find((d) => d.id === document_.department_id);
+      for (const value of [
+        document_.title,
+        department ? department.name : i18n.t("knowledge.wholeCompany"),
+        String(document_.chunk_count),
+      ]) {
+        const cell = document.createElement("td");
+        cell.textContent = value;
+        row.appendChild(cell);
+      }
+
+      const actions = document.createElement("td");
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "ghost-button";
+      remove.textContent = i18n.t("common.delete");
+      remove.addEventListener("click", async () => {
+        if (!window.confirm(i18n.t("knowledge.confirmDelete", { title: document_.title }))) {
+          return;
+        }
+        try {
+          await api(`/api/knowledge/documents/${document_.id}`, { method: "DELETE" });
+          await loadKnowledge();
+        } catch (error) {
+          showAdminError(error.message);
+        }
+      });
+      actions.appendChild(remove);
+      row.appendChild(actions);
+      dom.knowledgeTable.appendChild(row);
+    }
+  }
+
+  dom.knowledgeForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    showAdminError("");
+    const title = dom.knowledgeTitle.value.trim();
+    const text = dom.knowledgeText.value.trim();
+    const file = dom.knowledgeFile.files[0];
+    if (!file && !text) {
+      showAdminError(i18n.t("knowledge.needContent"));
+      return;
+    }
+
+    setStatus(i18n.t("knowledge.working"));
+    try {
+      if (file) {
+        // Con fichero va como formulario: `api()` fija Content-Type a JSON y
+        // aquí lo tiene que poner el navegador, con su separador de partes.
+        const body = new FormData();
+        body.append("file", file);
+        if (title) {
+          body.append("title", title);
+        }
+        if (dom.knowledgeDepartment.value) {
+          body.append("department_id", dom.knowledgeDepartment.value);
+        }
+        const response = await fetch("/api/knowledge/documents/upload", {
+          method: "POST",
+          credentials: "same-origin",
+          body,
+        });
+        if (!response.ok) {
+          throw new Error(extractDetail(await response.text(), response.status));
+        }
+      } else {
+        await api("/api/knowledge/documents", {
+          method: "POST",
+          body: JSON.stringify({
+            title,
+            text,
+            department_id: dom.knowledgeDepartment.value || null,
+          }),
+        });
+      }
+      dom.knowledgeForm.reset();
+      await loadKnowledge();
+      setStatus(i18n.t("knowledge.added"));
+    } catch (error) {
+      showAdminError(error.message);
+    }
+  });
 
   /* ------------------------------------------------ traza de auditoría */
 

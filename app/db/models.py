@@ -18,6 +18,7 @@ import uuid
 from datetime import date, datetime
 from typing import Any
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     JSON,
     Boolean,
@@ -50,6 +51,16 @@ from app.core.envelope import (
 
 #: ``JSONB`` en Postgres, ``JSON`` en SQLite (pruebas).
 JSONBType = JSONB().with_variant(JSON(), "sqlite")
+
+#: Dimensiones del vector de significado. Es lo que se le pide a
+#: ``gemini-embedding-001`` en ``app/core/knowledge.py``; cambiarlo obliga a
+#: recalcular todo lo guardado, así que los dos sitios deben coincidir.
+EMBEDDING_DIMENSIONS = 768
+
+#: ``vector`` en Postgres —con sus operadores de distancia y su índice— y una
+#: lista JSON corriente en SQLite, donde la extensión no existe. La búsqueda
+#: tiene su propia rama por dialecto (ver ``app/core/knowledge.py``).
+VectorType = Vector(EMBEDDING_DIMENSIONS).with_variant(JSON(), "sqlite")
 
 
 def _enum(python_enum: type, name: str) -> SAEnum:
@@ -1031,3 +1042,69 @@ class HotelReservation(Base, TimestampMixin):
     room: Mapped[HotelRoom] = relationship()
     contact: Mapped[Contact | None] = relationship()
     conversation: Mapped[Conversation | None] = relationship()
+
+
+# --------------------------------------------------------------------------- #
+# Base de conocimiento del asistente
+# --------------------------------------------------------------------------- #
+class KnowledgeDocument(Base, TimestampMixin):
+    """Documento que administración sube para que el asistente lo consulte.
+
+    El fichero original no se guarda: lo que sirve para responder son sus
+    trozos con el vector calculado, y conservar además el PDF entero solo
+    ocuparía sitio. Lo que sí queda es el nombre, para que en la consola se
+    reconozca qué se subió.
+    """
+
+    __tablename__ = "kb_documents"
+    __table_args__ = (Index("ix_kb_documents_tenant", "tenant_id", "department_id"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=new_id)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False
+    )
+    #: Nulo = vale para toda la empresa. Con departamento, solo el asistente de
+    #: esa rama lo consulta: las tarifas del hotel no ayudan en soporte técnico.
+    department_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("departments.id", ondelete="CASCADE")
+    )
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    #: ``text`` | ``markdown`` | ``pdf``
+    source_type: Mapped[str] = mapped_column(String(16), default="text", nullable=False)
+    filename: Mapped[str | None] = mapped_column(String(255))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    #: En cuántos trozos quedó. Se guarda para no contarlos en cada listado.
+    chunk_count: Mapped[int] = mapped_column(
+        Integer, default=0, nullable=False, server_default=text("0")
+    )
+    created_by: Mapped[str | None] = mapped_column(String(160))
+
+    chunks: Mapped[list[KnowledgeChunk]] = relationship(
+        back_populates="document", cascade="all, delete-orphan"
+    )
+    department: Mapped[Department | None] = relationship()
+
+
+class KnowledgeChunk(Base):
+    """Fragmento de un documento con su vector de significado."""
+
+    __tablename__ = "kb_chunks"
+    __table_args__ = (Index("ix_kb_chunks_document", "document_id", "ord"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=new_id)
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("kb_documents.id", ondelete="CASCADE"), nullable=False
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False
+    )
+    #: Posición dentro del documento, para poder recomponer el orden de lectura.
+    ord: Mapped[int] = mapped_column(Integer, nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    #: Nulo mientras no se haya calculado —o si no hay clave de IA configurada—.
+    embedding: Mapped[Any | None] = mapped_column(VectorType)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now(), nullable=False
+    )
+
+    document: Mapped[KnowledgeDocument] = relationship(back_populates="chunks")

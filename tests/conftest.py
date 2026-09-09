@@ -29,7 +29,11 @@ os.environ["IMAP_POLL_INTERVAL_S"] = "0"
 # de las pruebas y estas dejarían de ser reproducibles.
 for _isolated in (
     "ADMIN_API_KEY",
-    "ANTHROPIC_API_KEY",
+    # Al pasar el asistente de Claude a Gemini se cambió la clave en la
+    # aplicación pero no aquí, de modo que la del entorno del desarrollador
+    # llegaba entera a las pruebas: la base de conocimiento salía a la red de
+    # verdad, con su factura.
+    "GOOGLE_API_KEY",
     "WHATSAPP_VERIFY_TOKEN",
     "WHATSAPP_APP_SECRET",
     "WHATSAPP_ACCESS_TOKEN",
