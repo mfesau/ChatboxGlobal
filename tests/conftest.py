@@ -22,6 +22,11 @@ os.environ["LOG_LEVEL"] = "WARNING"
 os.environ["OUTBOX_WORKERS"] = "1"
 # El recogedor de correo no debe salir a la red durante las pruebas.
 os.environ["IMAP_POLL_INTERVAL_S"] = "0"
+# El transporte ASGI de las pruebas habla `http`, así que una cookie marcada
+# `Secure` no se guardaría y ninguna sesión sobreviviría a la primera petición.
+# Se fija aquí y no se hereda del `.env`: una instalación con TLS delante lo
+# tiene en `true`, y eso no debe cambiar el resultado de la batería.
+os.environ["SESSION_COOKIE_SECURE"] = "false"
 
 # Aislamiento del `.env` del desarrollador: las variables de entorno tienen
 # precedencia sobre el fichero, y la configuración descarta los valores vacíos.

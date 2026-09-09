@@ -1389,8 +1389,23 @@ integraciones.
 ## 12. Consideraciones antes de producción
 
 - **TLS.** Sobre HTTP, tanto la contraseña del agente como la cookie de sesión
-  viajan en claro por la red local. El perfil `tls` de Compose pone nginx
-  delante con certificado —basta uno interno—; ver «Paso 5 — TLS con nginx».
+  viajan en claro por la red local. Hay dos maneras de resolverlo: el perfil
+  `tls` de Compose, que pone nginx dentro de Docker con un certificado —basta
+  uno interno—, o un proxy inverso ya montado en el propio servidor. **Son
+  excluyentes**: los dos quieren los puertos 80 y 443.
+- **El puerto 8000 no debe publicarse en la red** cuando hay un proxy delante.
+  Con `- "8000:8000"` cualquiera del segmento entra por HTTP directo y se salta
+  el certificado, sea cual sea el proxy. El `docker-compose.yml` lo publica solo
+  en el bucle local; el proxy tiene entonces que apuntar a `127.0.0.1:8000` y no
+  a la dirección de red del servidor.
+- **`FORWARDED_ALLOW_IPS`.** Lo lee uvicorn, no la aplicación. Sin él solo se
+  fía de `127.0.0.1`, de modo que las cabeceras `X-Forwarded-*` del proxy se
+  descartan en silencio y el servicio cree que todo llega por `http` aunque el
+  navegador use `https`. `*` solo es seguro cuando el puerto ya no está
+  publicado a la red; si lo está, ponga la dirección concreta del proxy.
+- **`SESSION_COOKIE_SECURE=true` en cuanto haya TLS.** Sin ello la cookie de
+  sesión se entrega también por HTTP, que es justo lo que el certificado venía a
+  evitar.
 - **Secretos.** `.env` sirve para desarrollo. En producción, inyecte las
   credenciales desde un gestor de secretos; el código nunca las registra.
 - **Escala horizontal.** El bus de [hub.py](app/core/hub.py) reside en memoria y

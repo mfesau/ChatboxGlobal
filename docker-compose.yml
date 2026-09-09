@@ -44,10 +44,12 @@ services:
       # Sin este volumen, reconstruir la imagen borraría las imágenes subidas.
       - uploads-data:/app/uploads
     ports:
-      # Con el proxy inverso delante (perfil `tls`), cambie esto por
-      # "127.0.0.1:8000:8000": el equipo entra por HTTPS y nadie de la red
-      # puede saltarse el certificado hablando HTTP directo con la API.
-      - "8000:8000"
+      # Solo el bucle local: delante hay un proxy inverso que termina TLS, y
+      # publicar el puerto en toda la red dejaba entrar por HTTP directo a
+      # cualquiera del segmento, saltándose el certificado. Quien no tenga
+      # proxy delante y sirva en una red local de confianza puede volver a
+      # "8000:8000".
+      - "127.0.0.1:8000:8000"
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://localhost:8000/health')\""]
       interval: 15s
