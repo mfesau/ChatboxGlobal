@@ -72,6 +72,13 @@ def asset_version() -> str:
     return f"{max(stamps, default=0):x}"
 
 
+#: Las páginas llevan dentro la huella de los estáticos, de modo que el
+#: navegador tiene que volver a pedirlas para enterarse de que hay versión
+#: nueva. Sin esto, una pestaña abierta puede seguir cargando el JavaScript
+#: viejo indefinidamente y quien la tiene delante ve fallos ya corregidos.
+PAGE_CACHE_HEADERS = {"Cache-Control": "no-cache, must-revalidate"}
+
+
 @lru_cache(maxsize=16)
 def render_page(name: str) -> str:
     """Sirve una plantilla con la huella de los estáticos sustituida."""
@@ -209,7 +216,9 @@ def create_app() -> FastAPI:
 
         @application.get("/", include_in_schema=False)
         async def chatbox_page() -> HTMLResponse:
-            return HTMLResponse(await render_branded_page("index.html"))
+            return HTMLResponse(
+                await render_branded_page("index.html"), headers=PAGE_CACHE_HEADERS
+            )
 
         @application.get("/console", include_in_schema=False)
         async def console_page() -> HTMLResponse:
@@ -218,12 +227,14 @@ def create_app() -> FastAPI:
             Una sola página que se adapta según el rol de la sesión, ya
             autenticada: no hace falta elegir de antemano cuál URL visitar.
             """
-            return HTMLResponse(await render_branded_page("console.html"))
+            return HTMLResponse(
+                await render_branded_page("console.html"), headers=PAGE_CACHE_HEADERS
+            )
 
         @application.get("/privacy", include_in_schema=False)
         async def privacy_page() -> HTMLResponse:
             """Política de privacidad exigida por Meta para el registro de la app."""
-            return HTMLResponse(render_page("privacy.html"))
+            return HTMLResponse(render_page("privacy.html"), headers=PAGE_CACHE_HEADERS)
 
     # Los adjuntos NO se sirven como estáticos: cada descarga comprueba que
     # quien la pide puede ver la conversación que contiene el fichero.
