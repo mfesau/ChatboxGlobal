@@ -203,6 +203,23 @@ async def list_channel_accounts(
     return list((await session.execute(stmt)).scalars())
 
 
+async def list_channel_accounts_of_kind(
+    session: AsyncSession, *, channel: ChannelKind
+) -> list[ChannelAccount]:
+    """Cuentas activas de un canal, de todos los inquilinos.
+
+    La usa el recogedor de correo, que no atiende una petición de nadie: va por
+    su cuenta a mirar los buzones y no tiene inquilino de contexto, igual que
+    ``list_channel_credential_blobs`` no lo tiene al comprobar una firma.
+    """
+    stmt = (
+        select(ChannelAccount)
+        .where(ChannelAccount.channel == channel, ChannelAccount.is_active.is_(True))
+        .order_by(ChannelAccount.external_id)
+    )
+    return list((await session.execute(stmt)).scalars())
+
+
 async def list_channel_credential_blobs(
     session: AsyncSession, *, channel: ChannelKind
 ) -> list[str]:

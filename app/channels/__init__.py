@@ -6,6 +6,7 @@ nuevo, añada aquí su importación.
 """
 
 from app.channels import (  # noqa: F401  (registro por efecto lateral)
+    email,
     facebook,
     msbot,
     telegram,

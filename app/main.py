@@ -38,6 +38,7 @@ from app.channels.base import ChannelRegistry
 from app.config import get_settings
 from app.core.branding import brand_css, read_accent
 from app.core.dispatcher import OutboxDispatcher
+from app.core.mail_poller import MailPoller
 from app.core.orchestrator import Orchestrator
 from app.db import repositories as repo
 from app.db.engine import dispose_engine, init_engine, session_scope
@@ -125,14 +126,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     orchestrator = Orchestrator(settings=settings, registry=registry, pipeline=pipeline)
     dispatcher = OutboxDispatcher(settings=settings, registry=registry)
     orchestrator.on_enqueued = dispatcher.kick
+    # El correo no avisa: no hay webhook, hay que ir a mirar el buzón.
+    mail_poller = MailPoller(settings=settings, orchestrator=orchestrator)
 
     app.state.settings = settings
     app.state.registry = registry
     app.state.pipeline = pipeline
     app.state.orchestrator = orchestrator
     app.state.dispatcher = dispatcher
+    app.state.mail_poller = mail_poller
 
     await dispatcher.start()
+    await mail_poller.start()
     log.info(
         "application_started",
         environment=settings.environment,
@@ -141,6 +146,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
+        await mail_poller.stop()
         await dispatcher.stop()
         await registry.aclose()
         await dispose_engine()

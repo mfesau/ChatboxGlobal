@@ -20,6 +20,8 @@ os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_DB_FILE.as_posix()}"
 os.environ["ENVIRONMENT"] = "dev"
 os.environ["LOG_LEVEL"] = "WARNING"
 os.environ["OUTBOX_WORKERS"] = "1"
+# El recogedor de correo no debe salir a la red durante las pruebas.
+os.environ["IMAP_POLL_INTERVAL_S"] = "0"
 
 # Aislamiento del `.env` del desarrollador: las variables de entorno tienen
 # precedencia sobre el fichero, y la configuración descarta los valores vacíos.

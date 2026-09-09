@@ -167,6 +167,11 @@ class Settings(BaseSettings):
     #: Remitente que ve quien recibe el correo. Por omisión, la propia cuenta.
     smtp_from_email: str | None = None
     smtp_use_tls: bool = True
+    #: Cada cuántos segundos se mira el correo entrante de los buzones dados de
+    #: alta como canal. El correo no avisa: no hay webhook, hay que ir a mirar.
+    #: ``0`` apaga la recogida sin desconectar nada más —útil cuando el buzón se
+    #: consulta desde otro sitio o mientras se depura—.
+    imap_poll_interval_s: int = 120
 
     @property
     def smtp_enabled(self) -> bool:
