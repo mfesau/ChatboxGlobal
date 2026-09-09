@@ -15,13 +15,13 @@ esqueleto: que hubo una conversación, por qué canal, cuándo y quién la atend
 from __future__ import annotations
 
 from datetime import datetime
-from pathlib import Path
 from typing import Any
 
 from sqlalchemy import delete, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
+from app.core.storage import resolve_upload
 from app.db.models import (
     Contact,
     ContactComment,
@@ -317,21 +317,16 @@ def _delete_attachments(attachments: Any, *, settings: Settings) -> int:
     """
     if not isinstance(attachments, list):
         return 0
-    root = Path(settings.uploads_dir).resolve()
     removed = 0
     for entry in attachments:
-        url = entry.get("url") if isinstance(entry, dict) else None
-        if not url or not url.startswith("/uploads/"):
+        if not isinstance(entry, dict):
             continue
-        candidate = (root / url[len("/uploads/"):]).resolve()
-        # El fichero tiene que caer dentro del directorio de subidas. La ruta
-        # sale de la base de datos y no de una petición, pero comprobarlo cuesta
-        # una línea y evita que un dato torcido borre algo de fuera.
-        if not candidate.is_relative_to(root) or not candidate.is_file():
+        fichero = resolve_upload(entry.get("url"), settings=settings)
+        if fichero is None:
             continue
         try:
-            candidate.unlink()
+            fichero.unlink()
             removed += 1
         except OSError as error:  # pragma: no cover - depende del sistema de ficheros
-            log.warning("attachment_delete_failed", path=str(candidate), error=str(error))
+            log.warning("attachment_delete_failed", path=str(fichero), error=str(error))
     return removed

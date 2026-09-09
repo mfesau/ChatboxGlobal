@@ -14,6 +14,7 @@ que cambiar de proveedor no obligue a reescribir cada módulo de negocio.
 
 from __future__ import annotations
 
+import base64
 import json
 import time
 from dataclasses import dataclass
@@ -26,6 +27,7 @@ from app.core import hotel_booking, knowledge
 from app.core.envelope import Direction
 from app.core.hub import conversation_topic, hub, inbox_topic
 from app.core.pipeline import Handler, NextFn, TurnContext
+from app.core.storage import resolve_upload
 from app.db import repositories as repo
 from app.logging_setup import get_logger
 
@@ -112,6 +114,50 @@ def _parse_arguments(raw: str, *, name: str | None = None) -> dict[str, Any]:
     return cargado if isinstance(cargado, dict) else {}
 
 
+class StreamError(RuntimeError):
+    """El proveedor cortó el flujo con un error en lugar de una respuesta.
+
+    No llega como excepción sino como un evento más del flujo, así que sin
+    mirarlo el turno acababa con texto vacío y el mismo aspecto que «el modelo
+    no tuvo nada que decir»: el usuario recibía la disculpa genérica y no
+    quedaba rastro ni en el log ni en ``ai_runs``.
+    """
+
+    def __init__(self, code: str | None, message: str) -> None:
+        super().__init__(message)
+        self.code = code or "stream_error"
+
+
+#: Qué clase de contenido de la API corresponde a cada tipo MIME guardado.
+#: Es una lista cerrada y no un `startswith`: el modelo rechaza la petición
+#: entera si le llega un formato que no admite, y perder el turno por un audio
+#: exótico sería peor que describirlo con palabras.
+MEDIA_KINDS: dict[str, str] = {
+    "image/jpeg": "image",
+    "image/png": "image",
+    "image/webp": "image",
+    "image/gif": "image",
+    "application/pdf": "document",
+    "audio/mpeg": "audio",
+    "audio/mp4": "audio",
+    "audio/ogg": "audio",
+    "audio/wav": "audio",
+    "video/mp4": "video",
+    "video/webm": "video",
+    "video/quicktime": "video",
+}
+
+#: Cuántos mensajes recientes pueden aportar sus ficheros. Quien manda una foto
+#: y pregunta por ella en el mensaje siguiente tiene que seguir siendo
+#: entendido; el historial entero, en cambio, multiplicaría el coste de cada
+#: turno por todas las fotos que alguien haya mandado nunca.
+MEDIA_HISTORY_DEPTH = 4
+
+#: Tope por fichero y del conjunto. El modelo cobra por lo que se le manda, y
+#: una petición demasiado grande la rechaza de todos modos.
+MEDIA_MAX_BYTES = 5 * 1024 * 1024
+MEDIA_TOTAL_BYTES = 10 * 1024 * 1024
+
 #: Cota superior de vueltas del bucle de herramientas; evita bucles infinitos.
 MAX_TOOL_ITERATIONS = 3
 
@@ -138,7 +184,10 @@ class AIHandler(Handler):
             log.debug("ai_handler_disabled", reason="sin GOOGLE_API_KEY")
             await next_()
             return
-        if not ctx.text and not ctx.inbound.action:
+        # Un mensaje que solo trae una foto no tiene texto ni interacción, y
+        # es justo el que hay que mirar: sin esta condición el asistente lo
+        # dejaba pasar de largo.
+        if not ctx.text and not ctx.inbound.action and not ctx.inbound.attachments:
             await next_()
             return
 
@@ -164,6 +213,18 @@ class AIHandler(Handler):
             return
         except (genai_errors.ServerError, genai_errors.APIError) as exc:
             await self._record_error(ctx, str(exc), started)
+            await next_()
+            return
+        except StreamError as exc:
+            await self._record_error(ctx, f"{exc.code}: {exc}", started)
+            # El cupo agotado se le cuenta a quien escribe, porque se arregla
+            # solo esperando; lo demás es cosa nuestra y no se explica.
+            if exc.code in {"quota_exceeded", "rate_limit_exceeded"}:
+                ctx.reply(
+                    "Estamos atendiendo muchas consultas en este momento. "
+                    "Inténtelo de nuevo en unos segundos, por favor."
+                )
+                return
             await next_()
             return
 
@@ -212,36 +273,100 @@ class AIHandler(Handler):
         ``model_output`` lo que respondió el asistente. Los turnos seguidos del
         mismo lado se funden en uno, y se garantiza que el primero y el último
         sean del usuario: es a lo último que dijo a lo que hay que contestar.
+
+        Los ficheros de los mensajes recientes viajan con ellos, de modo que el
+        modelo ve la foto en lugar de leer que hubo una. Los antiguos se siguen
+        describiendo con palabras: mandarlo todo en cada turno multiplicaría el
+        coste por cada imagen que alguien haya enviado nunca.
         """
         if ctx.scratch.get("skip_history"):
             history = [ctx.stored_message]
         else:
             history = ctx.history[-self.settings.ai_history_turns :]
 
-        def paso(tipo: str, texto: str) -> dict[str, Any]:
-            return {"type": tipo, "content": [{"type": "text", "text": texto}]}
+        adjuntables = self._media_by_message(history)
+
+        def paso(tipo: str, contenido: list[dict[str, Any]]) -> dict[str, Any]:
+            return {"type": tipo, "content": contenido}
 
         def texto_de(step: dict[str, Any]) -> str:
+            # El texto es siempre la primera parte; los ficheros van detrás.
             return step["content"][0]["text"]
 
         messages: list[dict[str, Any]] = []
         for row in history:
+            media = adjuntables.get(row.id, [])
             content = (row.text or "").strip()
             if not content:
-                content = self._describe_non_text(row)
-            if not content:
-                continue
+                # Con el fichero delante, el modelo ya ve de qué se trata; sin
+                # él hace falta contarlo, o el turno llegaría vacío.
+                content = "" if media else self._describe_non_text(row)
+                if not content and not media:
+                    continue
             tipo = "user_input" if row.direction is Direction.INBOUND else "model_output"
-            if messages and messages[-1]["type"] == tipo:
-                messages[-1]["content"][0]["text"] = f"{texto_de(messages[-1])}\n{content}"
-            else:
-                messages.append(paso(tipo, content))
 
+            if messages and messages[-1]["type"] == tipo and not media:
+                if content:
+                    messages[-1]["content"][0]["text"] = (
+                        f"{texto_de(messages[-1])}\n{content}"
+                    )
+                continue
+
+            partes: list[dict[str, Any]] = [
+                {"type": "text", "text": content or "(adjunto sin texto)"}
+            ]
+            partes.extend(media)
+            messages.append(paso(tipo, partes))
+
+        vacio = [{"type": "text", "text": ctx.text or "(sin texto)"}]
         if not messages or messages[0]["type"] != "user_input":
-            messages.insert(0, paso("user_input", ctx.text or "(sin texto)"))
+            messages.insert(0, paso("user_input", vacio))
         if messages[-1]["type"] == "model_output":
-            messages.append(paso("user_input", ctx.text or "(sin texto)"))
+            messages.append(paso("user_input", vacio))
         return messages
+
+    def _media_by_message(self, history: list[Any]) -> dict[Any, list[dict[str, Any]]]:
+        """Ficheros que acompañarán a cada mensaje, dentro de los topes.
+
+        Se recorre de lo más reciente a lo más antiguo: si hay que dejar algo
+        fuera por tamaño, que sea lo viejo.
+        """
+        por_mensaje: dict[Any, list[dict[str, Any]]] = {}
+        presupuesto = MEDIA_TOTAL_BYTES
+
+        for row in reversed(history[-MEDIA_HISTORY_DEPTH:]):
+            for entry in row.attachments or []:
+                if not isinstance(entry, dict):
+                    continue
+                clase = MEDIA_KINDS.get((entry.get("mime_type") or "").lower())
+                if clase is None:
+                    continue
+                fichero = resolve_upload(entry.get("url"), settings=self.settings)
+                if fichero is None:
+                    continue
+                tamano = fichero.stat().st_size
+                if tamano > MEDIA_MAX_BYTES or tamano > presupuesto:
+                    log.info(
+                        "media_skipped_for_model",
+                        reason="demasiado grande",
+                        size=tamano,
+                        mime=entry.get("mime_type"),
+                    )
+                    continue
+                try:
+                    datos = fichero.read_bytes()
+                except OSError as error:  # pragma: no cover - depende del disco
+                    log.warning("media_unreadable", path=str(fichero), error=str(error))
+                    continue
+                presupuesto -= tamano
+                por_mensaje.setdefault(row.id, []).append(
+                    {
+                        "type": clase,
+                        "mime_type": entry["mime_type"],
+                        "data": base64.b64encode(datos).decode(),
+                    }
+                )
+        return por_mensaje
 
     async def _available_tools(self, ctx: TurnContext) -> list[dict[str, Any]]:
         """Herramientas adicionales, según qué módulos tenga activos el departamento.
@@ -375,6 +500,13 @@ class AIHandler(Handler):
                         getattr(delta, "arguments", "") or ""
                     )
                 continue
+
+            if tipo == "error":
+                detalle = getattr(event, "error", None)
+                raise StreamError(
+                    getattr(detalle, "code", None),
+                    getattr(detalle, "message", None) or "el proveedor cortó el flujo",
+                )
 
             interaction = getattr(event, "interaction", None)
             if interaction is not None:

@@ -27,6 +27,10 @@ def build_default_pipeline(settings: Settings) -> Pipeline:
     evalúan antes de gastar una llamada al modelo, y ``FallbackHandler`` envuelve
     al resto para garantizar respuesta.
     """
+    # El asistente se construye antes de la cadena: de si está configurado
+    # depende que una foto se le pase o se conteste que no se sabe leer.
+    ai = AIHandler(settings)
+
     return Pipeline(
         [
             RateLimitHandler(settings.inbound_rate_limit_per_minute),
@@ -38,12 +42,12 @@ def build_default_pipeline(settings: Settings) -> Pipeline:
             FirstResponseSlaHandler(),
             FallbackHandler(),
             CommandHandler(),
-            UnsupportedContentHandler(),
+            UnsupportedContentHandler(media_understood=ai.enabled),
             # Después de los comandos —«/agente» debe funcionar pase lo que
             # pase— y antes del asistente: una conversación derivada por regla
             # llega a quien corresponde sin que el modelo gaste un turno
             # contestando algo genérico por el camino.
             RulesHandler(),
-            AIHandler(settings),
+            ai,
         ]
     )

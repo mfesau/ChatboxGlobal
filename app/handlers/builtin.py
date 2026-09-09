@@ -268,13 +268,34 @@ class CommandHandler(Handler):
 
 
 class UnsupportedContentHandler(Handler):
-    """Responde con cortesía a contenidos que la lógica actual no interpreta."""
+    """Responde con cortesía a contenidos que la lógica actual no interpreta.
+
+    Qué es «no interpretable» depende de si hay asistente: con modelo
+    configurado, una foto o un PDF siguen su camino y el modelo los mira; sin
+    él, nadie va a leerlos y es mejor decirlo que callar. Por eso la lista de
+    lo que pasa se decide al construir la cadena y no está escrita aquí a
+    fuego (ver ``app/handlers/__init__.py``).
+    """
 
     name: ClassVar[str] = "unsupported_content"
 
+    #: Lo que la lógica determinista resuelve por sí sola, haya modelo o no.
     HANDLED: ClassVar[frozenset[ContentType]] = frozenset(
         {ContentType.TEXT, ContentType.INTERACTIVE}
     )
+
+    #: Lo que el modelo sabe mirar cuando está configurado.
+    MEDIA: ClassVar[frozenset[ContentType]] = frozenset(
+        {
+            ContentType.IMAGE,
+            ContentType.DOCUMENT,
+            ContentType.AUDIO,
+            ContentType.VIDEO,
+        }
+    )
+
+    def __init__(self, *, media_understood: bool = False) -> None:
+        self.media_understood = media_understood
 
     async def handle(self, ctx: TurnContext, next_: NextFn) -> None:
         content_type = ctx.inbound.content_type
@@ -284,6 +305,10 @@ class UnsupportedContentHandler(Handler):
 
         if content_type is ContentType.REACTION:
             ctx.suppress_reply = True
+            return
+
+        if self.media_understood and content_type in self.MEDIA:
+            await next_()
             return
 
         ctx.reply(
