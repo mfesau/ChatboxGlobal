@@ -2579,6 +2579,33 @@
     row.appendChild(statusCell);
 
     const actionsCell = document.createElement("td");
+
+    // Telegram no tiene panel de configuración: el webhook se da de alta
+    // llamando a su propia API con el token dentro. Sin este botón habría que
+    // salir de la consola y componer ese `curl` a mano.
+    if (account.channel === "telegram") {
+      const hookButton = document.createElement("button");
+      hookButton.type = "button";
+      hookButton.className = "ghost-button";
+      hookButton.textContent = i18n.t("accounts.registerWebhook");
+      hookButton.addEventListener("click", async () => {
+        showAdminError("");
+        hookButton.disabled = true;
+        try {
+          const result = await api(
+            `/api/channel-accounts/${account.id}/telegram/webhook`,
+            { method: "POST" },
+          );
+          setStatus(i18n.t("accounts.webhookRegistered", { url: result.url }));
+        } catch (error) {
+          showAdminError(error.message);
+        } finally {
+          hookButton.disabled = false;
+        }
+      });
+      actionsCell.appendChild(hookButton);
+    }
+
     const saveButton = document.createElement("button");
     saveButton.type = "button";
     saveButton.className = "ghost-button";

@@ -218,11 +218,19 @@ async def web_message(
 # --------------------------------------------------------------------------- #
 @router.post("/webhooks/{channel}")
 async def generic_webhook(
-    channel: str, request: Request, orchestrator: OrchestratorDep
+    channel: str,
+    request: Request,
+    session: SessionDep,
+    settings: SettingsDep,
+    orchestrator: OrchestratorDep,
 ) -> dict[str, Any]:
     """Ruta genérica para cualquier canal ya inscrito en el registro.
 
-    Permite incorporar un canal nuevo sin escribir un endpoint dedicado.
+    Permite incorporar un canal nuevo sin escribir un endpoint dedicado: solo
+    los que necesitan un reto ``GET`` de alta —los de Meta— tienen el suyo.
+    Las credenciales de las cuentas se resuelven aquí igual que en las rutas
+    dedicadas; sin ellas, un canal como Telegram no tendría con qué comprobar
+    el secreto de su webhook.
     """
     try:
         kind = ChannelKind(channel)
@@ -232,9 +240,14 @@ async def generic_webhook(
         ) from exc
 
     payload, raw = await _read_json(request)
+    credentials = await _account_credentials(session, settings, kind)
     try:
         result = await orchestrator.handle_event(
-            kind, payload=payload, headers=request.headers, raw_body=raw
+            kind,
+            payload=payload,
+            headers=request.headers,
+            raw_body=raw,
+            credentials=credentials,
         )
     except SignatureError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc

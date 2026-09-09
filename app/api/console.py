@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Annotated, Any, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile, status
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, field_validator
 
@@ -3726,6 +3726,60 @@ async def update_channel_account(
     )
     account = await repo.get_channel_account(session, account.id)
     return _channel_account_out(account)
+
+
+@router.post("/channel-accounts/{account_id}/telegram/webhook")
+async def register_telegram_webhook(
+    account_id: uuid.UUID,
+    request: Request,
+    session: SessionDep,
+    settings: SettingsDep,
+    principal: AdminDep,
+) -> dict[str, Any]:
+    """Declara el webhook de este bot ante Telegram. Reservado a administración.
+
+    Telegram no tiene panel de configuración: el webhook se da de alta llamando
+    a su propia API con el token dentro de la URL. Sin este botón habría que
+    salir de la consola y componer ese ``curl`` a mano.
+    """
+    account = await repo.get_channel_account(session, account_id)
+    if account is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Cuenta no encontrada")
+    if account.channel is not ChannelKind.TELEGRAM:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Esta operación es solo para cuentas de Telegram",
+        )
+    if not account.credentials_ciphertext:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="La cuenta no tiene token del bot"
+        )
+
+    try:
+        credentials = decrypt_json(account.credentials_ciphertext, settings=settings)
+    except (EncryptionNotConfiguredError, DecryptionError) as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    url = f"{settings.public_base_url.rstrip('/')}/webhooks/telegram"
+    adapter = request.app.state.registry.get(ChannelKind.TELEGRAM)
+    error = await adapter.register_webhook(
+        token=credentials.get("access_token", ""),
+        url=url,
+        secret=credentials.get("verify_token"),
+    )
+    if error:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=error)
+
+    await repo.record_audit(
+        session,
+        tenant_id=account.tenant_id,
+        actor=principal.audit_actor,
+        action="telegram_webhook_registered",
+        subject_type="channel_account",
+        subject_id=str(account.id),
+        detail={"url": url},
+    )
+    return {"status": "ok", "url": url}
 
 
 @router.delete("/channel-accounts/{account_id}")

@@ -21,6 +21,7 @@ from typing import Any
 import httpx
 
 from app.channels.base import ChannelAdapter, SignatureError, register_channel
+from app.channels.text import split_text as _split_text
 from app.config import Settings
 from app.core.envelope import (
     Attachment,
@@ -337,26 +338,6 @@ def _reverse_attachment_type(content_type: ContentType) -> str:
         if mapped is content_type:
             return name
     return "file"
-
-
-def _split_text(text: str, limit: int) -> list[str]:
-    """Divide por saltos de línea cuando es posible, y por longitud si no."""
-    if len(text) <= limit:
-        return [text]
-    chunks: list[str] = []
-    remaining = text
-    while len(remaining) > limit:
-        window = remaining[:limit]
-        cut = window.rfind("\n")
-        if cut < limit // 2:
-            cut = window.rfind(" ")
-        if cut < limit // 2:
-            cut = limit
-        chunks.append(remaining[:cut].rstrip())
-        remaining = remaining[cut:].lstrip()
-    if remaining:
-        chunks.append(remaining)
-    return chunks
 
 
 def _from_epoch(value: Any) -> datetime:

@@ -275,7 +275,8 @@ async def test_bot_framework_endpoint_accepts_activity_without_validation(
 # Canales desconocidos
 # --------------------------------------------------------------------------- #
 async def test_unknown_channel_returns_not_found(client: httpx.AsyncClient):
-    response = await client.post("/webhooks/telegram", json={})
+    # El ejemplo era «telegram» hasta que se incorporó ese canal.
+    response = await client.post("/webhooks/carrier-pigeon", json={})
     assert response.status_code == 404
 
 
