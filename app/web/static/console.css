@@ -1398,3 +1398,45 @@
     border-bottom: 1px solid var(--border);
   }
 }
+
+/* --------------------------------------------------------------- informes */
+
+/* Cifras de cabecera. Rejilla y no una tabla: no son filas de datos, son seis
+   números sueltos, y una tabla obligaría a inventarles encabezados. */
+.reports-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin: 12px 0;
+}
+
+.reports-tiles dt {
+  color: var(--text-muted);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.reports-tiles dd {
+  margin: 2px 0 0;
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.reports-chart {
+  margin: 12px 0 16px;
+  overflow-x: auto;
+}
+
+/* La gráfica va en el color de marca, como el resto de la consola: se calcula
+   para leerse sobre este fondo en los dos temas (ver app/core/branding.py). */
+.reports-chart__svg {
+  width: 100%;
+  min-width: 240px;
+  height: 120px;
+}
+
+.reports-chart__svg rect {
+  fill: var(--accent-ink);
+}

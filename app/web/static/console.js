@@ -207,6 +207,13 @@
     hotelReservationNotes: document.getElementById("hotel-reservation-notes"),
     hotelStatusFilter: document.getElementById("hotel-status-filter"),
     hotelReservationsTable: document.querySelector("#hotel-reservations-table tbody"),
+    reportsSince: document.getElementById("reports-since"),
+    reportsUntil: document.getElementById("reports-until"),
+    reportsDepartment: document.getElementById("reports-department"),
+    reportsTiles: document.getElementById("reports-tiles"),
+    reportsChart: document.getElementById("reports-chart"),
+    reportsChannels: document.querySelector("#reports-channels tbody"),
+    reportsAgents: document.querySelector("#reports-agents tbody"),
     knowledgeForm: document.getElementById("knowledge-form"),
     knowledgeTitle: document.getElementById("knowledge-title"),
     knowledgeDepartment: document.getElementById("knowledge-department"),
@@ -3141,6 +3148,7 @@
         dom.transferActivity.appendChild(item);
       });
       dom.supervisorPanel.hidden = false;
+      await loadReports();
     } catch (error) {
       setStatus(error.message);
     }
@@ -3149,6 +3157,164 @@
   dom.supervisorClose.addEventListener("click", () => {
     dom.supervisorPanel.hidden = true;
   });
+
+  /* ------------------------------------------------------------- informes */
+
+  function reportsQuery() {
+    const params = new URLSearchParams();
+    if (dom.reportsSince.value) {
+      params.set("since", dom.reportsSince.value);
+    }
+    if (dom.reportsUntil.value) {
+      params.set("until", dom.reportsUntil.value);
+    }
+    if (dom.reportsDepartment.value) {
+      params.set("department_id", dom.reportsDepartment.value);
+    }
+    return params.toString();
+  }
+
+  function formatDuration(seconds) {
+    if (seconds == null) {
+      return "—";
+    }
+    if (seconds < 60) {
+      return `${Math.round(seconds)} s`;
+    }
+    if (seconds < 3600) {
+      return `${Math.round(seconds / 60)} min`;
+    }
+    return `${(seconds / 3600).toFixed(1)} h`;
+  }
+
+  function renderTiles(report) {
+    const cifras = [
+      [i18n.t("reports.conversations"), String(report.summary.conversations)],
+      [i18n.t("reports.closed"), String(report.summary.closed)],
+      [
+        i18n.t("reports.firstResponse"),
+        formatDuration(report.summary.first_response_seconds_p50),
+      ],
+      [i18n.t("reports.p90"), formatDuration(report.summary.first_response_seconds_p90)],
+      [
+        i18n.t("reports.compliance"),
+        report.summary.sla_compliance == null
+          ? "—"
+          : `${Math.round(report.summary.sla_compliance * 100)} %`,
+      ],
+      [i18n.t("reports.aiRuns"), String(report.ai.runs)],
+    ];
+
+    dom.reportsTiles.replaceChildren();
+    for (const [etiqueta, valor] of cifras) {
+      const dt = document.createElement("dt");
+      dt.textContent = etiqueta;
+      const dd = document.createElement("dd");
+      dd.textContent = valor;
+      dom.reportsTiles.append(dt, dd);
+    }
+  }
+
+  /* Gráfica en SVG escrito a mano: esta aplicación no carga nada de fuera —no
+     hay CDN— y la política de contenido tampoco lo permitiría. Una serie de
+     barras no justifica empaquetar una biblioteca entera. */
+  function renderChart(series) {
+    dom.reportsChart.replaceChildren();
+    if (series.length === 0) {
+      return;
+    }
+    const maximo = Math.max(...series.map((fila) => fila.conversations), 1);
+    const ancho = Math.max(series.length * 12, 240);
+    const alto = 120;
+
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", `0 0 ${ancho} ${alto}`);
+    svg.setAttribute("role", "img");
+    svg.setAttribute("aria-label", i18n.t("reports.chartLabel"));
+    svg.classList.add("reports-chart__svg");
+
+    series.forEach((fila, indice) => {
+      const altura = (fila.conversations / maximo) * (alto - 16);
+      const barra = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+      barra.setAttribute("x", String(indice * 12 + 2));
+      barra.setAttribute("y", String(alto - altura));
+      barra.setAttribute("width", "8");
+      barra.setAttribute("height", String(Math.max(altura, 1)));
+      barra.setAttribute("rx", "2");
+      const titulo = document.createElementNS("http://www.w3.org/2000/svg", "title");
+      titulo.textContent = `${fila.day}: ${fila.conversations}`;
+      barra.appendChild(titulo);
+      svg.appendChild(barra);
+    });
+    dom.reportsChart.appendChild(svg);
+  }
+
+  function renderRows(tbody, rows, columns) {
+    tbody.replaceChildren();
+    for (const row of rows) {
+      const tr = document.createElement("tr");
+      for (const value of columns(row)) {
+        const td = document.createElement("td");
+        td.textContent = value;
+        tr.appendChild(td);
+      }
+      tbody.appendChild(tr);
+    }
+  }
+
+  async function loadReports() {
+    // El desplegable se llena con lo ya cargado; «todos» respeta el alcance
+    // que el servidor aplique a quien pregunta.
+    const elegido = dom.reportsDepartment.value;
+    dom.reportsDepartment.replaceChildren();
+    const todos = document.createElement("option");
+    todos.value = "";
+    todos.textContent = i18n.t("reports.allDepartments");
+    dom.reportsDepartment.appendChild(todos);
+    for (const department of state.departments) {
+      const option = document.createElement("option");
+      option.value = department.id;
+      option.textContent = department.name;
+      dom.reportsDepartment.appendChild(option);
+    }
+    dom.reportsDepartment.value = elegido;
+
+    let report;
+    try {
+      const query = reportsQuery();
+      report = await api(`/api/reports/summary${query ? `?${query}` : ""}`);
+    } catch (error) {
+      setStatus(error.message);
+      return;
+    }
+
+    renderTiles(report);
+    renderChart(report.timeseries);
+    renderRows(dom.reportsChannels, report.channels, (row) => [
+      CHANNEL_LABELS[row.channel] || row.channel,
+      String(row.conversations),
+    ]);
+    renderRows(dom.reportsAgents, report.agents, (row) => [
+      row.agent,
+      String(row.conversations),
+      String(row.closed),
+      String(row.sla_breached),
+      formatDuration(row.first_response_seconds_p50),
+    ]);
+  }
+
+  for (const control of [dom.reportsSince, dom.reportsUntil, dom.reportsDepartment]) {
+    control.addEventListener("change", () => loadReports());
+  }
+
+  for (const button of document.querySelectorAll("[data-report-export]")) {
+    button.addEventListener("click", () => {
+      const params = new URLSearchParams(reportsQuery());
+      params.set("dataset", button.dataset.reportExport);
+      // Descarga directa: la respuesta es un fichero, no JSON que interpretar.
+      window.location.href = `/api/reports/export.csv?${params.toString()}`;
+    });
+  }
 
   /* ------------------------------------------------ directorio de contactos */
 

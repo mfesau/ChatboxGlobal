@@ -810,6 +810,67 @@
             <h3>Últimas derivaciones</h3>
             <ol class="panel__timeline" id="transfer-activity"></ol>
           </section>
+
+          <!-- Informes: lo que se pregunta al cerrar un mes, no la foto de
+               ahora mismo que dan las dos secciones de arriba. -->
+          <section>
+            <h3 data-i18n="reports.title">Informe del periodo</h3>
+            <div class="panel__inline-form">
+              <label class="panel__field">
+                <span data-i18n="reports.since">Desde</span>
+                <input type="date" id="reports-since" />
+              </label>
+              <label class="panel__field">
+                <span data-i18n="reports.until">Hasta</span>
+                <input type="date" id="reports-until" />
+              </label>
+              <label class="panel__field">
+                <span data-i18n="table.department">Departamento</span>
+                <select id="reports-department">
+                  <option value="" data-i18n="reports.allDepartments">Todos</option>
+                </select>
+              </label>
+            </div>
+
+            <dl class="reports-tiles" id="reports-tiles"></dl>
+            <div class="reports-chart" id="reports-chart"></div>
+
+            <div class="table-scroll">
+              <table class="data-table" id="reports-channels">
+                <thead>
+                  <tr>
+                    <th data-i18n="table.channel">Canal</th>
+                    <th data-i18n="reports.conversations">Conversaciones</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+
+            <div class="table-scroll">
+              <table class="data-table" id="reports-agents">
+                <thead>
+                  <tr>
+                    <th data-i18n="table.agent">Agente</th>
+                    <th data-i18n="reports.conversations">Conversaciones</th>
+                    <th data-i18n="reports.closed">Resueltas</th>
+                    <th data-i18n="reports.breached">SLA incumplido</th>
+                    <th data-i18n="reports.firstResponse">1ª respuesta (mediana)</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+
+            <div class="panel__inline-form">
+              <button type="button" class="ghost-button" data-report-export="timeseries"
+                      data-i18n="reports.exportSeries">Exportar la serie</button>
+              <button type="button" class="ghost-button" data-report-export="channels"
+                      data-i18n="reports.exportChannels">Exportar por canal</button>
+              <button type="button" class="ghost-button" data-report-export="agents"
+                      data-i18n="reports.exportAgents">Exportar por agente</button>
+            </div>
+          </section>
         </div>
       </div>
 

@@ -29,6 +29,7 @@ from app.api import (
     google_auth,
     knowledge,
     privacy,
+    reports,
     saml,
     session,
     webhooks,
@@ -193,6 +194,7 @@ def create_app() -> FastAPI:
     application.include_router(google_auth.router)
     application.include_router(knowledge.router)
     application.include_router(privacy.router)
+    application.include_router(reports.router)
     application.include_router(console.router)
     application.include_router(attachments.router)
 
