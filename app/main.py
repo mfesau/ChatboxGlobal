@@ -39,6 +39,7 @@ from app.core.dispatcher import OutboxDispatcher
 from app.core.orchestrator import Orchestrator
 from app.db import repositories as repo
 from app.db.engine import dispose_engine, init_engine, session_scope
+from app.db.migrate import apply_pending
 from app.handlers import build_default_pipeline
 from app.logging_setup import configure_logging, get_logger
 
@@ -95,7 +96,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     configure_logging(settings.log_level)
 
-    init_engine(settings)
+    engine = init_engine(settings)
+    await apply_pending(engine)
     async with session_scope() as session:
         tenant = await repo.get_or_create_tenant(session, settings.default_tenant_slug)
         await repo.ensure_default_admin(session, tenant_id=tenant.id)
