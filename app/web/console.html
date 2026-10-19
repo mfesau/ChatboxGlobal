@@ -323,6 +323,8 @@
                     data-i18n="admin.tab.rules">Reglas</button>
             <button type="button" role="tab" data-admin-tab="knowledge" aria-selected="false"
                     data-i18n="admin.tab.knowledge">Conocimiento</button>
+            <button type="button" role="tab" data-admin-tab="assistant" aria-selected="false"
+                    data-i18n="admin.tab.assistant">Asistente IA</button>
             <button type="button" role="tab" data-admin-tab="audit" aria-selected="false"
                     data-i18n="admin.tab.audit">Auditoría</button>
           </nav>
@@ -785,6 +787,45 @@
                   <tbody></tbody>
                 </table>
               </div>
+            </section>
+          </div>
+
+          <div class="admin-tab-panel" id="admin-tab-assistant" hidden>
+            <section class="panel">
+              <h3 data-i18n="assistant.title">Asistente IA</h3>
+              <p class="console__muted" data-i18n="assistant.hint">
+                Qué modelo responde a los clientes y cuánto razona antes de
+                hacerlo. La clave de OpenRouter no se escribe aquí: va en el
+                fichero .env del servidor.
+              </p>
+              <p class="console__muted" id="assistant-provider"></p>
+              <form id="assistant-form">
+                <label class="panel__field">
+                  <span data-i18n="assistant.model">Modelo</span>
+                  <!-- Campo libre con sugerencias: el catálogo ayuda a elegir,
+                       pero si OpenRouter no contesta se puede escribir igual. -->
+                  <input type="text" id="assistant-model" list="assistant-model-list"
+                         maxlength="64" spellcheck="false" autocomplete="off"
+                         data-i18n-placeholder="assistant.modelPlaceholder" />
+                  <datalist id="assistant-model-list"></datalist>
+                </label>
+                <p class="console__muted" id="assistant-model-info"></p>
+                <label class="panel__field">
+                  <span data-i18n="assistant.effortLabel">Esfuerzo de razonamiento</span>
+                  <select id="assistant-effort"></select>
+                </label>
+                <p class="console__muted" data-i18n="assistant.effortHint">
+                  Más esfuerzo da respuestas más pensadas, pero tarda más y
+                  cuesta más. Para atención al cliente suele bastar «bajo».
+                  Los modelos que no razonan ignoran este ajuste.
+                </p>
+                <div class="brand-actions">
+                  <button type="submit" class="send-button" id="assistant-save"
+                          data-i18n="assistant.save">Guardar</button>
+                  <button type="button" class="ghost-button" id="assistant-reset"
+                          data-i18n="assistant.reset">Volver al modelo del .env</button>
+                </div>
+              </form>
             </section>
           </div>
 

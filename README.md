@@ -1192,8 +1192,29 @@ en directo. Expone tres grupos de herramientas:
   activo.
 
 Cada llamada queda anotada en `ai_runs` con su consumo, su latencia y su motivo
-de parada. Sin `GOOGLE_API_KEY` el handler se desactiva y el servicio sigue
-funcionando con lógica determinista.
+de parada. Sin `GOOGLE_API_KEY` ni `OPENROUTER_API_KEY` el handler se
+desactiva y el servicio sigue funcionando con lógica determinista.
+
+#### Proveedor: Gemini u OpenRouter
+
+Con `OPENROUTER_API_KEY` en el `.env` el asistente responde a través de
+[OpenRouter](https://openrouter.ai), que da acceso a modelos de muchos
+proveedores con una sola clave y una sola factura. `AI_PROVIDER` decide:
+`auto` (por omisión) prefiere OpenRouter si tiene clave y, si no, Gemini;
+`gemini` u `openrouter` fuerzan uno.
+
+La clave solo vive en el `.env`. El **modelo** y el **esfuerzo de
+razonamiento** los elige administración en la consola, pestaña «Asistente IA»:
+el catálogo se carga de OpenRouter, reducido a los modelos que admiten
+herramientas, con lo que entiende cada uno (imagen, audio, PDF) y su precio.
+Un identificador que no está en el catálogo se rechaza al guardar, para que una
+errata no deje mudo al asistente. `OPENROUTER_MODEL` es solo el valor de partida.
+
+Si el modelo elegido no admite un tipo de adjunto, la petición se repite una
+vez con el fichero nombrado en texto en lugar de perder el turno. Sin saldo
+(HTTP 402) el turno pasa a la respuesta de reserva y queda `openrouter_without_credit`
+en el log. La base de conocimiento sigue calculando sus vectores con
+`GOOGLE_API_KEY`.
 
 ### Base de conocimiento
 

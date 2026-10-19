@@ -21,6 +21,7 @@ from sqlalchemy import text
 
 from app import __version__
 from app.api import (
+    ai_settings,
     attachments,
     auth,
     console,
@@ -206,6 +207,7 @@ def create_app() -> FastAPI:
     application.include_router(privacy.router)
     application.include_router(reports.router)
     application.include_router(rules.router)
+    application.include_router(ai_settings.router)
     application.include_router(console.router)
     application.include_router(attachments.router)
 

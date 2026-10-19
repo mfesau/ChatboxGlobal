@@ -84,6 +84,20 @@ class Settings(BaseSettings):
     #: ``app/handlers/ai.py``); el resto de la consola funciona igual.
     google_api_key: SecretStr | None = None
     ai_model: str = "gemini-3.8-flash"
+    #: Alternativa a Gemini directo: OpenRouter da acceso a modelos de varios
+    #: proveedores con una sola clave y una sola factura, y no tiene el tope
+    #: diario de la tarifa gratuita de Google AI Studio. Con su clave puesta y
+    #: ``AI_PROVIDER=auto`` el asistente pasa a usarlo; la base de
+    #: conocimiento sigue calculando sus vectores con ``GOOGLE_API_KEY``.
+    openrouter_api_key: SecretStr | None = None
+    #: Identificador del modelo en OpenRouter (``proveedor/modelo``). Tiene
+    #: que admitir herramientas; si además admite imágenes, audio o PDF, el
+    #: asistente los ve en lugar de leer que hubo un adjunto.
+    openrouter_model: str = "google/gemini-3.8-flash"
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    #: Qué proveedor responde. ``auto`` prefiere OpenRouter si tiene clave y,
+    #: si no, Gemini; los otros dos valores fuerzan uno aunque estén ambas.
+    ai_provider: Literal["auto", "gemini", "openrouter"] = "auto"
     ai_max_tokens: int = 4_096
     ai_history_turns: int = 12
     ai_system_prompt: str = (
@@ -92,6 +106,17 @@ class Settings(BaseSettings):
         "Si no dispones de la información solicitada, indícalo con claridad y "
         "ofrece derivar la conversación a un agente humano."
     )
+
+    @property
+    def ai_backend(self) -> Literal["gemini", "openrouter"] | None:
+        """Proveedor que atiende al asistente, o ``None`` si falta su clave."""
+        if self.ai_provider == "openrouter":
+            return "openrouter" if self.openrouter_api_key else None
+        if self.ai_provider == "gemini":
+            return "gemini" if self.google_api_key else None
+        if self.openrouter_api_key:
+            return "openrouter"
+        return "gemini" if self.google_api_key else None
 
     # -------------------------------------------------------------- orquestador
     outbox_workers: int = 2

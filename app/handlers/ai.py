@@ -1,8 +1,15 @@
-"""Handler de IA: genera la respuesta con Gemini a partir del historial.
+"""Handler de IA: genera la respuesta a partir del historial.
 
-Emplea el SDK oficial de Google (``google-genai``) en modo asíncrono y con
-transmisión por fragmentos, de modo que el chatbox web puede mostrar el texto
-mientras se genera y las peticiones largas no agotan el tiempo de espera HTTP.
+Dos proveedores posibles, elegidos por configuración (``Settings.ai_backend``):
+Gemini directo, con el SDK oficial de Google (``google-genai``), u OpenRouter,
+con su API de chat compatible con la de OpenAI (``app/handlers/openrouter.py``).
+Los dos en modo asíncrono y con transmisión por fragmentos, de modo que el
+chatbox web puede mostrar el texto mientras se genera y las peticiones largas
+no agotan el tiempo de espera HTTP.
+
+Con OpenRouter, el modelo y el esfuerzo de razonamiento se eligen desde la
+consola de administración (``app/core/ai_settings.py``); la clave, en cambio,
+solo vive en el ``.env``.
 
 La conversación se arma como una lista de *pasos* (``input``): lo que escribió
 el usuario, lo que respondió el modelo, y —cuando pide una herramienta— la
@@ -17,18 +24,20 @@ from __future__ import annotations
 import base64
 import json
 import time
+from contextlib import aclosing
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
 from google import genai
 from google.genai import errors as genai_errors
 
-from app.core import hotel_booking, knowledge
+from app.core import ai_settings, hotel_booking, knowledge
 from app.core.envelope import Direction
 from app.core.hub import conversation_topic, hub, inbox_topic
 from app.core.pipeline import Handler, NextFn, TurnContext
 from app.core.storage import resolve_upload
 from app.db import repositories as repo
+from app.handlers import openrouter
 from app.logging_setup import get_logger
 
 log = get_logger(__name__)
@@ -167,10 +176,27 @@ class AIHandler(Handler):
 
     name: ClassVar[str] = "ai"
 
-    def __init__(self, settings: Any, client: Any | None = None) -> None:
+    def __init__(
+        self,
+        settings: Any,
+        client: Any | None = None,
+        *,
+        transport: Any | None = None,
+    ) -> None:
         self.settings = settings
+        # Un cliente inyectado sin clave configurada es el de Gemini de las
+        # pruebas antiguas; con clave, manda la configuración.
+        self.provider = settings.ai_backend or ("gemini" if client is not None else None)
         self._client = client
-        if self._client is None and settings.google_api_key is not None:
+        if self._client is None and self.provider == "openrouter":
+            self._client = openrouter.OpenRouterClient(
+                api_key=settings.openrouter_api_key.get_secret_value(),
+                base_url=settings.openrouter_base_url,
+                app_url=settings.public_base_url,
+                app_title=settings.app_name,
+                transport=transport,
+            )
+        elif self._client is None and self.provider == "gemini":
             self._client = genai.Client(
                 api_key=settings.google_api_key.get_secret_value()
             )
@@ -179,9 +205,20 @@ class AIHandler(Handler):
     def enabled(self) -> bool:
         return self._client is not None
 
+    def model_for(self, tenant: Any) -> str:
+        """Modelo que responde, tal como se anota en ``ai_runs``.
+
+        Con OpenRouter lo elige la administración desde la consola; con Gemini
+        directo sigue mandando ``AI_MODEL``, porque los identificadores de
+        uno y otro no son intercambiables.
+        """
+        if self.provider == "openrouter":
+            return ai_settings.read(tenant, self.settings).model
+        return self.settings.ai_model
+
     async def handle(self, ctx: TurnContext, next_: NextFn) -> None:
         if not self.enabled:
-            log.debug("ai_handler_disabled", reason="sin GOOGLE_API_KEY")
+            log.debug("ai_handler_disabled", reason="sin GOOGLE_API_KEY ni OPENROUTER_API_KEY")
             await next_()
             return
         # Un mensaje que solo trae una foto no tiene texto ni interacción, y
@@ -215,6 +252,21 @@ class AIHandler(Handler):
             await self._record_error(ctx, str(exc), started)
             await next_()
             return
+        except openrouter.OpenRouterError as exc:
+            await self._record_error(ctx, str(exc), started)
+            # Igual que con Gemini: el 429 se arregla esperando y se cuenta.
+            # El 402 —sin saldo en OpenRouter— queda en el log y en `ai_runs`
+            # para quien administra; a quien escribe no le incumbe.
+            if exc.status == 429:
+                ctx.reply(
+                    "Estamos atendiendo muchas consultas en este momento. "
+                    "Inténtelo de nuevo en unos segundos, por favor."
+                )
+                return
+            if exc.status == 402:
+                log.error("openrouter_without_credit", error=str(exc)[:300])
+            await next_()
+            return
         except StreamError as exc:
             await self._record_error(ctx, f"{exc.code}: {exc}", started)
             # El cupo agotado se le cuenta a quien escribe, porque se arregla
@@ -233,7 +285,7 @@ class AIHandler(Handler):
             tenant_id=ctx.tenant.id,
             conversation_id=ctx.conversation.id,
             message_id=ctx.stored_message.id,
-            model=self.settings.ai_model,
+            model=self.model_for(ctx.tenant),
             handler=self.name,
             input_tokens=usage.get("input_tokens"),
             output_tokens=usage.get("output_tokens"),
@@ -408,7 +460,7 @@ class AIHandler(Handler):
     async def _converse(
         self,
         ctx: TurnContext,
-        system: list[dict[str, Any]],
+        system: str,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
     ) -> tuple[str, dict[str, int], str | None]:
@@ -420,16 +472,23 @@ class AIHandler(Handler):
         stream_to_client = ctx.conversation.channel == "web"
 
         for _ in range(MAX_TOOL_ITERATIONS):
-            stream = await self._client.aio.interactions.create(
-                model=self.settings.ai_model,
-                input=messages,
-                system_instruction=system,
-                tools=[_as_function_tool(tool) for tool in tools],
-                generation_config={"max_output_tokens": self.settings.ai_max_tokens},
-                stream=True,
-            )
-
-            text, calls, status, usage = await self._read_stream(ctx, stream, stream_to_client)
+            if self.provider == "openrouter":
+                text, calls, status, usage = await self._openrouter_round(
+                    ctx, system, messages, tools, stream_to_client
+                )
+            else:
+                stream = await self._client.aio.interactions.create(
+                    model=self.settings.ai_model,
+                    input=messages,
+                    system_instruction=system,
+                    tools=[_as_function_tool(tool) for tool in tools],
+                    generation_config={"max_output_tokens": self.settings.ai_max_tokens},
+                    stream=True,
+                )
+                text, calls, status, raw_usage = await self._read_stream(
+                    ctx, stream, stream_to_client
+                )
+                usage = _gemini_usage(raw_usage)
             stop_reason = status or stop_reason
             _accumulate_usage(usage_total, usage)
             if text.strip():
@@ -522,6 +581,112 @@ class AIHandler(Handler):
             for datos in pendientes.values()
             if datos["name"]
         ]
+        return "".join(partes), calls, status, usage
+
+    async def _openrouter_round(
+        self,
+        ctx: TurnContext,
+        system: str,
+        steps: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        stream_to_client: bool,
+    ) -> tuple[str, list[ToolCall], str | None, dict[str, int]]:
+        """Una vuelta contra OpenRouter: petición, lectura y, si hace falta, reintento.
+
+        El reintento es solo para los ficheros. Qué admite cada modelo depende
+        del modelo elegido en la consola, y uno que no ve imágenes rechaza la
+        petición entera; antes que perder el turno, se repite una vez con cada
+        fichero nombrado en texto.
+        """
+        elegido = ai_settings.read(ctx.tenant, self.settings)
+        payload: dict[str, Any] = {
+            "model": elegido.model,
+            "messages": openrouter.to_chat_messages(system, steps),
+            "max_tokens": self.settings.ai_max_tokens,
+            "stream": True,
+            "usage": {"include": True},
+        }
+        reasoning = ai_settings.reasoning_payload(elegido.effort)
+        if reasoning is not None:
+            payload["reasoning"] = reasoning
+        if tools:
+            payload["tools"] = [
+                openrouter.to_chat_tool(_as_function_tool(tool)) for tool in tools
+            ]
+        try:
+            return await self._read_openrouter_stream(ctx, payload, stream_to_client)
+        except openrouter.OpenRouterError as exc:
+            if exc.status not in {400, 404, 415, 422} or not openrouter.has_media(steps):
+                raise
+            log.warning("openrouter_media_rejected", model=payload["model"], error=str(exc)[:300])
+            payload["messages"] = openrouter.to_chat_messages(
+                system, openrouter.without_media(steps)
+            )
+            return await self._read_openrouter_stream(ctx, payload, stream_to_client)
+
+    async def _read_openrouter_stream(
+        self, ctx: TurnContext, payload: dict[str, Any], stream_to_client: bool
+    ) -> tuple[str, list[ToolCall], str | None, dict[str, int]]:
+        """Rearma texto y llamadas a herramientas a partir de los trozos SSE.
+
+        Las llamadas llegan troceadas igual que con Gemini: el primer trozo de
+        cada una trae ``id`` y nombre, y los siguientes, pedazos de los
+        argumentos en JSON, todos con el mismo ``index``. ``reasoning`` —lo
+        que piensa un modelo que razona— se descarta: no es para el chat.
+        """
+        partes: list[str] = []
+        pendientes: dict[int, dict[str, Any]] = {}
+        finish: str | None = None
+        usage: dict[str, int] = {}
+
+        async with aclosing(self._client.stream(payload)) as chunks:
+            async for chunk in chunks:
+                if chunk.get("error"):
+                    detalle = chunk["error"]
+                    raise StreamError(
+                        _openrouter_error_code(detalle.get("code")),
+                        detalle.get("message") or "OpenRouter cortó el flujo",
+                    )
+                if chunk.get("usage"):
+                    usage = openrouter.usage_of(chunk["usage"])
+                for choice in chunk.get("choices") or []:
+                    finish = choice.get("finish_reason") or finish
+                    delta = choice.get("delta") or {}
+                    texto = delta.get("content")
+                    if texto:
+                        partes.append(texto)
+                        if stream_to_client:
+                            await hub.publish(
+                                conversation_topic(ctx.conversation.channel_conversation_id),
+                                {"type": "delta", "text": texto},
+                            )
+                    for pedazo in delta.get("tool_calls") or []:
+                        indice = pedazo.get("index", 0)
+                        llamada = pendientes.setdefault(
+                            indice, {"id": None, "name": None, "arguments": ""}
+                        )
+                        llamada["id"] = llamada["id"] or pedazo.get("id")
+                        funcion = pedazo.get("function") or {}
+                        llamada["name"] = llamada["name"] or funcion.get("name")
+                        llamada["arguments"] += funcion.get("arguments") or ""
+
+        if finish == "error":
+            raise StreamError("stream_error", "OpenRouter terminó el flujo con error")
+
+        calls = [
+            ToolCall(
+                # El identificador enlaza la llamada con su resultado en la
+                # vuelta siguiente; si el modelo no lo da, se inventa uno.
+                id=datos["id"] or f"call_{indice}",
+                name=datos["name"],
+                arguments=_parse_arguments(datos["arguments"], name=datos["name"]),
+            )
+            for indice, datos in sorted(pendientes.items())
+            if datos["name"]
+        ]
+        # El filtro de contenido equivale a la negativa de Gemini: se le
+        # contesta lo mismo a quien escribe.
+        status = "refusal" if finish == "content_filter" else finish
         return "".join(partes), calls, status, usage
 
     async def _run_tools(self, ctx: TurnContext, calls: list[Any]) -> list[dict[str, Any]]:
@@ -636,7 +801,7 @@ class AIHandler(Handler):
             tenant_id=ctx.tenant.id,
             conversation_id=ctx.conversation.id,
             message_id=ctx.stored_message.id,
-            model=self.settings.ai_model,
+            model=self.model_for(ctx.tenant),
             handler=self.name,
             latency_ms=int((time.monotonic() - started) * 1_000),
             error=error[:2000],
@@ -663,9 +828,9 @@ def _as_function_tool(tool: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-#: Cómo se llama cada cifra de consumo en el proveedor y con qué nombre se
-#: guarda. La traducción hace falta: el proveedor las publica con el prefijo
-#: ``total_`` y ``record_ai_run`` espera los nombres de la derecha.
+#: Cómo se llama cada cifra de consumo en Gemini y con qué nombre se guarda.
+#: La traducción hace falta: Gemini las publica con el prefijo ``total_`` y
+#: ``record_ai_run`` espera los nombres de la derecha.
 USAGE_FIELDS = {
     "total_input_tokens": "input_tokens",
     "total_output_tokens": "output_tokens",
@@ -675,11 +840,31 @@ USAGE_FIELDS = {
 }
 
 
-def _accumulate_usage(total: dict[str, int], usage: Any) -> None:
-    """Suma el gasto de cada vuelta del bucle de herramientas."""
+def _gemini_usage(usage: Any) -> dict[str, int]:
+    """Consumo de una vuelta de Gemini, con los nombres que se guardan."""
     if usage is None:
-        return
-    for origen, destino in USAGE_FIELDS.items():
-        value = getattr(usage, origen, None)
-        if isinstance(value, int):
-            total[destino] = total.get(destino, 0) + value
+        return {}
+    return {
+        destino: value
+        for origen, destino in USAGE_FIELDS.items()
+        if isinstance(value := getattr(usage, origen, None), int)
+    }
+
+
+def _accumulate_usage(total: dict[str, int], usage: dict[str, int]) -> None:
+    """Suma el gasto de cada vuelta del bucle de herramientas."""
+    for clave, value in usage.items():
+        total[clave] = total.get(clave, 0) + value
+
+
+def _openrouter_error_code(code: Any) -> str:
+    """Código de un error dentro del flujo, en los términos que ya se manejan.
+
+    OpenRouter manda el código HTTP como número; el manejo de errores del
+    turno habla en los términos de Gemini, así que se traduce aquí.
+    """
+    if code in (429, "429"):
+        return "rate_limit_exceeded"
+    if code in (402, "402"):
+        return "insufficient_credits"
+    return str(code) if code else "stream_error"

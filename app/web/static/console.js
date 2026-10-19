@@ -231,6 +231,14 @@
     reportsChannels: document.querySelector("#reports-channels tbody"),
     reportsAgents: document.querySelector("#reports-agents tbody"),
     knowledgeForm: document.getElementById("knowledge-form"),
+    assistantForm: document.getElementById("assistant-form"),
+    assistantProvider: document.getElementById("assistant-provider"),
+    assistantModel: document.getElementById("assistant-model"),
+    assistantModelList: document.getElementById("assistant-model-list"),
+    assistantModelInfo: document.getElementById("assistant-model-info"),
+    assistantEffort: document.getElementById("assistant-effort"),
+    assistantSave: document.getElementById("assistant-save"),
+    assistantReset: document.getElementById("assistant-reset"),
     knowledgeTitle: document.getElementById("knowledge-title"),
     knowledgeDepartment: document.getElementById("knowledge-department"),
     knowledgeText: document.getElementById("knowledge-text"),
@@ -3581,6 +3589,9 @@
       if (tab.dataset.adminTab === "knowledge") {
         loadKnowledge();
       }
+      if (tab.dataset.adminTab === "assistant") {
+        loadAssistant();
+      }
       if (tab.dataset.adminTab === "rules") {
         loadRules();
       }
@@ -3930,6 +3941,111 @@
     } catch (error) {
       showAdminError(error.message);
     }
+  });
+
+  /* ------------------------------------------------- asistente IA */
+
+  //: Catálogo de OpenRouter tal como lo devuelve el servidor, por id.
+  let assistantModels = new Map();
+  let assistantDefaultModel = "";
+
+  function describeModel(id) {
+    const model = assistantModels.get(id);
+    if (!model) {
+      return assistantModels.size && id ? i18n.t("assistant.unknownModel") : "";
+    }
+    const partes = [model.name];
+    if (model.input_modalities.length) {
+      partes.push(i18n.t("assistant.inputs", { list: model.input_modalities.join(", ") }));
+    }
+    if (model.prompt_per_million !== null && model.completion_per_million !== null) {
+      partes.push(
+        i18n.t("assistant.price", {
+          input: model.prompt_per_million,
+          output: model.completion_per_million,
+        }),
+      );
+    }
+    partes.push(model.reasoning ? i18n.t("assistant.reasons") : i18n.t("assistant.noReasoning"));
+    return partes.join(" · ");
+  }
+
+  function fillAssistant(settings) {
+    assistantDefaultModel = settings.default_model;
+    const proveedor =
+      settings.provider === "openrouter"
+        ? i18n.t("assistant.providerOpenrouter")
+        : settings.provider === "gemini"
+          ? i18n.t("assistant.providerGemini")
+          : i18n.t("assistant.providerNone");
+    dom.assistantProvider.textContent = proveedor;
+    dom.assistantModel.value = settings.model;
+    dom.assistantEffort.replaceChildren();
+    for (const effort of settings.efforts) {
+      const option = document.createElement("option");
+      option.value = effort;
+      option.textContent = i18n.t(`assistant.effort.${effort}`);
+      dom.assistantEffort.appendChild(option);
+    }
+    dom.assistantEffort.value = settings.effort;
+    dom.assistantModelInfo.textContent = describeModel(settings.model);
+  }
+
+  async function loadAssistant() {
+    try {
+      fillAssistant(await api("/api/admin/ai"));
+    } catch (error) {
+      showAdminError(error.message);
+      return;
+    }
+    // El catálogo llega aparte: puede tardar, o no llegar, y el formulario
+    // tiene que poder usarse igual.
+    try {
+      const { models } = await api("/api/admin/ai/models");
+      assistantModels = new Map(models.map((model) => [model.id, model]));
+      dom.assistantModelList.replaceChildren();
+      for (const model of models) {
+        const option = document.createElement("option");
+        option.value = model.id;
+        option.label = model.name;
+        dom.assistantModelList.appendChild(option);
+      }
+      dom.assistantModelInfo.textContent = describeModel(dom.assistantModel.value.trim());
+    } catch (error) {
+      dom.assistantModelInfo.textContent = i18n.t("assistant.catalogUnavailable");
+    }
+  }
+
+  dom.assistantModel.addEventListener("input", () => {
+    dom.assistantModelInfo.textContent = describeModel(dom.assistantModel.value.trim());
+  });
+
+  async function saveAssistant(model) {
+    showAdminError("");
+    dom.assistantSave.disabled = true;
+    try {
+      fillAssistant(
+        await api("/api/admin/ai", {
+          method: "PUT",
+          body: JSON.stringify({ model, effort: dom.assistantEffort.value }),
+        }),
+      );
+      setStatus(i18n.t("assistant.saved"));
+    } catch (error) {
+      showAdminError(error.message);
+    } finally {
+      dom.assistantSave.disabled = false;
+    }
+  }
+
+  dom.assistantForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    saveAssistant(dom.assistantModel.value.trim() || null);
+  });
+
+  dom.assistantReset.addEventListener("click", () => {
+    dom.assistantModel.value = assistantDefaultModel;
+    saveAssistant(null);
   });
 
   /* ------------------------------------------------ traza de auditoría */

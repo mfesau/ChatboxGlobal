@@ -39,6 +39,9 @@ for _isolated in (
     # llegaba entera a las pruebas: la base de conocimiento salía a la red de
     # verdad, con su factura.
     "GOOGLE_API_KEY",
+    "OPENROUTER_API_KEY",
+    "OPENROUTER_MODEL",
+    "AI_PROVIDER",
     "WHATSAPP_VERIFY_TOKEN",
     "WHATSAPP_APP_SECRET",
     "WHATSAPP_ACCESS_TOKEN",
