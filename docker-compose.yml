@@ -1,6 +1,16 @@
 # Entorno local completo: PostgreSQL más el orquestador.
+
+# Tope de los logs de Docker: sin él crecen sin límite hasta llenar el disco.
+# Tres ficheros de 10 MB por servicio; lo anterior se descarta.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   postgres:
+    logging: *default-logging
     # postgres:17-alpine con la extensión `vector` compilada dentro: la base de
     # conocimiento del asistente guarda vectores de significado (ver
     # 0017_knowledge_base.sql). No se usa la imagen pgvector/pgvector porque es
@@ -30,6 +40,7 @@ services:
       retries: 10
 
   api:
+    logging: *default-logging
     build: .
     container_name: chatbox-api
     depends_on:
@@ -61,6 +72,7 @@ services:
   # siendo válido. Con certificado:
   #   docker compose --profile tls up -d
   nginx:
+    logging: *default-logging
     image: nginx:1.27-alpine
     container_name: chatbox-nginx
     profiles:
