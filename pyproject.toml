@@ -9,6 +9,9 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 filterwarnings = ["error::DeprecationWarning:app.*"]
+markers = [
+    "require_department: el chatbox exige elegir área antes de escribir (ver conftest.py)",
+]
 
 [tool.ruff]
 line-length = 100

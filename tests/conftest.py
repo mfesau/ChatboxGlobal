@@ -116,3 +116,23 @@ from tests.test_teamwork import (  # noqa: E402, F401  fixtures compartidas
     as_agent,
     team,
 )
+
+
+@pytest.fixture(autouse=True)
+def _department_choice(request, monkeypatch):
+    """El chatbox exige elegir área antes de escribir, pero no en toda prueba.
+
+    Casi todas las pruebas de la bandeja parten de conversaciones que todavía
+    no tienen departamento —la cola común, que otros canales siguen llenando—
+    y las crean desde el chatbox por comodidad. Solo las marcadas con
+    ``require_department`` comprueban la obligación de elegir.
+    """
+    if request.node.get_closest_marker("require_department"):
+        return
+
+    from app.core import web_thread
+
+    async def nunca(*args, **kwargs):
+        return False
+
+    monkeypatch.setattr(web_thread, "needs_department", nunca)

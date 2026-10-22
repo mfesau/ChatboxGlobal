@@ -132,14 +132,15 @@ async def test_a_closed_conversation_can_be_followed_by_a_new_one(anonymous, as_
         assert await repo.recent_messages(session, hilos[1].id) == []
 
 
-async def test_the_new_conversation_inherits_the_branch(anonymous, as_agent, team):
-    """Quien ya eligió rama no tiene que volver a elegir para otra consulta."""
-    admin = await as_agent(team["admin"]["email"])
-    creado = await admin.post("/api/departments", json={"name": "Soporte"})
-    department_id = uuid.UUID(creado.json()["id"])
-
+@pytest.mark.require_department
+async def test_a_new_conversation_asks_for_the_branch_again(anonymous, as_agent, team):
+    """Una consulta nueva puede ser para otra área: no se hereda la anterior."""
+    # El cliente escribe antes de que haya áreas; después se da de alta una.
     cliente = await _contact_client(anonymous)
     contact_id = await _contact_id("cliente-hilo@clientes.local")
+    admin = await as_agent(team["admin"]["email"])
+    creado = await admin.post("/api/departments", json={"name": "Soporte"})
+    department_id = creado.json()["id"]
 
     async with session_scope() as session:
         [hilo] = list(
@@ -149,13 +150,34 @@ async def test_the_new_conversation_inherits_the_branch(anonymous, as_agent, tea
                 )
             ).scalars()
         )
-        hilo.department_id = department_id
+        hilo.department_id = uuid.UUID(department_id)
         hilo.status = "closed"
 
     assert (await cliente.post("/api/contact/conversations")).status_code == 201
 
     hilos = await _conversations_of(contact_id)
-    assert hilos[-1].department_id == department_id
+    assert hilos[-1].department_id is None
+
+    # Sin elegir, el mensaje no entra; eligiendo, sí, y en esa área.
+    sin_area = await cliente.post("/api/web/messages", json={"text": "Otra consulta"})
+    assert sin_area.status_code == 409
+    elegida = await cliente.put(
+        "/api/contact/department", json={"department_id": department_id}
+    )
+    assert elegida.status_code == 200, elegida.text
+    con_area = await cliente.post("/api/web/messages", json={"text": "Otra consulta"})
+    assert con_area.status_code == 200, con_area.text
+    hilos = await _conversations_of(contact_id)
+    assert len(hilos) == 2
+    assert str(hilos[-1].department_id) == department_id
+
+
+@pytest.mark.require_department
+async def test_without_any_branch_nobody_has_to_choose(anonymous):
+    """Sin áreas dadas de alta todo sigue entrando a la cola común."""
+    cliente = await _contact_client(anonymous, "cliente-sin-areas")
+    respuesta = await cliente.post("/api/web/messages", json={"text": "Hola de nuevo"})
+    assert respuesta.status_code == 200, respuesta.text
 
 
 async def test_writing_again_lands_in_the_new_thread(anonymous, as_agent, team):
@@ -223,3 +245,21 @@ def test_the_reference_carries_the_web_account(kind):
     assert ref.channel is kind
     assert ref.channel_conversation_id == "un-hilo"
     assert ref.channel_account_id == web_thread.WEB_ACCOUNT
+
+
+@pytest.mark.require_department
+async def test_the_socket_refuses_a_message_without_branch(anonymous, as_agent, team):
+    """La misma comprobación que usa el WebSocket antes de aceptar un mensaje."""
+
+    await _contact_client(anonymous, "cliente-socket")
+    contact_id = await _contact_id("cliente-socket@clientes.local")
+    admin = await as_agent(team["admin"]["email"])
+    await admin.post("/api/departments", json={"name": "Ventas"})
+
+    async with session_scope() as session:
+        contacto = await repo.get_contact(session, contact_id)
+        hilo = await web_thread.current_thread_id(session, contacto)
+        falta = await web_thread.needs_department(
+            session, tenant_id=contacto.tenant_id, thread_id=hilo
+        )
+    assert falta is True

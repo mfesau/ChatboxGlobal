@@ -229,6 +229,14 @@ async def web_message(
     payload, raw = await _read_body(request)
     payload.setdefault("tenant", settings.default_tenant_slug)
     payload["session_id"] = await web_thread.current_thread_id(session, contact)
+    if await web_thread.needs_department(
+        session, tenant_id=contact.tenant_id, thread_id=payload["session_id"]
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Elija primero con qué área quiere hablar",
+            headers={"X-Chatbox-Error": web_thread.DEPARTMENT_REQUIRED},
+        )
     payload["display_name"] = contact.display_name
     payload["email"] = contact.primary_email
 

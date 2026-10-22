@@ -332,16 +332,14 @@
   /** Muestra el selector de rama, o entra directo si no hay entre qué elegir. */
   async function chooseBeforeChatting() {
     let departments = [];
+    let fallo = false;
     try {
       departments = await api("/api/contact/departments");
     } catch {
-      // Sin la lista no se puede elegir; entrar igual es mejor que dejar al
-      // cliente en una pantalla vacía. La conversación queda en la cola común,
-      // que es como funcionaba antes de que existiera este paso.
-      enterChat(null);
-      return;
+      fallo = true;
     }
-    if (departments.length === 0) {
+    // Sin áreas dadas de alta no hay nada que elegir: todo va a la cola común.
+    if (!fallo && departments.length === 0) {
       enterChat(null);
       return;
     }
@@ -354,6 +352,19 @@
     dom.shell.hidden = true;
 
     dom.departmentOptions.textContent = "";
+    // Elegir es obligatorio: si la lista no llega, no se entra al chat sin
+    // área —el servidor no aceptaría el mensaje—, se ofrece reintentar.
+    if (fallo) {
+      dom.departmentError.textContent = i18n.t("gate.departmentUnavailable");
+      dom.departmentError.hidden = false;
+      const retry = document.createElement("button");
+      retry.type = "button";
+      retry.className = "gate__department";
+      retry.textContent = i18n.t("gate.retry");
+      retry.addEventListener("click", () => chooseBeforeChatting());
+      dom.departmentOptions.appendChild(retry);
+      return;
+    }
     departments.forEach((department) => {
       const option = document.createElement("button");
       option.type = "button";
@@ -725,6 +736,18 @@
         showTyping(true);
         break;
 
+      case "department_required":
+        // Se escribió sin área elegida (por ejemplo, desde otra pestaña que
+        // empezó una conversación nueva). Lo escrito vuelve al cuadro de
+        // texto para enviarlo después de elegir.
+        showTyping(false);
+        dom.thread.lastElementChild?.remove();
+        if (payload.text && !dom.input.value) {
+          dom.input.value = payload.text;
+        }
+        chooseBeforeChatting();
+        break;
+
       case "typing":
         showTyping(true);
         break;
@@ -921,15 +944,16 @@
       dom.newChatButton.disabled = false;
       return;
     }
-    // Reconectar es lo que trae el hilo nuevo: el socket vuelve a preguntar
-    // cuál es el vigente y llega su `ready`, ya vacío.
+    // Una consulta nueva puede ser para otra área: se vuelve a elegir. Al
+    // entrar, el socket se reconecta y trae el hilo nuevo, ya vacío.
     setClosed(false);
     dom.thread.textContent = "";
     dom.newChatButton.disabled = false;
     if (state.socket) {
       state.socket.close();
+      state.socket = null;
     }
-    connect();
+    await chooseBeforeChatting();
   });
 
   dom.resetButton.addEventListener("click", () => {

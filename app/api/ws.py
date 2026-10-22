@@ -151,6 +151,23 @@ async def chat_socket(websocket: WebSocket) -> None:
             if kind != "message":
                 continue
 
+            # Sin área elegida no se acepta el mensaje: el chatbox vuelve a
+            # mostrar el selector y conserva lo escrito.
+            async with session_scope() as session:
+                tenant = await repo.get_or_create_tenant(session, tenant_slug)
+                falta_area = await web_thread.needs_department(
+                    session, tenant_id=tenant.id, thread_id=session_id
+                )
+            if falta_area:
+                await websocket.send_json(
+                    {
+                        "type": web_thread.DEPARTMENT_REQUIRED,
+                        "client_message_id": data.get("client_message_id"),
+                        "text": data.get("text"),
+                    }
+                )
+                continue
+
             payload = {
                 "session_id": session_id,
                 "tenant": tenant_slug,

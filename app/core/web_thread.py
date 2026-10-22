@@ -16,11 +16,11 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.envelope import ChannelKind, ConversationRef
-from app.db.models import Conversation
+from app.db.models import Conversation, Department
 
 #: Identificador de la cuenta de canal del chatbox propio.
 WEB_ACCOUNT = "web"
@@ -73,3 +73,36 @@ async def current_thread_id(session: AsyncSession, contact: Any) -> str:
     """Identificador del hilo vigente, estrenando el primero si no hay ninguno."""
     conversation = await current(session, contact)
     return conversation.channel_conversation_id if conversation else first_thread_id(contact)
+
+
+#: Lo que el chatbox recibe cuando intenta escribir sin haber elegido área.
+DEPARTMENT_REQUIRED = "department_required"
+
+
+async def needs_department(session: AsyncSession, *, tenant_id: Any, thread_id: str) -> bool:
+    """¿Le falta al hilo el departamento para poder escribir en él?
+
+    El cliente tiene que elegir con qué área habla antes del primer mensaje:
+    así cada conversación nace en la cola de quien la atiende. Solo se exige
+    si hay alguna área activa entre la que elegir; sin ninguna, todo va a la
+    cola común como siempre.
+    """
+    activos = (
+        await session.execute(
+            select(func.count())
+            .select_from(Department)
+            .where(Department.tenant_id == tenant_id, Department.is_active.is_(True))
+        )
+    ).scalar_one()
+    if not activos:
+        return False
+    conversation = (
+        await session.execute(
+            select(Conversation).where(
+                Conversation.tenant_id == tenant_id,
+                Conversation.channel == ChannelKind.WEB,
+                Conversation.channel_conversation_id == thread_id,
+            )
+        )
+    ).scalar_one_or_none()
+    return conversation is None or conversation.department_id is None

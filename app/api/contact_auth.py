@@ -302,8 +302,9 @@ async def start_new_conversation(contact: ContactDep, session: SessionDep) -> di
     conversación que el cliente ya no mira; para eso está seguir escribiendo en
     el mismo hilo.
 
-    El departamento se hereda: quien ya eligió con qué rama habla no tiene por
-    qué volver a elegir para hacer otra consulta.
+    El departamento no se hereda: una consulta nueva puede ser para otra área
+    —ayer el Hotel, hoy Informática—, así que el cliente vuelve a elegir antes
+    de escribir (ver ``web_thread.needs_department``).
     """
     anterior = await web_thread.current(session, contact)
     if anterior is not None and anterior.status != "closed":
@@ -325,8 +326,6 @@ async def start_new_conversation(contact: ContactDep, session: SessionDep) -> di
         contact_id=contact.id,
         channel_account=account,
     )
-    if anterior is not None:
-        conversation.department_id = anterior.department_id
     await session.flush()
 
     log.info(
