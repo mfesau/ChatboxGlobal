@@ -33,7 +33,7 @@ from google.genai import errors as genai_errors
 
 from app.core import ai_settings, hotel_booking, knowledge
 from app.core.envelope import Direction
-from app.core.hub import conversation_topic, hub, inbox_topic
+from app.core.hub import access_scope, conversation_topic, hub, inbox_topic
 from app.core.pipeline import Handler, NextFn, TurnContext
 from app.core.storage import resolve_upload
 from app.db import repositories as repo
@@ -743,6 +743,7 @@ class AIHandler(Handler):
                     "conversation_id": str(ctx.conversation.id),
                     "reason": arguments.get("motivo"),
                     "urgency": arguments.get("urgencia"),
+                    **access_scope(ctx.conversation),
                 },
             )
             return "Derivación registrada. Un agente humano atenderá la conversación."

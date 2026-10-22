@@ -81,3 +81,27 @@ def agent_topic(agent_id: str) -> str:
 def presence_topic(tenant_slug: str) -> str:
     """Altas, bajas y cambios de disponibilidad del equipo."""
     return f"presence:{tenant_slug}"
+
+
+#: Clave con la que un aviso de la cola común lleva de qué departamento y de
+#: quién es su conversación. La consume ``app/api/ws.py`` y no llega al
+#: navegador.
+ACCESS_KEY = "_access"
+
+
+def access_scope(conversation: Any) -> dict[str, Any]:
+    """Departamento y dueño de la conversación, para filtrar el aviso.
+
+    Hace falta cuando el aviso sale desde dentro de la transacción que todavía
+    está escribiendo la conversación —el primer mensaje de un cliente nuevo—:
+    otra sesión aún no puede leerla, y sin este dato el aviso no llegaría a
+    nadie más que a administración.
+    """
+    return {
+        ACCESS_KEY: {
+            "department_id": (
+                str(conversation.department_id) if conversation.department_id else None
+            ),
+            "assignee_id": str(conversation.assignee_id) if conversation.assignee_id else None,
+        }
+    }

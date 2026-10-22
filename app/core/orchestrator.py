@@ -26,7 +26,7 @@ from app.core.envelope import (
     InboundMessage,
     OutboundMessage,
 )
-from app.core.hub import conversation_topic, hub, inbox_topic
+from app.core.hub import access_scope, conversation_topic, hub, inbox_topic
 from app.core.pipeline import Pipeline, TurnContext
 from app.core.storage import save_incoming_media
 from app.db import repositories as repo
@@ -279,7 +279,7 @@ class Orchestrator:
             "sender": inbound.sender.display_name,
             "timestamp": inbound.timestamp.isoformat(),
         }
-        await hub.publish(inbox_topic(tenant_slug), event)
+        await hub.publish(inbox_topic(tenant_slug), {**event, **access_scope(conversation)})
         await hub.publish(conversation_topic(conversation.channel_conversation_id), event)
 
     # ------------------------------------------------------------------ (4)

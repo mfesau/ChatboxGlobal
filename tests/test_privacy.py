@@ -124,9 +124,11 @@ async def test_supervision_can_read_the_audit_trail(as_agent, team):
 # --------------------------------------------------------------------------- #
 async def test_the_export_gathers_everything_held_about_a_contact(as_agent, team):
     contact_id, _ = await _a_contact_with_a_conversation(team)
-    marta = await as_agent(team["marta"]["email"])
+    # Administración: la copia abarca todos los departamentos, y una
+    # supervisión acotada no puede sacarla (test_department_isolation.py).
+    admin = await as_agent(team["admin"]["email"])
 
-    response = await marta.get(f"/api/contacts/{contact_id}/export")
+    response = await admin.get(f"/api/contacts/{contact_id}/export")
     assert response.status_code == 200
     assert "attachment" in response.headers["content-disposition"]
     assert response.headers["cache-control"] == "private, no-store"

@@ -61,6 +61,8 @@ async def list_audit(
     rows = await repo.list_audit(
         session,
         tenant_id=tenant.id,
+        department_ids=principal.department_ids,
+        own_actor=principal.audit_actor,
         actor=actor,
         action=action,
         subject_id=subject_id,
@@ -104,6 +106,14 @@ async def export_contact_data(
     navegador ofrezca guardarla: quien la pide se la va a entregar al
     interesado, no la va a leer en pantalla.
     """
+    # La copia lleva todo lo que se guarda del contacto, en todos los
+    # departamentos. Una supervisión acotada a unos pocos no puede sacarla:
+    # le daría el texto de conversaciones que la consola no le enseña.
+    if principal.department_ids is not None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Solo administración puede exportar los datos de un contacto",
+        )
     contact = await repo.get_contact(session, contact_id)
     if contact is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contacto no encontrado")

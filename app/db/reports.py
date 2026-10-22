@@ -299,29 +299,41 @@ async def ai_usage(
     conversación: lo que se mide es el gasto del mes, y una conversación
     antigua que sigue viva también lo genera.
     """
+    def acotado(stmt: Select) -> Select:
+        # Mismo alcance por departamento que el resto del informe, pero por
+        # la fecha de la ejecución y no por la de la conversación.
+        stmt = stmt.join(Conversation, Conversation.id == AIRun.conversation_id).where(
+            AIRun.tenant_id == tenant_id,
+            AIRun.created_at >= window.since,
+            AIRun.created_at <= window.until,
+        )
+        if window.scope_department_ids is not None:
+            stmt = stmt.where(
+                or_(
+                    Conversation.department_id.is_(None),
+                    Conversation.department_id.in_(window.scope_department_ids),
+                )
+            )
+        if window.only_department_id is not None:
+            stmt = stmt.where(Conversation.department_id == window.only_department_id)
+        return stmt
+
     fila = (
         await session.execute(
-            select(
-                func.count(),
-                func.sum(AIRun.input_tokens),
-                func.sum(AIRun.output_tokens),
-                func.avg(AIRun.latency_ms),
-            ).where(
-                AIRun.tenant_id == tenant_id,
-                AIRun.created_at >= window.since,
-                AIRun.created_at <= window.until,
+            acotado(
+                select(
+                    func.count(),
+                    func.sum(AIRun.input_tokens),
+                    func.sum(AIRun.output_tokens),
+                    func.avg(AIRun.latency_ms),
+                ).select_from(AIRun)
             )
         )
     ).one()
 
     errores = (
         await session.execute(
-            select(func.count()).where(
-                AIRun.tenant_id == tenant_id,
-                AIRun.created_at >= window.since,
-                AIRun.created_at <= window.until,
-                AIRun.error.is_not(None),
-            )
+            acotado(select(func.count()).select_from(AIRun)).where(AIRun.error.is_not(None))
         )
     ).scalar_one()
 

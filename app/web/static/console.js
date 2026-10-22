@@ -3414,6 +3414,9 @@
       // El servidor lo exige igual (AdminDep); ocultarlo evita ofrecer a
       // supervisión un botón que solo le daría un 403.
       dom.profileErase.hidden = state.me?.role !== "admin";
+      // Exportar también es de administración: la copia lleva las
+      // conversaciones de todos los departamentos.
+      dom.profileExport.hidden = state.me?.role !== "admin";
       showPrivacyError("");
       dom.profileTitle.textContent = contact.display_name || "Contacto sin nombre";
       dom.profileName.value = contact.display_name || "";
@@ -4936,6 +4939,22 @@
         return;
       }
       if (payload.type === "ready") {
+        return;
+      }
+
+      // Aviso de una conversación que no se puede ver (otro departamento, u
+      // otra persona ya la tomó). Solo importa si estaba en pantalla.
+      if (payload.type === "refresh") {
+        const enPantalla =
+          state.selected?.id === payload.conversation_id ||
+          state.conversations.some((c) => c.id === payload.conversation_id);
+        if (!enPantalla) {
+          return;
+        }
+        if (state.selected?.id === payload.conversation_id) {
+          clearSelection(i18n.t("console.noLongerVisible"));
+        }
+        await loadConversations();
         return;
       }
 

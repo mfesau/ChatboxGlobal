@@ -11,7 +11,7 @@ import uuid
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import Text, cast, delete, func, or_, select, update
+from sqlalchemy import Text, and_, cast, delete, func, or_, select, update
 from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -560,6 +560,18 @@ async def list_contact_comments(
     return list((await session.execute(stmt)).scalars())
 
 
+def _in_departments(department_ids: set[uuid.UUID] | None) -> Any:
+    """Condición «la conversación es de estos departamentos o de ninguno».
+
+    Es la misma regla que ``_restrict_to_departments``, en forma de expresión
+    para poder usarla dentro de un ``JOIN`` o de un ``EXISTS``.
+    """
+    return or_(
+        Conversation.department_id.is_(None),
+        Conversation.department_id.in_(department_ids or set()),
+    )
+
+
 async def list_contacts(
     session: AsyncSession,
     *,
@@ -567,13 +579,28 @@ async def list_contacts(
     search: str | None = None,
     limit: int = 50,
     offset: int = 0,
+    department_ids: set[uuid.UUID] | None = None,
 ) -> list[tuple[Contact, int, datetime | None]]:
     """Directorio de contactos con su número de conversaciones y última
-    actividad, para el listado global de la consola (solo supervisión)."""
+    actividad, para el listado global de la consola (solo supervisión).
+
+    ``department_ids`` acota a una supervisión restringida: solo aparecen los
+    contactos con alguna conversación de sus departamentos —o de la cola
+    común—, y los recuentos cuentan solo esas. Un cliente del Hotel no es
+    asunto de quien supervisa Informática.
+    """
+    if department_ids is None:
+        join = Conversation.contact_id == Contact.id
+        stmt = select(
+            Contact, func.count(Conversation.id), func.max(Conversation.last_message_at)
+        ).outerjoin(Conversation, join)
+    else:
+        join = and_(Conversation.contact_id == Contact.id, _in_departments(department_ids))
+        stmt = select(
+            Contact, func.count(Conversation.id), func.max(Conversation.last_message_at)
+        ).join(Conversation, join)
     stmt = (
-        select(Contact, func.count(Conversation.id), func.max(Conversation.last_message_at))
-        .outerjoin(Conversation, Conversation.contact_id == Contact.id)
-        .where(Contact.tenant_id == tenant_id)
+        stmt.where(Contact.tenant_id == tenant_id)
         .group_by(Contact.id)
         .order_by(func.max(Conversation.last_message_at).desc().nulls_last())
         .limit(limit)
@@ -615,11 +642,16 @@ async def search_contacts(
 
 
 async def list_conversations_for_contact(
-    session: AsyncSession, contact_id: uuid.UUID
+    session: AsyncSession,
+    contact_id: uuid.UUID,
+    department_ids: set[uuid.UUID] | None = None,
 ) -> list[Conversation]:
+    """Conversaciones de un contacto; ``department_ids`` acota como en la bandeja."""
+    stmt = select(Conversation).where(Conversation.contact_id == contact_id)
+    if department_ids is not None:
+        stmt = stmt.where(_in_departments(department_ids))
     stmt = (
-        select(Conversation)
-        .where(Conversation.contact_id == contact_id)
+        stmt
         .options(
             selectinload(Conversation.contact),
             selectinload(Conversation.assignee),
@@ -1341,6 +1373,8 @@ async def list_audit(
     session: AsyncSession,
     *,
     tenant_id: uuid.UUID,
+    department_ids: set[uuid.UUID] | None = None,
+    own_actor: str | None = None,
     actor: str | None = None,
     action: str | None = None,
     subject_id: str | None = None,
@@ -1356,6 +1390,24 @@ async def list_audit(
     correo, no el prefijo.
     """
     stmt = select(AuditLog).where(AuditLog.tenant_id == tenant_id)
+    if department_ids is not None:
+        # Supervisión acotada: lo que pasó en conversaciones de sus
+        # departamentos, y lo que hizo ella misma. El resto de la traza —otros
+        # departamentos, usuarios, configuración— es de administración.
+        # Los identificadores se comparan sin guiones: PostgreSQL convierte un
+        # UUID a texto con ellos y SQLite lo guarda sin ellos.
+        visibles = select(func.replace(cast(Conversation.id, Text), "-", "")).where(
+            Conversation.tenant_id == tenant_id, _in_departments(department_ids)
+        )
+        stmt = stmt.where(
+            or_(
+                and_(
+                    AuditLog.subject_type == "conversation",
+                    func.replace(AuditLog.subject_id, "-", "").in_(visibles),
+                ),
+                AuditLog.actor == (own_actor or ""),
+            )
+        )
     if actor:
         stmt = stmt.where(AuditLog.actor.ilike(f"%{actor.strip()}%"))
     if action:

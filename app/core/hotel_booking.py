@@ -21,7 +21,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
-from app.core.hub import hub, inbox_topic
+from app.core.hub import access_scope, hub, inbox_topic
 from app.core.pipeline import TurnContext
 from app.db import repositories as repo
 from app.db.models import HotelRoom
@@ -233,6 +233,7 @@ async def _create_reservation(ctx: TurnContext, arguments: dict[str, Any]) -> st
         {
             "type": "hotel_reservation_created",
             "conversation_id": str(ctx.conversation.id),
+            **access_scope(ctx.conversation),
             "reservation_id": str(reservation.id),
             "department_id": str(department_id),
             "room": room.code,

@@ -406,6 +406,7 @@
 
       "admin.tab.knowledge": "Conocimiento",
       "knowledge.title": "Base de conocimiento",
+      "console.noLongerVisible": "Esta conversación ya no está a su alcance.",
       "admin.tab.assistant": "Asistente IA",
       "assistant.title": "Asistente IA",
       "assistant.hint": "Qué modelo responde a los clientes y cuánto razona antes de hacerlo. La clave de OpenRouter no se escribe aquí: va en el fichero .env del servidor.",
@@ -1011,6 +1012,7 @@
 
       "admin.tab.knowledge": "Knowledge",
       "knowledge.title": "Knowledge base",
+      "console.noLongerVisible": "This conversation is no longer available to you.",
       "admin.tab.assistant": "AI assistant",
       "assistant.title": "AI assistant",
       "assistant.hint": "Which model answers your customers and how much it reasons first. The OpenRouter key is not entered here: it goes in the server's .env file.",
@@ -1617,6 +1619,7 @@
 
       "admin.tab.knowledge": "Wissen",
       "knowledge.title": "Wissensbasis",
+      "console.noLongerVisible": "Diese Unterhaltung ist für Sie nicht mehr sichtbar.",
       "admin.tab.assistant": "KI-Assistent",
       "assistant.title": "KI-Assistent",
       "assistant.hint": "Welches Modell Ihren Kunden antwortet und wie viel es vorher nachdenkt. Der OpenRouter-Schlüssel wird hier nicht eingegeben: Er steht in der .env-Datei des Servers.",

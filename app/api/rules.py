@@ -214,6 +214,11 @@ async def list_scheduled(
     conversation_id: uuid.UUID, session: SessionDep, principal: PrincipalDep
 ) -> list[ScheduledOut]:
     """Lo que queda por salir en esta conversación."""
+    conversation = await repo.get_conversation(session, conversation_id)
+    if conversation is None or not principal.can_access(conversation):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Conversación no encontrada"
+        )
     stmt = (
         select(ScheduledMessage)
         .where(ScheduledMessage.conversation_id == conversation_id)

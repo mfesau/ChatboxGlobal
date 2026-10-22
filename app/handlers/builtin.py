@@ -13,7 +13,7 @@ from app.core.business_hours import (
     resolve_service_policy,
 )
 from app.core.envelope import ContentType, Direction
-from app.core.hub import hub, inbox_topic
+from app.core.hub import access_scope, hub, inbox_topic
 from app.core.localized import pick as pick_localized
 from app.core.pipeline import Handler, NextFn, TurnContext
 from app.db import repositories as repo
@@ -102,6 +102,7 @@ class HumanControlHandler(Handler):
                     "type": "inbound_while_human",
                     "conversation_id": str(ctx.conversation.id),
                     "text": ctx.text,
+                    **access_scope(ctx.conversation),
                 },
             )
             ctx.suppress_reply = True
@@ -259,6 +260,7 @@ class CommandHandler(Handler):
                 "type": "handoff_requested",
                 "conversation_id": str(ctx.conversation.id),
                 "channel": str(ctx.conversation.channel),
+                **access_scope(ctx.conversation),
             },
         )
         ctx.reply(

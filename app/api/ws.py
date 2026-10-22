@@ -4,18 +4,29 @@ from __future__ import annotations
 
 import contextlib
 import hmac
+import uuid
+from types import SimpleNamespace
 from typing import Any
 
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
+from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 
 from app.api.deps import CONTACT_SESSION_COOKIE, SESSION_COOKIE
 from app.core import web_thread
 from app.core.envelope import ChannelKind, Direction
-from app.core.hub import agent_topic, conversation_topic, hub, inbox_topic, presence_topic
+from app.core.hub import (
+    ACCESS_KEY,
+    agent_topic,
+    conversation_topic,
+    hub,
+    inbox_topic,
+    presence_topic,
+)
 from app.core.security import hash_token
 from app.db import repositories as repo
 from app.db.engine import session_scope
-from app.db.models import Tenant
+from app.db.models import Agent, Conversation, Tenant
 from app.logging_setup import get_logger
 
 log = get_logger(__name__)
@@ -28,6 +39,80 @@ HISTORY_LIMIT = 100
 def _make_sender(websocket: WebSocket):
     async def send(event: dict[str, Any]) -> None:
         await websocket.send_json(event)
+
+    return send
+
+
+async def may_see_conversation(
+    agent_id: uuid.UUID, conversation_id: str, scope: dict[str, Any] | None = None
+) -> bool:
+    """Si ese agente puede ver ahora esa conversación, con la regla de la API.
+
+    Se consulta en el momento y no al abrir el socket: los permisos por
+    departamento y los dueños de las conversaciones cambian mientras la
+    consola sigue abierta, y el aviso tiene que seguir la regla vigente.
+
+    ``scope`` es el departamento y el dueño que trae el propio aviso (ver
+    ``access_scope``). Manda sobre la base porque refleja lo que se está
+    escribiendo en este turno, que otra sesión todavía no puede leer.
+    """
+    try:
+        conversation_uuid = uuid.UUID(str(conversation_id))
+    except ValueError:
+        return False
+    async with session_scope() as session:
+        agent = (
+            await session.execute(
+                select(Agent)
+                .where(Agent.id == agent_id)
+                .options(selectinload(Agent.granted_departments))
+            )
+        ).scalar_one_or_none()
+        if agent is None:
+            return False
+        if scope is not None:
+            conversation: Any = SimpleNamespace(
+                department_id=_as_uuid(scope.get("department_id")),
+                assignee_id=_as_uuid(scope.get("assignee_id")),
+            )
+        else:
+            conversation = await session.get(Conversation, conversation_uuid)
+            if conversation is None:
+                return False
+        return repo.agent_can_access(conversation, agent)
+
+
+def _as_uuid(value: Any) -> uuid.UUID | None:
+    return uuid.UUID(str(value)) if value else None
+
+
+def _make_inbox_sender(websocket: WebSocket, agent_id: str | None):
+    """Emisor de la cola común que respeta los departamentos.
+
+    La cola común es un único tema por inquilino, así que cada aviso llegaba a
+    todas las consolas abiertas: un agente de Informática recibía el texto de
+    lo que los clientes le escribían al Hotel, aunque la API REST se lo
+    negara. Ahora quien no puede ver la conversación recibe solo un
+    ``refresh`` con su identificador —sin texto ni datos del cliente—, que
+    basta para que su consola cierre el hilo si lo tenía abierto y acaba de
+    perder el acceso.
+
+    La clave de servicio (``agent_id`` nulo) equivale a administración y lo
+    recibe todo, igual que en la API.
+    """
+
+    async def send(event: dict[str, Any]) -> None:
+        scope = event.get(ACCESS_KEY)
+        if scope is not None:
+            event = {key: value for key, value in event.items() if key != ACCESS_KEY}
+        conversation_id = event.get("conversation_id")
+        if agent_id is None or not conversation_id:
+            await websocket.send_json(event)
+            return
+        if await may_see_conversation(uuid.UUID(agent_id), conversation_id, scope):
+            await websocket.send_json(event)
+            return
+        await websocket.send_json({"type": "refresh", "conversation_id": conversation_id})
 
     return send
 
@@ -123,11 +208,19 @@ async def inbox_socket(
         return
 
     await websocket.accept()
-    sender = _make_sender(websocket)
-    topics = [inbox_topic(tenant_slug), presence_topic(tenant_slug)]
+    # El tema personal no se filtra: lo que llega por él va dirigido a esa
+    # persona, incluido el aviso de que una conversación suya pasó a otro y
+    # ya no puede verla.
+    queue_sender = _make_inbox_sender(websocket, agent_id)
+    direct_sender = _make_sender(websocket)
+    subscriptions = [
+        (inbox_topic(tenant_slug), queue_sender),
+        (presence_topic(tenant_slug), direct_sender),
+    ]
     if agent_id:
-        topics.append(agent_topic(agent_id))
-    for topic in topics:
+        subscriptions.append((agent_topic(agent_id), direct_sender))
+    topics = [topic for topic, _ in subscriptions]
+    for topic, sender in subscriptions:
         await hub.subscribe(topic, sender)
 
     try:
@@ -140,7 +233,7 @@ async def inbox_socket(
     except WebSocketDisconnect:
         pass
     finally:
-        for topic in topics:
+        for topic, sender in subscriptions:
             await hub.unsubscribe(topic, sender)
 
 
