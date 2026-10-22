@@ -127,7 +127,7 @@ silencio. Al devolverla a la cola, vuelve a atenderla.
 | 2. Normalización | `parse` del adaptador → `InboundMessage` | [whatsapp.py](app/channels/whatsapp.py), [msbot.py](app/channels/msbot.py), [web.py](app/channels/web.py) |
 | 3. Lógica de negocio y de IA | Cadena de handlers | [pipeline.py](app/core/pipeline.py), [handlers/](app/handlers) |
 | 4. Envío de la respuesta | Cola de salida más `send` del adaptador | [dispatcher.py](app/core/dispatcher.py) |
-| Trabajo en equipo | Alcance por rol, derivación y notas | [console.py](app/api/console.py), [deps.py](app/api/deps.py) |
+| Trabajo en equipo | Alcance por rol, derivación y notas | [console/](app/api/console/__init__.py), [deps.py](app/api/deps.py) |
 
 ---
 
@@ -171,7 +171,10 @@ app/
 │   ├── contact_auth.py     Cuentas del chatbox público
 │   ├── google_auth.py      Entrada con cuenta de Google
 │   ├── saml.py             Entrada por SAML 2.0
-│   ├── console.py          Bandejas, derivación, notas, administración y supervisión
+│   ├── console/            API de la consola, un módulo por tema: conversations,
+│   │                       contacts, team, departments, hotel, configuration, channels
+│   ├── system.py           Estado del sistema para administración
+│   ├── translation.py      Traducción de conversaciones para el equipo
 │   ├── privacy.py          Traza de auditoría y derechos del interesado
 │   ├── reports.py          Informes de supervisión y su exportación
 │   ├── rules.py            Reglas y mensajes programados
@@ -182,12 +185,13 @@ app/
 │   ├── deps.py             Identidad de la petición y permisos
 │   └── ws.py               WebSockets del chatbox y de la consola
 └── web/                    Chatbox y consola de equipo (HTML, CSS, JS)
+    ├── static/console/     Consola en módulos ES nativos, sin compilación (main.js arranca)
     ├── static/i18n.js      Español, inglés y alemán
     └── static/theme.js     Tema claro, oscuro o el del sistema
 
 db/
 ├── migrations/0001_init.sql       Esquema completo, generado desde los modelos
-└── migrations/0002…0022_*.sql     Añadidos incrementales, aplicados al arrancar
+└── migrations/0002…0023_*.sql     Añadidos incrementales, aplicados al arrancar
 
 scripts/
 ├── init_db.py              Crea el esquema en desarrollo
@@ -1156,8 +1160,8 @@ cuentas dadas de alta, para que el adaptador pueda comprobar su firma— y sus
 conversaciones aparecen en la misma cola común que el resto.
 
 Quedan tres sitios más, todos en una lista: el `Literal` del alta de cuentas y
-el mapa `CHANNEL_CREDENTIAL_FIELDS` en [console.py](app/api/console.py), el
-mismo mapa en [console.js](app/web/static/console.js), y las etiquetas en
+el mapa `CHANNEL_CREDENTIAL_FIELDS` en [channels.py](app/api/console/channels.py), el
+mismo mapa en [admin.js](app/web/static/console/admin.js), y las etiquetas en
 [i18n.js](app/web/static/i18n.js). No hace falta migración: los enumerados se
 guardan como `VARCHAR`.
 

@@ -1288,6 +1288,8 @@
       </div>
     </div>
 
-    <script src="/static/console.js?v=__ASSET_VERSION__"></script>
+    <!-- Módulos ES nativos, sin paso de compilación: main.js importa el resto.
+         Encaja con la CSP estricta (script-src 'self'). -->
+    <script type="module" src="/static/console/main.js?v=__ASSET_VERSION__"></script>
   </body>
 </html>

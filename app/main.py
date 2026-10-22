@@ -72,7 +72,7 @@ def asset_version() -> str:
     static = WEB_DIR / "static"
     if not static.is_dir():
         return __version__
-    stamps = (path.stat().st_mtime_ns for path in static.iterdir() if path.is_file())
+    stamps = (path.stat().st_mtime_ns for path in static.rglob("*") if path.is_file())
     return f"{max(stamps, default=0):x}"
 
 
@@ -81,6 +81,23 @@ def asset_version() -> str:
 #: nueva. Sin esto, una pestaña abierta puede seguir cargando el JavaScript
 #: viejo indefinidamente y quien la tiene delante ve fallos ya corregidos.
 PAGE_CACHE_HEADERS = {"Cache-Control": "no-cache, must-revalidate"}
+
+
+class StaticAssets(StaticFiles):
+    """Estáticos, con los módulos de la consola siempre revalidados.
+
+    La página pide ``console/main.js?v=…`` con la huella de la versión, pero los
+    módulos que ese fichero importa (``./core.js``…) van sin ella: el navegador
+    los guardaría en caché por su cuenta y, tras un despliegue, mezclaría
+    módulos nuevos con viejos. ``no-cache`` le obliga a preguntar cada vez;
+    si no cambiaron, la respuesta es un 304 sin cuerpo.
+    """
+
+    async def get_response(self, path: str, scope: Any) -> Any:
+        response = await super().get_response(path, scope)
+        if Path(path).parts[:1] == ("console",):
+            response.headers["Cache-Control"] = "no-cache"
+        return response
 
 
 @lru_cache(maxsize=16)
@@ -219,7 +236,7 @@ def create_app() -> FastAPI:
 
     if WEB_DIR.is_dir():
         application.mount(
-            "/static", StaticFiles(directory=WEB_DIR / "static"), name="static"
+            "/static", StaticAssets(directory=WEB_DIR / "static"), name="static"
         )
 
         @application.get("/", include_in_schema=False)

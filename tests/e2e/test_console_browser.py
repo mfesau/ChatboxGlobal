@@ -86,7 +86,22 @@ async def test_every_admin_tab_opens_without_javascript_errors(browser, chat_ser
     await page.click("#admin-close")
 
     await page.click("#supervisor-button")
+    await page.wait_for_selector("#supervisor-panel:not([hidden])")
     await page.wait_for_timeout(800)
+    await page.click("#supervisor-close")
+
+    await page.click("#contacts-button")
+    await page.wait_for_selector("#contacts-panel:not([hidden])")
+    await page.wait_for_timeout(500)
+    await page.click("#contacts-close")
+
+    # Cambiar de departamento de trabajo y de idioma rehace media consola.
+    await page.select_option("#work-department", label=e2e.DEPARTMENT)
+    await page.wait_for_timeout(500)
+    await page.select_option("#lang-select", "de")
+    await page.wait_for_timeout(500)
+    await page.select_option("#lang-select", "es")
+    await page.wait_for_timeout(500)
 
     assert errores == []
 
