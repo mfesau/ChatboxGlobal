@@ -32,7 +32,6 @@ ENV SSL_CERT_FILE=/etc/ssl/certs/app-ca-bundle.pem
 COPY app ./app
 COPY db ./db
 COPY scripts ./scripts
-COPY alembic.ini ./
 
 # Usuario sin privilegios. Solo necesita escribir en `uploads`, las imágenes
 # que suben el chatbox y la consola.

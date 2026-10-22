@@ -187,8 +187,7 @@ app/
 
 db/
 ├── migrations/0001_init.sql       Esquema completo, generado desde los modelos
-├── migrations/0002…0019_*.sql     Añadidos incrementales, aplicados al arrancar
-└── alembic/                       Entorno de migraciones
+└── migrations/0002…0022_*.sql     Añadidos incrementales, aplicados al arrancar
 
 scripts/
 ├── init_db.py              Crea el esquema en desarrollo

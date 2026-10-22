@@ -3,8 +3,7 @@
 Los ficheros de ``db/migrations`` están montados en el contenedor de PostgreSQL
 como ``docker-entrypoint-initdb.d``: solo se ejecutan cuando el directorio de
 datos está vacío. En un despliegue ya en marcha —el caso normal, con datos
-dentro— una migración nueva no llegaría jamás a la base, y ``alembic`` no cubre
-el hueco porque su carpeta de revisiones está vacía. Este módulo las aplica al
+dentro— una migración nueva no llegaría jamás a la base. Este módulo las aplica al
 levantar el servicio y anota lo aplicado en ``schema_migrations``.
 
 **Convención obligatoria para los ficheros nuevos**: deben ser idempotentes

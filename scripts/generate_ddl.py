@@ -4,8 +4,9 @@ Uso::
 
     python scripts/generate_ddl.py > db/migrations/0001_init.sql
 
-El fichero resultante es la referencia revisable del esquema. Para la evolución
-posterior se emplea Alembic (``alembic revision --autogenerate``).
+El fichero resultante es la referencia revisable del esquema. Los cambios
+posteriores van en ficheros ``db/migrations/00NN_*.sql`` idempotentes, que
+aplica ``app/db/migrate.py`` al arrancar.
 """
 
 from __future__ import annotations

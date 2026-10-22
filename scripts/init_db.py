@@ -1,6 +1,6 @@
 """Crea el esquema y los datos mínimos. Pensado para desarrollo y pruebas.
 
-En producción, aplique ``db/migrations/0001_init.sql`` o ejecute ``alembic upgrade head``.
+En producción no hace falta: ``app/db/migrate.py`` aplica ``db/migrations`` al arrancar.
 
 Uso::
 
