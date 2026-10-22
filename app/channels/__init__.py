@@ -5,7 +5,15 @@ La importación de los módulos concretos ejecuta el decorador
 nuevo, añada aquí su importación.
 """
 
-from app.channels import facebook, msbot, web, whatsapp  # noqa: F401  (registro por efecto lateral)
+from app.channels import (  # noqa: F401  (registro por efecto lateral)
+    email,
+    facebook,
+    msbot,
+    telegram,
+    twilio,
+    web,
+    whatsapp,
+)
 from app.channels.base import (
     ChannelAdapter,
     ChannelError,

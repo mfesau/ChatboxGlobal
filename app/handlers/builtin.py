@@ -6,13 +6,14 @@ import time
 from collections import defaultdict, deque
 from typing import ClassVar
 
+from app.core import csat
 from app.core.business_hours import (
     ServicePolicy,
     is_within_business_hours,
     resolve_service_policy,
 )
 from app.core.envelope import ContentType, Direction
-from app.core.hub import hub, inbox_topic
+from app.core.hub import access_scope, hub, inbox_topic
 from app.core.localized import pick as pick_localized
 from app.core.pipeline import Handler, NextFn, TurnContext
 from app.db import repositories as repo
@@ -50,6 +51,44 @@ class RateLimitHandler(Handler):
         await next_()
 
 
+class CsatHandler(Handler):
+    """Recoge la nota de satisfacción cuando se está esperando.
+
+    Va delante de todo lo demás porque un «4» suelto no es una consulta: si
+    llegase al asistente, contestaría algo educado y sin sentido, y la nota se
+    perdería. Solo actúa mientras el estado de la conversación dice que hay una
+    encuesta pendiente, de modo que en el resto de los turnos no estorba.
+    """
+
+    name: ClassVar[str] = "csat"
+
+    async def handle(self, ctx: TurnContext, next_: NextFn) -> None:
+        if not ctx.state.get(csat.STATE_KEY):
+            await next_()
+            return
+
+        score = csat.read_score(ctx.text, ctx.inbound.action)
+        if score is None:
+            # No es una nota: se deja de esperar y el turno sigue su camino
+            # normal. Insistir con la pregunta ante un mensaje que claramente
+            # es otra cosa convertiría la encuesta en un obstáculo.
+            ctx.clear_state()
+            await next_()
+            return
+
+        survey = await csat.survey_for(ctx.session, ctx.conversation)
+        if survey is None:
+            ctx.clear_state()
+            await next_()
+            return
+
+        await csat.record_score(ctx.session, survey, score=score)
+        ctx.set_state(csat.STATE_KEY, False)
+        ctx.reply("Gracias por su valoración.")
+        # Nada más responde a este turno: la conversación estaba cerrada.
+        return
+
+
 class HumanControlHandler(Handler):
     """Silencia al bot cuando un agente humano tomó el control del hilo."""
 
@@ -63,6 +102,7 @@ class HumanControlHandler(Handler):
                     "type": "inbound_while_human",
                     "conversation_id": str(ctx.conversation.id),
                     "text": ctx.text,
+                    **access_scope(ctx.conversation),
                 },
             )
             ctx.suppress_reply = True
@@ -220,6 +260,7 @@ class CommandHandler(Handler):
                 "type": "handoff_requested",
                 "conversation_id": str(ctx.conversation.id),
                 "channel": str(ctx.conversation.channel),
+                **access_scope(ctx.conversation),
             },
         )
         ctx.reply(
@@ -229,13 +270,34 @@ class CommandHandler(Handler):
 
 
 class UnsupportedContentHandler(Handler):
-    """Responde con cortesía a contenidos que la lógica actual no interpreta."""
+    """Responde con cortesía a contenidos que la lógica actual no interpreta.
+
+    Qué es «no interpretable» depende de si hay asistente: con modelo
+    configurado, una foto o un PDF siguen su camino y el modelo los mira; sin
+    él, nadie va a leerlos y es mejor decirlo que callar. Por eso la lista de
+    lo que pasa se decide al construir la cadena y no está escrita aquí a
+    fuego (ver ``app/handlers/__init__.py``).
+    """
 
     name: ClassVar[str] = "unsupported_content"
 
+    #: Lo que la lógica determinista resuelve por sí sola, haya modelo o no.
     HANDLED: ClassVar[frozenset[ContentType]] = frozenset(
         {ContentType.TEXT, ContentType.INTERACTIVE}
     )
+
+    #: Lo que el modelo sabe mirar cuando está configurado.
+    MEDIA: ClassVar[frozenset[ContentType]] = frozenset(
+        {
+            ContentType.IMAGE,
+            ContentType.DOCUMENT,
+            ContentType.AUDIO,
+            ContentType.VIDEO,
+        }
+    )
+
+    def __init__(self, *, media_understood: bool = False) -> None:
+        self.media_understood = media_understood
 
     async def handle(self, ctx: TurnContext, next_: NextFn) -> None:
         content_type = ctx.inbound.content_type
@@ -245,6 +307,10 @@ class UnsupportedContentHandler(Handler):
 
         if content_type is ContentType.REACTION:
             ctx.suppress_reply = True
+            return
+
+        if self.media_understood and content_type in self.MEDIA:
+            await next_()
             return
 
         ctx.reply(

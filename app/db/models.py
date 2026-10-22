@@ -18,6 +18,7 @@ import uuid
 from datetime import date, datetime
 from typing import Any
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     JSON,
     Boolean,
@@ -31,6 +32,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy import (
     Enum as SAEnum,
@@ -49,6 +51,16 @@ from app.core.envelope import (
 
 #: ``JSONB`` en Postgres, ``JSON`` en SQLite (pruebas).
 JSONBType = JSONB().with_variant(JSON(), "sqlite")
+
+#: Dimensiones del vector de significado. Es lo que se le pide a
+#: ``gemini-embedding-001`` en ``app/core/knowledge.py``; cambiarlo obliga a
+#: recalcular todo lo guardado, así que los dos sitios deben coincidir.
+EMBEDDING_DIMENSIONS = 768
+
+#: ``vector`` en Postgres —con sus operadores de distancia y su índice— y una
+#: lista JSON corriente en SQLite, donde la extensión no existe. La búsqueda
+#: tiene su propia rama por dialecto (ver ``app/core/knowledge.py``).
+VectorType = Vector(EMBEDDING_DIMENSIONS).with_variant(JSON(), "sqlite")
 
 
 def _enum(python_enum: type, name: str) -> SAEnum:
@@ -175,6 +187,12 @@ class Contact(Base, TimestampMixin):
     #: Derivación ``scrypt$n$r$p$salt$hash`` del chatbox público. Nulo para los
     #: contactos que solo existen por WhatsApp o Teams, sin cuenta propia.
     password_hash: Mapped[str | None] = mapped_column(String(255))
+    #: Fallos de contraseña seguidos y espera impuesta al superar el tope.
+    #: Un acceso correcto los pone a cero (ver ``app/db/repositories.py``).
+    failed_login_count: Mapped[int] = mapped_column(
+        Integer, default=0, nullable=False, server_default=text("0")
+    )
+    locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     identities: Mapped[list[ContactIdentity]] = relationship(
         back_populates="contact", cascade="all, delete-orphan"
@@ -279,6 +297,11 @@ class CannedResponse(Base, TimestampMixin):
     shortcode: Mapped[str] = mapped_column(String(40), nullable=False)
     title: Mapped[str] = mapped_column(String(160), nullable=False)
     body: Mapped[str] = mapped_column(Text, nullable=False)
+    #: Nulo = de toda la empresa; con departamento, solo lo ve y lo usa quien
+    #: atiende ese departamento (ver ``repositories.visible_in_departments``).
+    department_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("departments.id", ondelete="CASCADE"), index=True
+    )
 
 
 class Label(Base, TimestampMixin):
@@ -293,6 +316,11 @@ class Label(Base, TimestampMixin):
     )
     name: Mapped[str] = mapped_column(String(80), nullable=False)
     color: Mapped[str] = mapped_column(String(20), default="#6b7280", nullable=False)
+    #: Nulo = de toda la empresa; con departamento, solo lo ve y lo usa quien
+    #: atiende ese departamento (ver ``repositories.visible_in_departments``).
+    department_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("departments.id", ondelete="CASCADE"), index=True
+    )
 
 
 class SavedView(Base, TimestampMixin):
@@ -339,6 +367,11 @@ class Macro(Base, TimestampMixin):
     )
     name: Mapped[str] = mapped_column(String(80), nullable=False)
     steps: Mapped[list[Any]] = mapped_column(JSONBType, default=list, nullable=False)
+    #: Nulo = de toda la empresa; con departamento, solo lo ve y lo usa quien
+    #: atiende ese departamento (ver ``repositories.visible_in_departments``).
+    department_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("departments.id", ondelete="CASCADE"), index=True
+    )
 
 
 class ConversationLabel(Base):
@@ -384,6 +417,17 @@ class Agent(Base, TimestampMixin):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     #: Derivación ``scrypt$n$r$p$salt$hash``. Nulo mientras no se fije contraseña.
     password_hash: Mapped[str | None] = mapped_column(String(255))
+    #: Obliga a cambiar la contraseña antes de usar la consola. Lo marca la
+    #: cuenta de arranque, cuya contraseña se genera e imprime en el log.
+    must_change_password: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False, server_default=text("false")
+    )
+    #: Fallos de contraseña seguidos y espera impuesta al superar el tope.
+    #: Un acceso correcto los pone a cero (ver ``app/db/repositories.py``).
+    failed_login_count: Mapped[int] = mapped_column(
+        Integer, default=0, nullable=False, server_default=text("0")
+    )
+    locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     #: ``available`` | ``away`` | ``offline``; orienta el reparto de la cola.
     presence: Mapped[str] = mapped_column(String(16), default="offline", nullable=False)
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -595,6 +639,11 @@ class Message(Base, TimestampMixin):
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     #: Carga original del proveedor, conservada para auditoría y reproceso.
     raw: Mapped[dict[str, Any]] = mapped_column(JSONBType, default=dict, nullable=False)
+    #: ``{"_source": "es", "de": "…"}``: idioma original y traducciones para el
+    #: equipo (ver ``app/core/translation.py``). Nulo en un idioma = ya estaba en él.
+    translations: Mapped[dict[str, Any]] = mapped_column(
+        JSONBType, default=dict, nullable=False
+    )
 
     conversation: Mapped[Conversation] = relationship(back_populates="messages")
     events: Mapped[list[MessageEvent]] = relationship(
@@ -943,7 +992,7 @@ class HotelRatePlan(Base, TimestampMixin):
     nightly_price_cents: Mapped[int] = mapped_column(Integer, nullable=False)
     #: Código ISO 4217. Configurable por si la Cooperativa cobra en más de una
     #: moneda según la rama de negocio.
-    currency: Mapped[str] = mapped_column(String(3), default="USD", nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), default="PYG", nullable=False)
 
     room_type: Mapped[HotelRoomType] = relationship()
 
@@ -1007,9 +1056,207 @@ class HotelReservation(Base, TimestampMixin):
     #: momento: si la tarifa cambia después, la reserva ya hecha no se ve
     #: afectada.
     nightly_price_cents: Mapped[int | None] = mapped_column(Integer)
-    currency: Mapped[str] = mapped_column(String(3), default="USD", nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), default="PYG", nullable=False)
     notes: Mapped[str | None] = mapped_column(Text)
 
     room: Mapped[HotelRoom] = relationship()
     contact: Mapped[Contact | None] = relationship()
     conversation: Mapped[Conversation | None] = relationship()
+
+
+# --------------------------------------------------------------------------- #
+# Base de conocimiento del asistente
+# --------------------------------------------------------------------------- #
+class KnowledgeDocument(Base, TimestampMixin):
+    """Documento que administración sube para que el asistente lo consulte.
+
+    El fichero original no se guarda: lo que sirve para responder son sus
+    trozos con el vector calculado, y conservar además el PDF entero solo
+    ocuparía sitio. Lo que sí queda es el nombre, para que en la consola se
+    reconozca qué se subió.
+    """
+
+    __tablename__ = "kb_documents"
+    __table_args__ = (Index("ix_kb_documents_tenant", "tenant_id", "department_id"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=new_id)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False
+    )
+    #: Nulo = vale para toda la empresa. Con departamento, solo el asistente de
+    #: esa rama lo consulta: las tarifas del hotel no ayudan en soporte técnico.
+    department_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("departments.id", ondelete="CASCADE")
+    )
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    #: ``text`` | ``markdown`` | ``pdf``
+    source_type: Mapped[str] = mapped_column(String(16), default="text", nullable=False)
+    filename: Mapped[str | None] = mapped_column(String(255))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    #: ``pending`` mientras se trocea y se vectoriza —ocurre en segundo plano,
+    #: porque un PDF grande no cabe en el plazo de una petición—, ``ready``
+    #: cuando el asistente ya puede consultarlo, ``failed`` si algo salió mal.
+    status: Mapped[str] = mapped_column(
+        String(16), default="pending", nullable=False, server_default=text("'ready'")
+    )
+    #: Motivo del fallo, para que en la consola se vea qué pasó.
+    error: Mapped[str | None] = mapped_column(Text)
+    #: En cuántos trozos quedó. Se guarda para no contarlos en cada listado.
+    chunk_count: Mapped[int] = mapped_column(
+        Integer, default=0, nullable=False, server_default=text("0")
+    )
+    created_by: Mapped[str | None] = mapped_column(String(160))
+
+    chunks: Mapped[list[KnowledgeChunk]] = relationship(
+        back_populates="document", cascade="all, delete-orphan"
+    )
+    department: Mapped[Department | None] = relationship()
+
+
+class KnowledgeChunk(Base):
+    """Fragmento de un documento con su vector de significado."""
+
+    __tablename__ = "kb_chunks"
+    __table_args__ = (Index("ix_kb_chunks_document", "document_id", "ord"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=new_id)
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("kb_documents.id", ondelete="CASCADE"), nullable=False
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False
+    )
+    #: Posición dentro del documento, para poder recomponer el orden de lectura.
+    ord: Mapped[int] = mapped_column(Integer, nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    #: Nulo mientras no se haya calculado —o si no hay clave de IA configurada—.
+    embedding: Mapped[Any | None] = mapped_column(VectorType)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now(), nullable=False
+    )
+
+    document: Mapped[KnowledgeDocument] = relationship(back_populates="chunks")
+
+
+# --------------------------------------------------------------------------- #
+# Encuesta de satisfacción
+# --------------------------------------------------------------------------- #
+class CsatSurvey(Base):
+    """Pregunta de satisfacción enviada al cerrar una conversación.
+
+    Una viva por conversación: si el hilo se cierra, se reabre y se vuelve a
+    cerrar, se reutiliza la que había en lugar de acumular preguntas a la misma
+    persona por lo mismo.
+    """
+
+    __tablename__ = "csat_surveys"
+    __table_args__ = (
+        UniqueConstraint("conversation_id", name="ux_csat_conversation"),
+        CheckConstraint("score IS NULL OR (score BETWEEN 1 AND 5)", name="ck_csat_score"),
+        Index("ix_csat_tenant_time", "tenant_id", "sent_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=new_id)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False
+    )
+    conversation_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False
+    )
+    contact_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("contacts.id", ondelete="SET NULL")
+    )
+    #: Quién atendía al cerrarse. Se copia en lugar de mirarse después: una
+    #: reasignación posterior no debe reescribir a quién puntuaron.
+    agent_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("agents.id", ondelete="SET NULL")
+    )
+    department_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("departments.id", ondelete="SET NULL")
+    )
+    #: Testigo del enlace público que se manda por correo y SMS. Es la única
+    #: credencial de esa página, que no tiene sesión.
+    token: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    sent_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now(), nullable=False
+    )
+    responded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    #: De 1 a 5. Nulo mientras no conteste.
+    score: Mapped[int | None] = mapped_column(Integer)
+    comment: Mapped[str | None] = mapped_column(Text)
+
+
+# --------------------------------------------------------------------------- #
+# Automatización
+# --------------------------------------------------------------------------- #
+class AutomationRule(Base, TimestampMixin):
+    """Regla que se aplica sola sobre los mensajes que entran.
+
+    Lo que había que repetir a mano en cada conversación —etiquetar las que
+    hablan de facturación, mandarlas a su rama, contestar lo de siempre— se
+    describe aquí una vez. Se evalúan delante del asistente, de modo que una
+    conversación derivada por regla llega a quien corresponde antes de que el
+    modelo gaste un turno contestando algo genérico.
+    """
+
+    __tablename__ = "automation_rules"
+    __table_args__ = (
+        Index("ix_automation_rules_tenant", "tenant_id", "is_active", "priority"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=new_id)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False
+    )
+    #: Nulo = rige en toda la empresa; con departamento, solo en esa rama.
+    department_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("departments.id", ondelete="CASCADE")
+    )
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    #: Menor primero. Con el mismo valor decide el orden de creación.
+    priority: Mapped[int] = mapped_column(
+        Integer, default=100, nullable=False, server_default=text("100")
+    )
+    #: Qué tiene que cumplirse; ver ``app/core/rules.py``.
+    conditions: Mapped[dict[str, Any]] = mapped_column(JSONBType, default=dict, nullable=False)
+    #: Qué se hace entonces, en orden.
+    actions: Mapped[list[Any]] = mapped_column(JSONBType, default=list, nullable=False)
+    created_by: Mapped[str | None] = mapped_column(String(160))
+
+    department: Mapped[Department | None] = relationship()
+
+
+class ScheduledMessage(Base):
+    """Saliente que espera su hora.
+
+    Lo despacha la misma tarea de mantenimiento que recupera envíos atascados
+    (``app/core/dispatcher.py``): al vencer, la carga se copia tal cual a la
+    cola de salida, que ya sabe entregar por cualquier canal.
+    """
+
+    __tablename__ = "scheduled_messages"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending', 'sent', 'cancelled')", name="ck_scheduled_status"
+        ),
+        Index("ix_scheduled_due", "status", "send_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=new_id)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False
+    )
+    conversation_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False
+    )
+    #: ``OutboundMessage`` serializado, el mismo formato de la cola de salida.
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONBType, nullable=False)
+    send_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    #: ``pending`` | ``sent`` | ``cancelled``
+    status: Mapped[str] = mapped_column(String(16), default="pending", nullable=False)
+    created_by: Mapped[str | None] = mapped_column(String(160))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now(), nullable=False
+    )
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

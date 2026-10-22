@@ -26,7 +26,7 @@ from app.core.envelope import (
     InboundMessage,
     OutboundMessage,
 )
-from app.core.hub import conversation_topic, hub, inbox_topic
+from app.core.hub import access_scope, conversation_topic, hub, inbox_topic
 from app.core.pipeline import Pipeline, TurnContext
 from app.core.storage import save_incoming_media
 from app.db import repositories as repo
@@ -62,18 +62,20 @@ class Orchestrator:
         raw_body: bytes = b"",
         verify: bool = True,
         credentials: Sequence[Mapping[str, str]] = (),
+        url: str | None = None,
     ) -> dict[str, Any]:
         """Recibe la carga de un canal y procesa cuantos mensajes contenga.
 
         ``credentials`` son las credenciales propias de las cuentas dadas de
         alta desde la consola; las resuelve quien atiende el webhook, que es
         donde hay acceso a la base, y viajan hasta el adaptador para comprobar
-        la firma (ver ``ChannelAdapter.verify_request``).
+        la firma (ver ``ChannelAdapter.verify_request``). ``url`` es la
+        dirección completa de la petición, que Twilio necesita para lo mismo.
         """
         adapter = self.registry.get(channel)
         if verify:
             await adapter.verify_request(
-                headers=headers, body=raw_body, credentials=credentials
+                headers=headers, body=raw_body, credentials=credentials, url=url
             )
 
         inbound_messages = await adapter.parse(payload=payload, headers=headers)
@@ -157,6 +159,11 @@ class Orchestrator:
             history = await repo.recent_messages(
                 session, conversation.id, limit=self.settings.ai_history_turns * 2
             )
+
+            # Quien escribe cancela lo que estuviera programado para él: un
+            # «¿sigue ahí?» preparado ayer no debe salir justo después de que
+            # conteste.
+            await repo.cancel_scheduled_messages(session, conversation_id=conversation.id)
 
             await self._broadcast_inbound(tenant.slug, conversation, inbound)
 
@@ -272,7 +279,7 @@ class Orchestrator:
             "sender": inbound.sender.display_name,
             "timestamp": inbound.timestamp.isoformat(),
         }
-        await hub.publish(inbox_topic(tenant_slug), event)
+        await hub.publish(inbox_topic(tenant_slug), {**event, **access_scope(conversation)})
         await hub.publish(conversation_topic(conversation.channel_conversation_id), event)
 
     # ------------------------------------------------------------------ (4)

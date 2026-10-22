@@ -99,7 +99,16 @@ class Principal:
         return repo.agent_can_access(conversation, self.agent)
 
 
+#: Rutas que siguen abiertas a quien tiene la contraseña marcada para cambiar.
+#: Son justo las que hacen falta para cambiarla y para salir: sin ellas, la
+#: obligación dejaría la cuenta sin ninguna salida.
+PASSWORD_CHANGE_EXEMPT = frozenset(
+    {"/api/auth/me", "/api/auth/password", "/api/auth/logout"}
+)
+
+
 async def resolve_principal(
+    request: Request,
     session: SessionDep,
     settings: SettingsDep,
     chatbox_session: Annotated[str | None, Cookie(alias=SESSION_COOKIE)] = None,
@@ -109,6 +118,11 @@ async def resolve_principal(
     if chatbox_session:
         agent = await repo.resolve_agent_session(session, hash_token(chatbox_session))
         if agent is not None:
+            if agent.must_change_password and request.url.path not in PASSWORD_CHANGE_EXEMPT:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Cambie la contraseña antes de usar la consola",
+                )
             return Principal(agent=agent, role=agent.role, via="session")
 
     expected = settings.admin_api_key

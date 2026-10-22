@@ -20,7 +20,11 @@ from app.core.google_oauth import (
     build_authorization_url,
     exchange_code_for_userinfo,
 )
-from app.core.saml import AgentInactiveError, login_or_provision_agent
+from app.core.saml import (
+    AgentInactiveError,
+    AgentNotProvisionedError,
+    login_or_provision_agent,
+)
 from app.db import repositories as repo
 from app.logging_setup import get_logger
 
@@ -123,6 +127,7 @@ async def callback(
     try:
         agent, is_new = await login_or_provision_agent(
             session,
+            settings=settings,
             tenant_id=tenant.id,
             email=profile["email"],
             display_name=profile["display_name"],
@@ -131,6 +136,14 @@ async def callback(
         log.warning("google_login_rejected_inactive", email=profile["email"])
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="La cuenta está desactivada"
+        ) from exc
+    except AgentNotProvisionedError as exc:
+        # Google autentica a cualquiera con cuenta de Google. Sin este corte,
+        # entrar por aquí bastaba para tener consola.
+        log.warning("google_login_rejected_unknown", email=profile["email"])
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Esta cuenta no está dada de alta en la consola",
         ) from exc
 
     # La cookie se pone sobre la respuesta que de verdad se devuelve, y no

@@ -54,6 +54,24 @@ INBOUND_EXTENSION_MIMES = {
 }
 
 
+def resolve_upload(url: str | None, *, settings: Settings) -> Path | None:
+    """Traduce la dirección de un adjunto al fichero en disco, o ``None``.
+
+    La comprobación de que cae dentro del directorio de subidas no es
+    ceremonia: la dirección sale de una columna JSON, y basta un dato torcido
+    —o una migración de otra instalación— para que apunte a cualquier sitio.
+    Comprobarlo cuesta una línea aquí y evita razonar sobre ello en cada uno de
+    los sitios que leen o borran adjuntos.
+    """
+    if not url or not url.startswith("/uploads/"):
+        return None
+    raiz = Path(settings.uploads_dir).resolve()
+    candidato = (raiz / url[len("/uploads/"):]).resolve()
+    if not candidato.is_relative_to(raiz) or not candidato.is_file():
+        return None
+    return candidato
+
+
 def save_incoming_media(
     body: bytes,
     *,

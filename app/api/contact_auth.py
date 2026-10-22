@@ -8,6 +8,8 @@ identidad de quien escribe en el chatbox público en vez de para el equipo.
 from __future__ import annotations
 
 import asyncio
+import uuid
+from datetime import timedelta
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request, Response, UploadFile, status
@@ -20,6 +22,8 @@ from app.api.deps import (
     SessionDep,
     SettingsDep,
 )
+from app.core import web_thread
+from app.core.envelope import ChannelKind
 from app.core.mailer import send_email, welcome_email_body
 from app.core.security import (
     WeakPasswordError,
@@ -39,12 +43,26 @@ router = APIRouter(prefix="/api/contact", tags=["chatbox: cuenta"])
 _DUMMY_HASH = hash_password("contraseña-inexistente-de-relleno")
 _EXPIRES_IN_S = int(CONTACT_SESSION_TTL.total_seconds())
 
+#: Identificador de la cuenta de canal del chatbox web. El mismo que pone el
+#: adaptador (ver app/channels/web.py): si no coincidiera, elegir departamento
+#: crearía una conversación distinta de aquella en la que el cliente escribe.
+_WEB_ACCOUNT = web_thread.WEB_ACCOUNT
+
+
+async def _web_conversation(session: Any, contact: Any) -> Any:
+    """Hilo vigente del chatbox de ese contacto, o ``None`` si aún no escribió."""
+    return await web_thread.current(session, contact)
+
 
 def _normalise_email(value: str) -> str:
     value = value.strip().lower()
     if "@" not in value:
         raise ValueError("El correo debe incluir el signo @")
     return value
+
+
+class ChooseDepartmentIn(BaseModel):
+    department_id: uuid.UUID
 
 
 class RegisterIn(BaseModel):
@@ -196,12 +214,38 @@ async def login(
     # revela qué correos están registrados.
     valid = await asyncio.to_thread(verify_password, body.password, stored)
 
+    if contact is not None and repo.login_is_locked(contact):
+        # Mismo criterio que en la consola (ver ``app/api/auth.py``): la
+        # respuesta no distingue una cuenta en espera de unas credenciales
+        # erróneas, para no delatar qué correos están registrados.
+        log.warning("contact_login_rejected_locked", email=body.email, tenant=tenant.slug)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Credenciales no válidas"
+        )
+
     if contact is None or contact.is_blocked or not valid:
+        if contact is not None and await repo.note_failed_login(
+            session,
+            contact,
+            max_attempts=settings.login_max_attempts,
+            lockout=timedelta(minutes=settings.login_lockout_minutes),
+        ):
+            await repo.record_audit(
+                session,
+                tenant_id=tenant.id,
+                actor=f"contact:{contact.id}",
+                action="login_locked",
+                subject_type="contact",
+                subject_id=str(contact.id),
+            )
+            await session.commit()
+            log.warning("contact_login_locked", email=body.email, tenant=tenant.slug)
         log.warning("contact_login_rejected", email=body.email, tenant=tenant.slug)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Credenciales no válidas"
         )
 
+    repo.clear_failed_logins(contact)
     await issue_contact_session(
         contact=contact, request=request, response=response, session=session, settings=settings
     )
@@ -219,9 +263,145 @@ async def logout(request: Request, response: Response, session: SessionDep) -> d
 
 
 @router.get("/me")
-async def whoami(contact: ContactDep) -> dict[str, Any]:
-    """Identidad efectiva de la petición, usada por el chatbox al cargar."""
-    return {"contact": _serialize(contact)}
+async def whoami(contact: ContactDep, session: SessionDep) -> dict[str, Any]:
+    """Identidad efectiva de la petición, usada por el chatbox al cargar.
+
+    ``department`` es la rama con la que el cliente eligió hablar, o ``None``
+    si todavía no eligió: con eso el chatbox sabe si mostrar el selector
+    antes del hilo.
+    """
+    conversation = await _web_conversation(session, contact)
+    department = None
+    if conversation is not None and conversation.department_id is not None:
+        row = await repo.get_department(session, conversation.department_id)
+        if row is not None:
+            department = _department_out(row)
+    return {"contact": _serialize(contact), "department": department}
+
+
+def _department_out(row: Any) -> dict[str, Any]:
+    """Lo que el chatbox necesita saber de una rama.
+
+    ``hotel`` decide si se le ofrece el formulario de reservas; el permiso real
+    lo vuelve a comprobar el servidor en cada operación (ver
+    ``app/api/contact_hotel.py``).
+    """
+    return {
+        "id": str(row.id),
+        "name": row.name,
+        "hotel": repo.hotel_module_enabled(row),
+    }
+
+
+@router.post("/conversations", status_code=status.HTTP_201_CREATED)
+async def start_new_conversation(contact: ContactDep, session: SessionDep) -> dict[str, Any]:
+    """Estrena un hilo nuevo para este cliente.
+
+    Solo cuando el anterior está cerrado. Mientras siga abierto, abandonarlo a
+    medias dejaría a quien lo esté atendiendo hablando solo con una
+    conversación que el cliente ya no mira; para eso está seguir escribiendo en
+    el mismo hilo.
+
+    El departamento no se hereda: una consulta nueva puede ser para otra área
+    —ayer el Hotel, hoy Informática—, así que el cliente vuelve a elegir antes
+    de escribir (ver ``web_thread.needs_department``).
+    """
+    anterior = await web_thread.current(session, contact)
+    if anterior is not None and anterior.status != "closed":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="La conversación actual sigue abierta",
+        )
+
+    account = await repo.get_or_create_channel_account(
+        session,
+        tenant_id=contact.tenant_id,
+        channel=ChannelKind.WEB,
+        external_id=_WEB_ACCOUNT,
+    )
+    conversation = await repo.resolve_conversation(
+        session,
+        tenant_id=contact.tenant_id,
+        ref=web_thread.ref_for(web_thread.new_thread_id(contact)),
+        contact_id=contact.id,
+        channel_account=account,
+    )
+    await session.flush()
+
+    log.info(
+        "contact_started_new_conversation",
+        contact=str(contact.id),
+        conversation=str(conversation.id),
+    )
+    return {"status": "ok", "conversation_id": str(conversation.id)}
+
+
+@router.get("/departments")
+async def list_contact_departments(
+    contact: ContactDep, session: SessionDep
+) -> list[dict[str, Any]]:
+    """Ramas con las que el cliente puede hablar.
+
+    Solo el nombre y el identificador: al cliente no le incumbe el horario,
+    el objetivo de respuesta ni qué módulos tiene activos cada una.
+    """
+    departments = await repo.list_departments(session, tenant_id=contact.tenant_id)
+    return [_department_out(row) for row in departments]
+
+
+@router.put("/department")
+async def choose_department(
+    body: ChooseDepartmentIn, contact: ContactDep, session: SessionDep
+) -> dict[str, Any]:
+    """Fija con qué rama habla el cliente, antes de escribir.
+
+    Se guarda en la conversación —creándola si todavía no existe— y no en el
+    contacto: es la conversación la que entra a la cola de ese departamento, y
+    así el primer mensaje ya nace en el sitio correcto en vez de aparecer en la
+    cola común y tener que derivarlo alguien a mano.
+    """
+    department = await repo.get_department(session, body.department_id)
+    if (
+        department is None
+        or department.tenant_id != contact.tenant_id
+        or not department.is_active
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="El departamento no existe"
+        )
+
+    conversation = await _web_conversation(session, contact)
+    if conversation is None:
+        account = await repo.get_or_create_channel_account(
+            session,
+            tenant_id=contact.tenant_id,
+            channel=ChannelKind.WEB,
+            external_id=_WEB_ACCOUNT,
+        )
+        conversation = await repo.resolve_conversation(
+            session,
+            tenant_id=contact.tenant_id,
+            ref=web_thread.ref_for(web_thread.first_thread_id(contact)),
+            contact_id=contact.id,
+            channel_account=account,
+        )
+    elif conversation.assignee_id is not None:
+        # Ya la está atendiendo alguien: cambiarla de rama se la sacaría de la
+        # bandeja sin que se entere. Que la derive esa persona, que sí ve el
+        # hilo y puede explicar el traspaso.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Ya hay alguien atendiendo esta conversación",
+        )
+
+    conversation.department_id = department.id
+    await session.flush()
+    log.info(
+        "contact_chose_department",
+        contact=str(contact.id),
+        department=department.name,
+    )
+    return {"department": _department_out(department)}
 
 
 @router.post("/uploads", status_code=status.HTTP_201_CREATED)

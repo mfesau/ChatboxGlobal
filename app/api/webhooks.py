@@ -17,6 +17,7 @@ from app.api.deps import ContactDep, OrchestratorDep, SessionDep, SettingsDep
 from app.channels.base import SignatureError
 from app.channels.facebook import FacebookAdapter
 from app.channels.whatsapp import WhatsAppAdapter
+from app.core import web_thread
 from app.core.envelope import ChannelKind
 from app.core.secrets import DecryptionError, EncryptionNotConfiguredError, decrypt_json
 from app.db import repositories as repo
@@ -26,15 +27,25 @@ log = get_logger(__name__)
 router = APIRouter(tags=["webhooks"])
 
 
-async def _read_json(request: Request) -> tuple[dict[str, Any], bytes]:
+async def _read_body(request: Request) -> tuple[dict[str, Any], bytes]:
     """Devuelve el cuerpo decodificado y su forma original en bytes.
 
     Los bytes sin modificar son imprescindibles: la firma HMAC se calcula sobre
     ellos y cualquier reserialización la invalidaría.
+
+    Casi todos los canales mandan JSON. Twilio no: manda un formulario
+    codificado como el de una página web, así que se admiten los dos y el
+    adaptador recibe un diccionario en cualquier caso.
     """
     raw = await request.body()
     if not raw:
         return {}, raw
+
+    content_type = (request.headers.get("content-type") or "").split(";")[0].strip().lower()
+    if content_type == "application/x-www-form-urlencoded":
+        posted = await request.form()
+        return {key: str(value) for key, value in posted.items()}, raw
+
     try:
         payload = json.loads(raw)
     except json.JSONDecodeError as exc:
@@ -47,6 +58,19 @@ async def _read_json(request: Request) -> tuple[dict[str, Any], bytes]:
             detail="Se esperaba un objeto JSON en la raíz",
         )
     return payload, raw
+
+
+def _public_url(request: Request, settings: Any) -> str:
+    """URL completa de la petición, tal como la compuso el proveedor.
+
+    Detrás del proxy inverso, ``request.url`` puede traer el esquema y el
+    puerto internos, y Twilio firmó la dirección pública. Se reconstruye a
+    partir de ``PUBLIC_BASE_URL``, que es la que se dio de alta en su panel; el
+    camino y la consulta sí salen de la petición.
+    """
+    base = settings.public_base_url.rstrip("/")
+    consulta = f"?{request.url.query}" if request.url.query else ""
+    return f"{base}{request.url.path}{consulta}"
 
 
 async def _account_credentials(
@@ -99,7 +123,7 @@ async def whatsapp_webhook(
     session: SessionDep,
     settings: SettingsDep,
 ) -> dict[str, Any]:
-    payload, raw = await _read_json(request)
+    payload, raw = await _read_body(request)
     credenciales = await _account_credentials(session, settings, ChannelKind.WHATSAPP)
     try:
         result = await orchestrator.handle_event(
@@ -146,7 +170,7 @@ async def facebook_webhook(
     session: SessionDep,
     settings: SettingsDep,
 ) -> dict[str, Any]:
-    payload, raw = await _read_json(request)
+    payload, raw = await _read_body(request)
     credenciales = await _account_credentials(session, settings, ChannelKind.FACEBOOK)
     try:
         result = await orchestrator.handle_event(
@@ -170,7 +194,7 @@ async def bot_framework_webhook(
     request: Request, orchestrator: OrchestratorDep
 ) -> Response:
     """Endpoint de mensajería del bot registrado en Azure Bot Service."""
-    payload, raw = await _read_json(request)
+    payload, raw = await _read_body(request)
     try:
         await orchestrator.handle_event(
             ChannelKind.MSBOT,
@@ -191,18 +215,36 @@ async def bot_framework_webhook(
 # --------------------------------------------------------------------------- #
 @router.post("/api/web/messages")
 async def web_message(
-    request: Request, orchestrator: OrchestratorDep, settings: SettingsDep, contact: ContactDep
+    request: Request,
+    session: SessionDep,
+    orchestrator: OrchestratorDep,
+    settings: SettingsDep,
+    contact: ContactDep,
 ) -> dict[str, Any]:
     """Recibe un mensaje del widget cuando el WebSocket no está disponible.
 
     El login es obligatorio: la identidad no la aporta el cliente sino la
     sesión autenticada, para que nadie pueda escribir a nombre de otro correo.
     """
-    payload, raw = await _read_json(request)
+    payload, raw = await _read_body(request)
     payload.setdefault("tenant", settings.default_tenant_slug)
-    payload["session_id"] = str(contact.id)
+    payload["session_id"] = await web_thread.current_thread_id(session, contact)
+    if await web_thread.needs_department(
+        session, tenant_id=contact.tenant_id, thread_id=payload["session_id"]
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Elija primero con qué área quiere hablar",
+            headers={"X-Chatbox-Error": web_thread.DEPARTMENT_REQUIRED},
+        )
     payload["display_name"] = contact.display_name
     payload["email"] = contact.primary_email
+
+    # Se suelta la transacción de la petición antes de entregar el mensaje: el
+    # orquestador abre la suya para escribir, y sostener las dos a la vez sobre
+    # la misma base es el interbloqueo que ya documenta ``send_from_agent``.
+    # Lo que hacía falta de ``contact`` ya está copiado arriba.
+    await session.rollback()
     result = await orchestrator.handle_event(
         ChannelKind.WEB,
         payload=payload,
@@ -218,11 +260,19 @@ async def web_message(
 # --------------------------------------------------------------------------- #
 @router.post("/webhooks/{channel}")
 async def generic_webhook(
-    channel: str, request: Request, orchestrator: OrchestratorDep
+    channel: str,
+    request: Request,
+    session: SessionDep,
+    settings: SettingsDep,
+    orchestrator: OrchestratorDep,
 ) -> dict[str, Any]:
     """Ruta genérica para cualquier canal ya inscrito en el registro.
 
-    Permite incorporar un canal nuevo sin escribir un endpoint dedicado.
+    Permite incorporar un canal nuevo sin escribir un endpoint dedicado: solo
+    los que necesitan un reto ``GET`` de alta —los de Meta— tienen el suyo.
+    Las credenciales de las cuentas se resuelven aquí igual que en las rutas
+    dedicadas; sin ellas, un canal como Telegram no tendría con qué comprobar
+    el secreto de su webhook.
     """
     try:
         kind = ChannelKind(channel)
@@ -231,10 +281,16 @@ async def generic_webhook(
             status_code=status.HTTP_404_NOT_FOUND, detail=f"Canal desconocido: {channel}"
         ) from exc
 
-    payload, raw = await _read_json(request)
+    payload, raw = await _read_body(request)
+    credentials = await _account_credentials(session, settings, kind)
     try:
         result = await orchestrator.handle_event(
-            kind, payload=payload, headers=request.headers, raw_body=raw
+            kind,
+            payload=payload,
+            headers=request.headers,
+            raw_body=raw,
+            credentials=credentials,
+            url=_public_url(request, settings),
         )
     except SignatureError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc

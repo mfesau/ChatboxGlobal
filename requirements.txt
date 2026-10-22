@@ -4,13 +4,16 @@ uvicorn[standard]==0.38.0
 python-multipart==0.0.20
 
 # --- Configuración y validación ---
-pydantic==2.12.3
+pydantic==2.13.5
 pydantic-settings==2.11.0
 
 # --- Persistencia PostgreSQL ---
 SQLAlchemy[asyncio]==2.0.44
 asyncpg==0.30.0
-alembic==1.17.1
+# Tipo de columna y operadores de distancia de pgvector, para la base de
+# conocimiento del asistente (app/core/knowledge.py). La extensión la trae la
+# imagen pgvector/pgvector:pg17 del docker-compose.
+pgvector==0.5.0
 
 # --- Clientes HTTP y seguridad de canales ---
 httpx==0.28.1
@@ -21,7 +24,11 @@ PyJWT[crypto]==2.10.1
 python3-saml==1.16.0
 
 # --- Motor de IA ---
-anthropic==0.75.0
+google-genai==2.22.0
+# Extracción de texto de los PDF que se suben a la base de conocimiento
+# (app/api/knowledge.py). Solo hace falta para ese formato: el .txt y el .md se
+# leen sin nada, y el endpoint lo explica si el paquete faltase.
+pypdf==6.1.1
 
 # --- Horario de atención ---
 # Base de datos de zonas horarias de IANA. En Linux la aporta el sistema, pero

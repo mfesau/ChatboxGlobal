@@ -18,6 +18,32 @@
   <body class="console-body">
     <!-- Sin acceso propio: "/" es la entrada única (ver console.js, showGate()). -->
 
+    <!-- Cambio de contraseña obligatorio ----------------------------------- -->
+    <!-- La cuenta de arranque entra con una contraseña generada y el servidor
+         responde 403 a todo lo demás hasta que se sustituya. -->
+    <div class="overlay" id="password-change-panel" hidden>
+      <div class="overlay__card overlay__card--narrow">
+        <header class="overlay__header">
+          <h2 data-i18n="password.title">Cambie su contraseña</h2>
+        </header>
+        <p class="console__muted" data-i18n="password.intro">
+          Esta cuenta usa una contraseña provisional. Elija una propia para continuar.
+        </p>
+        <form class="panel" id="password-change-form">
+          <label class="panel__field">
+            <span data-i18n="password.current">Contraseña actual</span>
+            <input type="password" id="password-current" autocomplete="current-password" required />
+          </label>
+          <label class="panel__field">
+            <span data-i18n="password.new">Contraseña nueva</span>
+            <input type="password" id="password-new" minlength="8" autocomplete="new-password" required />
+          </label>
+          <p class="gate__error" id="password-change-error" hidden></p>
+          <button type="submit" class="send-button" data-i18n="password.submit">Guardar y continuar</button>
+        </form>
+      </div>
+    </div>
+
     <!-- Aplicación --------------------------------------------------------- -->
     <div class="console" id="app" hidden>
       <aside class="console__sidebar">
@@ -65,7 +91,14 @@
             <select id="channel-filter" data-i18n-aria="filter.channel">
               <option value="" data-i18n="filter.channel.all">Todos los canales</option>
               <option value="whatsapp">WhatsApp</option>
+              <!-- Facebook faltaba aquí desde que existe el adaptador: sus
+                   hilos no se podían filtrar y en la lista salía el nombre
+                   interno del canal en vez de una etiqueta. -->
+              <option value="facebook">Facebook</option>
               <option value="msbot">Microsoft</option>
+              <option value="telegram">Telegram</option>
+              <option value="email">Correo</option>
+              <option value="sms">SMS</option>
               <option value="web">Web</option>
             </select>
             <!-- Fuente de verdad del filtro de departamento: sigue existiendo,
@@ -175,6 +208,13 @@
               Responder
             </button>
           </form>
+          <!-- Se ofrece solo cuando el cliente escribe en otro idioma que el
+               de la consola: la respuesta sale traducida y en el hilo quedan
+               las dos versiones. -->
+          <label class="composer__translate" id="translate-reply-field" hidden>
+            <input type="checkbox" id="translate-reply" checked />
+            <span id="translate-reply-label"></span>
+          </label>
           <p class="composer__meta">
             <span id="console-status" data-i18n="composer.noSelection">Sin conversación seleccionada</span>
             <span class="composer__hint" data-i18n="composer.hint">La respuesta sale por el canal de origen</span>
@@ -286,6 +326,16 @@
                     data-i18n="admin.tab.hotel">Hotel</button>
             <button type="button" role="tab" data-admin-tab="appearance" aria-selected="false"
                     data-i18n="admin.tab.appearance">Apariencia</button>
+            <button type="button" role="tab" data-admin-tab="rules" aria-selected="false"
+                    data-i18n="admin.tab.rules">Reglas</button>
+            <button type="button" role="tab" data-admin-tab="knowledge" aria-selected="false"
+                    data-i18n="admin.tab.knowledge">Conocimiento</button>
+            <button type="button" role="tab" data-admin-tab="assistant" aria-selected="false"
+                    data-i18n="admin.tab.assistant">Asistente IA</button>
+            <button type="button" role="tab" data-admin-tab="system" aria-selected="false"
+                    data-i18n="admin.tab.system">Estado del sistema</button>
+            <button type="button" role="tab" data-admin-tab="audit" aria-selected="false"
+                    data-i18n="admin.tab.audit">Auditoría</button>
           </nav>
           <p class="gate__error" id="admin-error" hidden></p>
           <div class="admin-tab-panel" id="admin-tab-users">
@@ -353,6 +403,9 @@
                   <option value="whatsapp">WhatsApp</option>
                   <option value="facebook">Facebook</option>
                   <option value="msbot">Teams</option>
+                  <option value="telegram">Telegram</option>
+                  <option value="email">Correo</option>
+                  <option value="sms">SMS (Twilio)</option>
                 </select>
               </label>
               <label class="panel__field">
@@ -368,33 +421,13 @@
                 <span>Departamento</span>
                 <select id="new-account-department"><option value="">Sin departamento</option></select>
               </label>
-              <label class="panel__field">
-                <span data-i18n="accounts.accessToken">Token de acceso</span>
-                <input type="password" id="new-account-token" maxlength="4096"
-                       autocomplete="new-password" />
-              </label>
-              <!-- Los dos que faltaban para no tener que tocar el .env: el
-                   token del reto de alta del webhook y la clave con la que Meta
-                   firma el cuerpo. Se ocultan en Teams, que no usa ninguno. -->
-              <label class="panel__field" data-meta-only>
-                <span data-i18n="accounts.verifyToken">Token de verificación del webhook</span>
-                <input type="password" id="new-account-verify-token" maxlength="512"
-                       autocomplete="new-password" />
-              </label>
-              <label class="panel__field" data-meta-only>
-                <span data-i18n="accounts.appSecret">Clave secreta de la app</span>
-                <input type="password" id="new-account-app-secret" maxlength="512"
-                       autocomplete="new-password" />
-              </label>
+              <!-- Cada canal pide credenciales distintas —Teams ninguna, el
+                   correo diez—, así que los campos los arma console.js desde un
+                   solo mapa en lugar de estar escritos aquí uno a uno. -->
+              <div id="new-account-credentials"></div>
               <button type="submit" class="send-button" data-i18n="accounts.connect">Conectar cuenta</button>
             </form>
-            <p class="console__muted" id="new-account-hint" data-i18n-html="accounts.idHint">
-              El identificador es el <code>phone_number_id</code> en WhatsApp,
-              el id de la página en Facebook, o el id del equipo en Teams (se
-              ve solo tras el primer mensaje de ese equipo). El token es
-              obligatorio en Facebook; en WhatsApp, si falta, se usa el token
-              global de <code>.env</code>; en Teams no hace falta ninguno.
-            </p>
+            <p class="console__muted" id="new-account-hint"></p>
             <div class="table-scroll">
               <table class="data-table" id="channel-accounts-table">
                 <thead>
@@ -419,6 +452,7 @@
               <h3 data-i18n="admin.labels">Etiquetas</h3>
               <label class="panel__field"><span data-i18n="aside.name">Nombre</span><input type="text" id="new-label-name" maxlength="80" required /></label>
               <label class="panel__field"><span data-i18n="admin.color">Color</span><input type="color" id="new-label-color" value="#6b7280" /></label>
+              <label class="panel__field"><span data-i18n="table.department">Departamento</span><select id="new-label-department"></select></label>
               <button type="submit" class="send-button" data-i18n="admin.createLabel">Crear etiqueta</button>
               <ul class="panel__list" id="label-list"></ul>
             </form>
@@ -427,6 +461,7 @@
               <label class="panel__field"><span data-i18n="admin.shortcode">Atajo</span><input type="text" id="new-canned-shortcode" maxlength="40" pattern="[a-z0-9_\-]+" placeholder="p-ej. saludo" required /></label>
               <label class="panel__field"><span data-i18n="admin.title2">Título</span><input type="text" id="new-canned-title" maxlength="160" required /></label>
               <label class="panel__field"><span data-i18n="admin.text">Texto</span><textarea id="new-canned-body" rows="3" maxlength="4000" required></textarea></label>
+              <label class="panel__field"><span data-i18n="table.department">Departamento</span><select id="new-canned-department"></select></label>
               <button type="submit" class="send-button" data-i18n="admin.createCanned">Crear respuesta</button>
               <ul class="panel__list" id="canned-response-list"></ul>
             </form>
@@ -441,6 +476,9 @@
               <span data-i18n="aside.name">Nombre</span>
               <input type="text" id="new-macro-name" maxlength="80" required />
             </label>
+            <!-- Al elegir departamento, los pasos solo ofrecen etiquetas y
+                 respuestas de toda la empresa o de ese departamento. -->
+            <label class="panel__field"><span data-i18n="table.department">Departamento</span><select id="new-macro-department"></select></label>
             <label class="panel__field">
               <span data-i18n="macro.addStep">Añadir paso</span>
               <select id="macro-step-action">
@@ -478,6 +516,30 @@
             </label>
             <button type="submit" class="send-button" data-i18n="admin.autoReplySave">Guardar respuesta automática</button>
           </form>
+<section class="panel">
+            <h3 data-i18n="csat.title">Encuesta de satisfacción</h3>
+            <p class="console__muted" data-i18n="csat.hint">
+              Al cerrar una conversación se pregunta una nota del 1 al 5 por el
+              mismo canal por el que se atendió. Se activa por departamento:
+              preguntar donde nadie va a mirar la respuesta solo molesta a quien
+              escribe.
+            </p>
+            <label class="panel__field">
+              <span data-i18n="hours.department">Departamento</span>
+              <select id="csat-department"><option value="" data-i18n="aside.choose">— Elegir —</option></select>
+            </label>
+            <div id="csat-settings" hidden>
+              <label class="panel__field panel__field--checkbox">
+                <input type="checkbox" id="csat-enabled" />
+                <span data-i18n="csat.enabled">Preguntar al cerrar en este departamento</span>
+              </label>
+              <label class="panel__field">
+                <span data-i18n="csat.question">Pregunta</span>
+                <textarea id="csat-question" rows="2" maxlength="500"></textarea>
+              </label>
+              <button type="button" class="send-button" id="csat-save" data-i18n="common.save">Guardar</button>
+            </div>
+          </section>
 <section class="panel">
             <h3 data-i18n="hours.title">Horario de atención</h3>
             <p class="console__muted" data-i18n="hours.hint">
@@ -611,8 +673,8 @@
                 <label class="panel__field"><span data-i18n="aside.name">Nombre</span><input type="text" id="new-rate-plan-name" maxlength="120" data-i18n-placeholder="hotel.admin.rateNamePlaceholder" placeholder="p. ej. Temporada alta" required /></label>
                 <label class="panel__field"><span data-i18n="hotel.admin.startsOn">Desde (opcional)</span><input type="date" id="new-rate-plan-starts" /></label>
                 <label class="panel__field"><span data-i18n="hotel.admin.endsOn">Hasta (opcional)</span><input type="date" id="new-rate-plan-ends" /></label>
-                <label class="panel__field"><span data-i18n="hotel.admin.nightlyPrice">Precio por noche</span><input type="number" id="new-rate-plan-price" min="0.01" step="0.01" required /></label>
-                <label class="panel__field"><span data-i18n="hotel.admin.currency">Moneda</span><input type="text" id="new-rate-plan-currency" maxlength="3" value="USD" style="text-transform:uppercase" /></label>
+                <label class="panel__field"><span data-i18n="hotel.admin.nightlyPrice">Precio por noche</span><input type="number" id="new-rate-plan-price" min="0" step="any" required /></label>
+                <label class="panel__field"><span data-i18n="hotel.admin.currency">Moneda</span><input type="text" id="new-rate-plan-currency" maxlength="3" value="PYG" style="text-transform:uppercase" /></label>
                 <button type="submit" class="send-button" id="rate-plan-submit" data-i18n="hotel.admin.createRate">Crear tarifa</button>
                 <button type="button" class="ghost-button" id="rate-plan-cancel-edit" data-i18n="hotel.cancelEdit" hidden>
                   Cancelar edición
@@ -673,6 +735,249 @@
               </div>
             </section>
           </div>
+
+          <div class="admin-tab-panel" id="admin-tab-rules" hidden>
+            <section class="panel">
+              <h3 data-i18n="rules.title">Reglas de automatización</h3>
+              <p class="console__muted" data-i18n="rules.hint">
+                Se comprueban sobre cada mensaje que entra, en orden de
+                prioridad, y se aplican las que cumplan todas sus condiciones.
+                Una regla sin condiciones se aplica siempre: es lo que permite
+                una respuesta de bienvenida.
+              </p>
+              <form id="rule-form">
+                <label class="panel__field">
+                  <span data-i18n="rules.name">Nombre</span>
+                  <input type="text" id="rule-name" maxlength="120" required />
+                </label>
+                <label class="panel__field">
+                  <span data-i18n="rules.priority">Prioridad</span>
+                  <input type="number" id="rule-priority" min="0" max="10000" value="100" />
+                </label>
+                <label class="panel__field">
+                  <span data-i18n="table.department">Departamento</span>
+                  <select id="rule-department">
+                    <option value="" data-i18n="knowledge.wholeCompany">Toda la empresa</option>
+                  </select>
+                </label>
+                <label class="panel__field">
+                  <span data-i18n="rules.keywords">Palabras clave (separadas por comas)</span>
+                  <input type="text" id="rule-keywords" data-i18n-placeholder="rules.keywordsPlaceholder" />
+                </label>
+                <label class="panel__field panel__field--checkbox">
+                  <input type="checkbox" id="rule-first-only" />
+                  <span data-i18n="rules.firstOnly">Solo en el primer mensaje</span>
+                </label>
+                <label class="panel__field">
+                  <span data-i18n="rules.reply">Responder (opcional)</span>
+                  <textarea id="rule-reply" rows="2" maxlength="2000"></textarea>
+                </label>
+                <label class="panel__field">
+                  <span data-i18n="rules.label">Poner etiqueta (opcional)</span>
+                  <select id="rule-label"><option value="" data-i18n="rules.none">Ninguna</option></select>
+                </label>
+                <label class="panel__field">
+                  <span data-i18n="rules.route">Derivar a (opcional)</span>
+                  <select id="rule-route"><option value="" data-i18n="rules.none">Ninguno</option></select>
+                </label>
+                <label class="panel__field panel__field--checkbox">
+                  <input type="checkbox" id="rule-stop" />
+                  <span data-i18n="rules.stop">No dejar responder al asistente</span>
+                </label>
+                <button type="submit" class="send-button" data-i18n="rules.add">Crear regla</button>
+              </form>
+              <div class="table-scroll">
+                <table class="data-table" id="rules-table">
+                  <thead>
+                    <tr>
+                      <th data-i18n="rules.priority">Prioridad</th>
+                      <th data-i18n="rules.name">Nombre</th>
+                      <th data-i18n="table.department">Departamento</th>
+                      <th data-i18n="rules.summary">Qué hace</th>
+                      <th data-i18n="table.status">Estado</th>
+                      <th data-i18n="table.actions">Acciones</th>
+                    </tr>
+                  </thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+            </section>
+          </div>
+
+          <div class="admin-tab-panel" id="admin-tab-assistant" hidden>
+            <section class="panel">
+              <h3 data-i18n="assistant.title">Asistente IA</h3>
+              <p class="console__muted" data-i18n="assistant.hint">
+                Qué modelo responde a los clientes y cuánto razona antes de
+                hacerlo. La clave de OpenRouter no se escribe aquí: va en el
+                fichero .env del servidor.
+              </p>
+              <p class="console__muted" id="assistant-provider"></p>
+              <form id="assistant-form">
+                <label class="panel__field">
+                  <span data-i18n="assistant.model">Modelo</span>
+                  <!-- Campo libre con sugerencias: el catálogo ayuda a elegir,
+                       pero si OpenRouter no contesta se puede escribir igual. -->
+                  <input type="text" id="assistant-model" list="assistant-model-list"
+                         maxlength="64" spellcheck="false" autocomplete="off"
+                         data-i18n-placeholder="assistant.modelPlaceholder" />
+                  <datalist id="assistant-model-list"></datalist>
+                </label>
+                <p class="console__muted" id="assistant-model-info"></p>
+                <label class="panel__field">
+                  <span data-i18n="assistant.effortLabel">Esfuerzo de razonamiento</span>
+                  <select id="assistant-effort"></select>
+                </label>
+                <p class="console__muted" data-i18n="assistant.effortHint">
+                  Más esfuerzo da respuestas más pensadas, pero tarda más y
+                  cuesta más. Para atención al cliente suele bastar «bajo».
+                  Los modelos que no razonan ignoran este ajuste.
+                </p>
+                <div class="brand-actions">
+                  <button type="submit" class="send-button" id="assistant-save"
+                          data-i18n="assistant.save">Guardar</button>
+                  <button type="button" class="ghost-button" id="assistant-reset"
+                          data-i18n="assistant.reset">Volver al modelo del .env</button>
+                </div>
+              </form>
+            </section>
+            <section class="panel">
+              <h3 data-i18n="assistant.byDepartment">Por departamento</h3>
+              <p class="console__muted" data-i18n="assistant.byDepartmentHint">
+                Cada departamento decide si el asistente contesta en sus
+                conversaciones y qué tiene que saber además de lo general:
+                horarios, precios, cómo tratar al cliente. Apagado, los
+                mensajes esperan al equipo sin respuesta automática. Las
+                conversaciones que aún no tienen departamento siguen con el
+                asistente encendido.
+              </p>
+              <div class="assistant-departments" id="assistant-departments"></div>
+            </section>
+          </div>
+
+          <div class="admin-tab-panel" id="admin-tab-system" hidden>
+            <section class="panel">
+              <div class="system-head">
+                <h3 data-i18n="system.title">Estado del sistema</h3>
+                <span class="system-pill" id="system-overall"></span>
+                <button type="button" class="ghost-button" id="system-refresh"
+                        data-i18n="system.refresh">Actualizar</button>
+              </div>
+              <p class="console__muted" data-i18n="system.hint">
+                Las cifras de las últimas 24 horas que delatan un problema antes
+                de que lo note un cliente: errores por canal, fallos del
+                asistente, mensajes atascados en la cola de salida y espacio
+                en disco.
+              </p>
+              <p class="console__muted" id="system-generated"></p>
+              <div class="system-grid" id="system-cards"></div>
+              <h4 data-i18n="system.channels">Canales</h4>
+              <div class="table-scroll">
+                <table class="data-table" id="system-channels">
+                  <thead>
+                    <tr>
+                      <th data-i18n="system.channel">Canal</th>
+                      <th data-i18n="table.status">Estado</th>
+                      <th data-i18n="system.accounts">Cuentas activas</th>
+                      <th data-i18n="system.lastIn">Último recibido</th>
+                      <th data-i18n="system.lastOut">Último enviado</th>
+                      <th data-i18n="system.failures">Envíos fallidos (24 h)</th>
+                      <th data-i18n="system.lastError">Último error</th>
+                    </tr>
+                  </thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+            </section>
+          </div>
+
+          <div class="admin-tab-panel" id="admin-tab-knowledge" hidden>
+            <section class="panel">
+              <h3 data-i18n="knowledge.title">Base de conocimiento</h3>
+              <p class="console__muted" data-i18n="knowledge.hint">
+                Lo que suba aquí es lo que el asistente responderá como palabra
+                de la casa. Busca por significado, así que conviene redactarlo
+                en frases completas y no en telegramas.
+              </p>
+              <form id="knowledge-form">
+                <label class="panel__field">
+                  <span data-i18n="knowledge.docTitle">Título</span>
+                  <input type="text" id="knowledge-title" maxlength="200" required />
+                </label>
+                <label class="panel__field">
+                  <span data-i18n="knowledge.department">Departamento</span>
+                  <select id="knowledge-department">
+                    <option value="" data-i18n="knowledge.wholeCompany">Toda la empresa</option>
+                  </select>
+                </label>
+                <label class="panel__field">
+                  <span data-i18n="knowledge.text">Contenido</span>
+                  <textarea id="knowledge-text" rows="8"
+                            data-i18n-placeholder="knowledge.textPlaceholder"></textarea>
+                </label>
+                <label class="panel__field">
+                  <span data-i18n="knowledge.file">…o un fichero (.txt, .md, .pdf)</span>
+                  <input type="file" id="knowledge-file" accept=".txt,.md,.pdf" />
+                </label>
+                <button type="submit" class="send-button" data-i18n="knowledge.add">Añadir</button>
+              </form>
+              <div class="table-scroll">
+                <table class="data-table" id="knowledge-table">
+                  <thead>
+                    <tr>
+                      <th data-i18n="knowledge.docTitle">Título</th>
+                      <th data-i18n="table.department">Departamento</th>
+                      <th data-i18n="knowledge.chunks">Fragmentos</th>
+                      <th data-i18n="table.status">Estado</th>
+                      <th data-i18n="table.actions">Acciones</th>
+                    </tr>
+                  </thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+            </section>
+          </div>
+
+          <div class="admin-tab-panel" id="admin-tab-audit" hidden>
+            <section class="panel">
+              <h3 data-i18n="audit.title">Traza de auditoría</h3>
+              <p class="console__muted" data-i18n="audit.hint">
+                Quién hizo qué y cuándo. No incluye el contenido de ninguna
+                conversación.
+              </p>
+              <div class="panel__inline-form">
+                <label class="panel__field">
+                  <span data-i18n="audit.actor">Autor</span>
+                  <input type="search" id="audit-actor" placeholder="ana@empresa.local" />
+                </label>
+                <label class="panel__field">
+                  <span data-i18n="audit.action">Acción</span>
+                  <select id="audit-action"><option value="" data-i18n="audit.anyAction">Cualquiera</option></select>
+                </label>
+                <label class="panel__field">
+                  <span data-i18n="audit.since">Desde</span>
+                  <input type="date" id="audit-since" />
+                </label>
+              </div>
+              <div class="table-scroll">
+                <table class="data-table" id="audit-table">
+                  <thead>
+                    <tr>
+                      <th data-i18n="audit.when">Fecha</th>
+                      <th data-i18n="audit.actor">Autor</th>
+                      <th data-i18n="audit.action">Acción</th>
+                      <th data-i18n="audit.subject">Sobre</th>
+                      <th data-i18n="audit.detail">Detalle</th>
+                    </tr>
+                  </thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+              <button type="button" class="ghost-button" id="audit-more" data-i18n="audit.more" hidden>
+                Cargar más
+              </button>
+            </section>
+          </div>
         </div>
       </div>
 
@@ -702,6 +1007,67 @@
           <section>
             <h3>Últimas derivaciones</h3>
             <ol class="panel__timeline" id="transfer-activity"></ol>
+          </section>
+
+          <!-- Informes: lo que se pregunta al cerrar un mes, no la foto de
+               ahora mismo que dan las dos secciones de arriba. -->
+          <section>
+            <h3 data-i18n="reports.title">Informe del periodo</h3>
+            <div class="panel__inline-form">
+              <label class="panel__field">
+                <span data-i18n="reports.since">Desde</span>
+                <input type="date" id="reports-since" />
+              </label>
+              <label class="panel__field">
+                <span data-i18n="reports.until">Hasta</span>
+                <input type="date" id="reports-until" />
+              </label>
+              <label class="panel__field">
+                <span data-i18n="table.department">Departamento</span>
+                <select id="reports-department">
+                  <option value="" data-i18n="reports.allDepartments">Todos</option>
+                </select>
+              </label>
+            </div>
+
+            <dl class="reports-tiles" id="reports-tiles"></dl>
+            <div class="reports-chart" id="reports-chart"></div>
+
+            <div class="table-scroll">
+              <table class="data-table" id="reports-channels">
+                <thead>
+                  <tr>
+                    <th data-i18n="table.channel">Canal</th>
+                    <th data-i18n="reports.conversations">Conversaciones</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+
+            <div class="table-scroll">
+              <table class="data-table" id="reports-agents">
+                <thead>
+                  <tr>
+                    <th data-i18n="table.agent">Agente</th>
+                    <th data-i18n="reports.conversations">Conversaciones</th>
+                    <th data-i18n="reports.closed">Resueltas</th>
+                    <th data-i18n="reports.breached">SLA incumplido</th>
+                    <th data-i18n="reports.firstResponse">1ª respuesta (mediana)</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+
+            <div class="panel__inline-form">
+              <button type="button" class="ghost-button" data-report-export="timeseries"
+                      data-i18n="reports.exportSeries">Exportar la serie</button>
+              <button type="button" class="ghost-button" data-report-export="channels"
+                      data-i18n="reports.exportChannels">Exportar por canal</button>
+              <button type="button" class="ghost-button" data-report-export="agents"
+                      data-i18n="reports.exportAgents">Exportar por agente</button>
+            </div>
           </section>
         </div>
       </div>
@@ -904,11 +1270,26 @@
 
             <h4 data-i18n="table.conversations">Conversaciones</h4>
             <ul class="panel__list" id="profile-conversations"></ul>
+
+            <h4 data-i18n="privacy.title">Datos personales</h4>
+            <p class="console__muted" data-i18n="privacy.help">
+              La copia reúne todo lo que se guarda sobre esta persona. El borrado
+              anonimiza su rastro y no se puede deshacer.
+            </p>
+            <div class="panel__inline-form">
+              <button type="button" class="ghost-button" id="profile-export"
+                      data-i18n="privacy.export">Descargar copia</button>
+              <button type="button" class="ghost-button" id="profile-erase"
+                      data-i18n="privacy.erase" hidden>Borrar datos</button>
+            </div>
+            <p class="gate__error" id="profile-privacy-error" hidden></p>
           </section>
         </div>
       </div>
     </div>
 
-    <script src="/static/console.js?v=__ASSET_VERSION__"></script>
+    <!-- Módulos ES nativos, sin paso de compilación: main.js importa el resto.
+         Encaja con la CSP estricta (script-src 'self'). -->
+    <script type="module" src="/static/console/main.js?v=__ASSET_VERSION__"></script>
   </body>
 </html>

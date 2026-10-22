@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import secrets
+from datetime import timedelta
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request, Response, status
@@ -19,7 +20,13 @@ from app.api.deps import (
 )
 from app.config import Settings
 from app.core.hub import hub, presence_topic
-from app.core.security import hash_password, hash_token, new_session_token, verify_password
+from app.core.security import (
+    WeakPasswordError,
+    hash_password,
+    hash_token,
+    new_session_token,
+    verify_password,
+)
 from app.db import repositories as repo
 from app.db.models import Agent, Tenant
 from app.logging_setup import get_logger
@@ -72,12 +79,42 @@ async def login(
     # revela qué direcciones están registradas.
     valid = await asyncio.to_thread(verify_password, body.password, stored)
 
+    if agent is not None and repo.login_is_locked(agent):
+        # Se responde lo mismo que a unas credenciales erróneas, no un 429.
+        # Un código propio para las cuentas en espera diría, a quien prueba
+        # contraseñas, cuáles de las direcciones que va probando existen —
+        # justo lo que el resto de este endpoint se esfuerza en no revelar.
+        log.warning("login_rejected_locked", email=body.email, tenant=tenant.slug)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Credenciales no válidas"
+        )
+
     if agent is None or not agent.is_active or not valid:
+        if agent is not None and await repo.note_failed_login(
+            session,
+            agent,
+            max_attempts=settings.login_max_attempts,
+            lockout=timedelta(minutes=settings.login_lockout_minutes),
+        ):
+            # Solo se audita el bloqueo, no cada fallo: un ataque por fuerza
+            # bruta llenaría la traza de ruido y la haría inservible justo
+            # cuando más falta hace leerla.
+            await repo.record_audit(
+                session,
+                tenant_id=tenant.id,
+                actor=f"agent:{agent.email}",
+                action="login_locked",
+                subject_type="agent",
+                subject_id=str(agent.id),
+            )
+            await session.commit()
+            log.warning("login_locked", email=body.email, tenant=tenant.slug)
         log.warning("login_rejected", email=body.email, tenant=tenant.slug)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Credenciales no válidas"
         )
 
+    repo.clear_failed_logins(agent)
     await issue_session(
         agent=agent, tenant=tenant, request=request, response=response,
         session=session, settings=settings,
@@ -145,7 +182,68 @@ async def logout(
         await repo.close_agent_session(session, hash_token(token))
     if principal.agent is not None:
         await repo.touch_agent_presence(session, principal.agent.id, "offline")
+        await repo.record_audit(
+            session,
+            tenant_id=principal.agent.tenant_id,
+            actor=principal.audit_actor,
+            action="logout",
+            subject_type="agent",
+            subject_id=str(principal.agent.id),
+        )
     response.delete_cookie(SESSION_COOKIE, path="/")
+    return {"status": "ok"}
+
+
+class ChangePasswordIn(BaseModel):
+    current_password: str = Field(min_length=1, max_length=256)
+    new_password: str = Field(min_length=8, max_length=256)
+
+
+@router.post("/password")
+async def change_own_password(
+    body: ChangePasswordIn, session: SessionDep, principal: PrincipalDep
+) -> dict[str, str]:
+    """Cambia la contraseña de quien la pide, comprobando la actual.
+
+    Es además la única salida de ``must_change_password``: la cuenta de
+    arranque entra con una contraseña generada y no puede hacer nada más
+    hasta pasar por aquí.
+    """
+    agent = principal.agent
+    if agent is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="La clave de servicio no tiene contraseña que cambiar",
+        )
+
+    stored = agent.password_hash or _DUMMY_HASH
+    if not await asyncio.to_thread(verify_password, body.current_password, stored):
+        log.warning("password_change_rejected", agent=agent.email)
+        # 422 y no 401: la sesión es válida, lo que no coincide es el cuerpo.
+        # Con un 401 la consola daría la sesión por caducada y rebotaría al
+        # acceso en lugar de mostrar el error dentro del propio formulario.
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="La contraseña actual no coincide",
+        )
+
+    try:
+        agent.password_hash = await asyncio.to_thread(hash_password, body.new_password)
+    except WeakPasswordError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
+    agent.must_change_password = False
+
+    await repo.record_audit(
+        session,
+        tenant_id=agent.tenant_id,
+        actor=f"agent:{agent.email}",
+        action="password_changed",
+        subject_type="agent",
+        subject_id=str(agent.id),
+    )
+    log.info("password_changed", agent=agent.email)
     return {"status": "ok"}
 
 
@@ -208,6 +306,9 @@ def _serialize(agent: Any) -> dict[str, Any]:
         "role": agent.role,
         "is_supervisor": agent.is_supervisor,
         "presence": agent.presence,
+        # La consola lo mira nada más entrar: mientras sea cierto, el resto de
+        # la API responde 403 y solo cabe cambiar la contraseña.
+        "must_change_password": agent.must_change_password,
     }
 
 

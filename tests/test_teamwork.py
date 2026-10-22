@@ -23,12 +23,16 @@ from sqlalchemy import select
 
 from app.channels.base import ChannelRegistry
 from app.channels.whatsapp import WhatsAppAdapter
-from app.config import get_settings
+from app.config import Settings, get_settings
 from app.core import hotel_booking
 from app.core.envelope import ChannelKind, ConversationRef
 from app.core.orchestrator import Orchestrator
 from app.core.pipeline import Handler, NextFn, Pipeline, TurnContext
-from app.core.saml import AgentInactiveError, login_or_provision_agent
+from app.core.saml import (
+    AgentInactiveError,
+    AgentNotProvisionedError,
+    login_or_provision_agent,
+)
 from app.core.secrets import EncryptionNotConfiguredError, decrypt_json, encrypt_json
 from app.core.security import (
     WeakPasswordError,
@@ -50,7 +54,7 @@ from app.db.models import (
     Message,
     OutboxItem,
 )
-from app.handlers.ai import AIHandler
+from app.handlers.ai import HANDOFF_TOOL, AIHandler, _as_function_tool
 from app.handlers.builtin import BusinessHoursHandler, FirstResponseSlaHandler
 from app.main import create_app
 
@@ -1129,8 +1133,8 @@ async def test_starting_a_conversation_opens_a_thread_with_the_template(
     as_agent, whatsapp_listo
 ):
     """El caso completo: sin hilo previo, la consola escribe primero."""
-    ana = await as_agent(whatsapp_listo["ana"]["email"])
-    respuesta = await ana.post(
+    admin = await as_agent(whatsapp_listo["admin"]["email"])
+    respuesta = await admin.post(
         "/api/conversations/start",
         json={"to": "+595 982 971717", "template": "pedido", "language": "es",
               "variables": ["Ana", "A-42"]},
@@ -1140,7 +1144,7 @@ async def test_starting_a_conversation_opens_a_thread_with_the_template(
 
     # El hilo queda como cualquier otro: visible en la consola y con el texto
     # ya legible, no con el nombre técnico de la plantilla.
-    mensajes = (await ana.get(f"/api/conversations/{conversation_id}/messages")).json()
+    mensajes = (await admin.get(f"/api/conversations/{conversation_id}/messages")).json()
     assert [m["text"] for m in mensajes] == ["Hola Ana, su pedido A-42 sale hoy."]
 
     # Y el contacto se crea con el teléfono normalizado, para que un entrante
@@ -1160,8 +1164,8 @@ async def test_what_travels_to_whatsapp_is_the_template_and_not_the_text(
     El texto guardado es solo para leer el hilo en la consola; enviarlo como
     mensaje suelto lo rechazaría WhatsApp fuera de la ventana de 24 horas.
     """
-    ana = await as_agent(whatsapp_listo["ana"]["email"])
-    await ana.post(
+    admin = await as_agent(whatsapp_listo["admin"]["email"])
+    await admin.post(
         "/api/conversations/start",
         json={"to": "595982971717", "template": "pedido", "language": "es",
               "variables": ["Ana", "A-42"]},
@@ -1180,18 +1184,34 @@ async def test_what_travels_to_whatsapp_is_the_template_and_not_the_text(
 
 
 async def test_a_template_that_is_not_approved_is_turned_away(as_agent, whatsapp_listo):
-    ana = await as_agent(whatsapp_listo["ana"]["email"])
-    respuesta = await ana.post(
+    admin = await as_agent(whatsapp_listo["admin"]["email"])
+    respuesta = await admin.post(
         "/api/conversations/start",
         json={"to": "595982971717", "template": "inventada", "language": "es"},
     )
     assert respuesta.status_code == 404
 
 
+async def test_only_the_admin_writes_first(as_agent, whatsapp_listo):
+    """Abordar a quien no escribió antes lo decide administración.
+
+    Gasta una plantilla aprobada y llega a un teléfono que no pidió el
+    contacto, así que no alcanza con esconder el botón en la consola.
+    """
+    for quien in ("ana", "marta"):
+        cliente = await as_agent(whatsapp_listo[quien]["email"])
+        assert (await cliente.get("/api/whatsapp/templates")).status_code == 403
+        respuesta = await cliente.post(
+            "/api/conversations/start",
+            json={"to": "595982971717", "template": "hello_world", "language": "en_US"},
+        )
+        assert respuesta.status_code == 403, quien
+
+
 async def test_the_values_must_match_what_the_template_declares(as_agent, whatsapp_listo):
     """Con menos parámetros de los que declara, Meta falla con un error opaco."""
-    ana = await as_agent(whatsapp_listo["ana"]["email"])
-    respuesta = await ana.post(
+    admin = await as_agent(whatsapp_listo["admin"]["email"])
+    respuesta = await admin.post(
         "/api/conversations/start",
         json={"to": "595982971717", "template": "pedido", "language": "es",
               "variables": ["Solo uno"]},
@@ -1201,9 +1221,9 @@ async def test_the_values_must_match_what_the_template_declares(as_agent, whatsa
 
 
 async def test_something_that_is_not_a_phone_number_is_turned_away(as_agent, whatsapp_listo):
-    ana = await as_agent(whatsapp_listo["ana"]["email"])
+    admin = await as_agent(whatsapp_listo["admin"]["email"])
     for malo in ["hola", "12345", "+" + "9" * 20, ""]:
-        respuesta = await ana.post(
+        respuesta = await admin.post(
             "/api/conversations/start",
             json={"to": malo, "template": "hello_world", "language": "en_US"},
         )
@@ -1212,15 +1232,15 @@ async def test_something_that_is_not_a_phone_number_is_turned_away(as_agent, wha
 
 async def test_without_whatsapp_configured_the_console_is_told_so(as_agent, team, monkeypatch):
     """No hay token ni cuenta: se dice por qué, en vez de fallar en la cola."""
-    ana = await as_agent(team["ana"]["email"])
-    assert (await ana.get("/api/whatsapp/templates")).status_code == 503
+    admin = await as_agent(team["admin"]["email"])
+    assert (await admin.get("/api/whatsapp/templates")).status_code == 503
 
     async def plantillas(self):
         return PLANTILLAS
 
     monkeypatch.setattr(WhatsAppAdapter, "list_templates", plantillas)
     # Plantillas sí, pero ninguna cuenta de WhatsApp dada de alta.
-    respuesta = await ana.post(
+    respuesta = await admin.post(
         "/api/conversations/start",
         json={"to": "595982971717", "template": "hello_world", "language": "en_US"},
     )
@@ -1330,7 +1350,8 @@ async def test_only_the_admin_sets_a_departments_logo(as_agent, team):
         assert served.content == _PNG_BYTES
 
     listed = await ana.get("/api/departments")
-    assert next(row for row in listed.json() if row["id"] == department["id"])["logo_url"] == logo_url
+    listado = listed.json()
+    assert next(row for row in listado if row["id"] == department["id"])["logo_url"] == logo_url
 
 
 async def test_replacing_a_departments_logo_discards_the_previous_file(as_agent, team):
@@ -1383,6 +1404,201 @@ async def test_a_department_logo_rejects_a_non_image_type(as_agent, team):
         files={"file": ("nota.txt", b"hola", "text/plain")},
     )
     assert rejected.status_code == 415
+
+
+async def test_the_customer_picks_which_branch_to_talk_to(anonymous, as_agent, team):
+    """Elegir rama al entrar deja el primer mensaje ya en la cola correcta.
+
+    Es lo que habilita que el asistente ofrezca lo del departamento —reservar
+    una habitación, por ejemplo—: sin departamento no hay módulo que ofrecer.
+    """
+    admin = await as_agent(team["admin"]["email"])
+    hotel = (await admin.post("/api/departments", json={"name": "Hotel cliente"})).json()
+
+    transport = httpx.ASGITransport(app=anonymous.asgi_app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://pruebas") as cliente:
+        registro = await cliente.post(
+            "/api/contact/register",
+            json={"email": "elige-rama@clientes.local", "password": CLIENT_PASSWORD},
+        )
+        assert registro.status_code == 201
+        # Todavía no eligió; así lo sabe el chatbox al cargar.
+        assert (await cliente.get("/api/contact/me")).json()["department"] is None
+
+        ramas = (await cliente.get("/api/contact/departments")).json()
+        assert "Hotel cliente" in {row["name"] for row in ramas}
+
+        elegida = await cliente.put(
+            "/api/contact/department", json={"department_id": hotel["id"]}
+        )
+        assert elegida.status_code == 200
+        vuelta = (await cliente.get("/api/contact/me")).json()["department"]
+        assert vuelta["name"] == "Hotel cliente"
+
+        escrito = await cliente.post(
+            "/api/web/messages", json={"text": "Quiero una habitación"}
+        )
+        assert escrito.status_code == 200
+
+    # El hilo nace en esa rama, sin que nadie lo derive a mano.
+    en_hotel = (
+        await admin.get(f"/api/conversations?scope=all&department={hotel['id']}")
+    ).json()
+    assert [row["department_name"] for row in en_hotel] == ["Hotel cliente"]
+
+
+async def test_the_customer_books_a_room_from_the_chatbox(anonymous, as_agent, team):
+    """El circuito completo del cliente: elige rama, mira y reserva.
+
+    Sin pasar por el asistente ni por la consola: es lo que necesita quien
+    entra al chatbox de una rama con hotel.
+    """
+    admin = await as_agent(team["admin"]["email"])
+    hotel = await _hotel_department(admin, "Hotel del chatbox")
+    await _hotel_room(admin, hotel["id"], code="301", capacity=2)
+
+    transport = httpx.ASGITransport(app=anonymous.asgi_app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://pruebas") as cliente:
+        await cliente.post(
+            "/api/contact/register",
+            json={"email": "reserva-web@clientes.local", "password": CLIENT_PASSWORD},
+        )
+        # Antes de elegir rama no se puede reservar: no hay hotel al que pedir.
+        temprano = await cliente.get(
+            "/api/contact/hotel/availability",
+            params={"check_in": "2027-03-01", "check_out": "2027-03-04"},
+        )
+        assert temprano.status_code == 409
+
+        await cliente.put("/api/contact/department", json={"department_id": hotel["id"]})
+        # Y la rama se anuncia como de hotel, que es lo que enciende el botón.
+        assert (await cliente.get("/api/contact/me")).json()["department"]["hotel"] is True
+
+        libres = await cliente.get(
+            "/api/contact/hotel/availability",
+            params={"check_in": "2027-03-01", "check_out": "2027-03-04"},
+        )
+        assert libres.status_code == 200
+        opciones = libres.json()
+        assert len(opciones) == 1
+        assert opciones[0]["available"] == 1
+        assert opciones[0]["nights"] == 3
+        assert opciones[0]["total_price_cents"] == opciones[0]["nightly_price_cents"] * 3
+
+        reserva = await cliente.post(
+            "/api/contact/hotel/reservations",
+            json={
+                "check_in": "2027-03-01",
+                "check_out": "2027-03-04",
+                "guests": 2,
+                "room_type_id": opciones[0]["room_type_id"],
+                "guest_name": "Dorothea",
+            },
+        )
+        assert reserva.status_code == 201, reserva.text
+        # Nace pendiente: la confirma el hotel, no quien la pide.
+        assert reserva.json()["status"] == "pending"
+
+        # Y esas fechas ya no figuran libres.
+        despues = (
+            await cliente.get(
+                "/api/contact/hotel/availability",
+                params={"check_in": "2027-03-01", "check_out": "2027-03-04"},
+            )
+        ).json()
+        assert despues == []
+
+    # El equipo la ve en su panel, como cualquier otra reserva.
+    del_equipo = (
+        await admin.get(f"/api/departments/{hotel['id']}/hotel/reservations")
+    ).json()
+    assert [row["guest_name"] for row in del_equipo] == ["Dorothea"]
+
+
+async def test_a_customer_cannot_book_in_a_branch_without_the_module(
+    anonymous, as_agent, team
+):
+    admin = await as_agent(team["admin"]["email"])
+    soporte = (await admin.post("/api/departments", json={"name": "Soporte sin hotel"})).json()
+
+    transport = httpx.ASGITransport(app=anonymous.asgi_app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://pruebas") as cliente:
+        await cliente.post(
+            "/api/contact/register",
+            json={"email": "sin-hotel@clientes.local", "password": CLIENT_PASSWORD},
+        )
+        await cliente.put("/api/contact/department", json={"department_id": soporte["id"]})
+        assert (await cliente.get("/api/contact/me")).json()["department"]["hotel"] is False
+
+        respuesta = await cliente.get(
+            "/api/contact/hotel/availability",
+            params={"check_in": "2027-03-01", "check_out": "2027-03-04"},
+        )
+        assert respuesta.status_code == 409
+
+
+async def test_a_customer_booking_is_turned_away_when_the_dates_make_no_sense(
+    anonymous, as_agent, team
+):
+    admin = await as_agent(team["admin"]["email"])
+    hotel = await _hotel_department(admin, "Hotel fechas")
+
+    transport = httpx.ASGITransport(app=anonymous.asgi_app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://pruebas") as cliente:
+        await cliente.post(
+            "/api/contact/register",
+            json={"email": "fechas-malas@clientes.local", "password": CLIENT_PASSWORD},
+        )
+        await cliente.put("/api/contact/department", json={"department_id": hotel["id"]})
+
+        # Salida antes que la entrada, y una estadía que ya pasó.
+        for entrada, salida in (("2027-03-04", "2027-03-01"), ("2020-01-01", "2020-01-05")):
+            respuesta = await cliente.get(
+                "/api/contact/hotel/availability",
+                params={"check_in": entrada, "check_out": salida},
+            )
+            assert respuesta.status_code == 422, (entrada, salida)
+
+
+async def test_a_customer_cannot_pick_a_branch_that_does_not_exist(anonymous, team):
+    transport = httpx.ASGITransport(app=anonymous.asgi_app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://pruebas") as cliente:
+        await cliente.post(
+            "/api/contact/register",
+            json={"email": "rama-inventada@clientes.local", "password": CLIENT_PASSWORD},
+        )
+        respuesta = await cliente.put(
+            "/api/contact/department", json={"department_id": str(uuid.uuid4())}
+        )
+        assert respuesta.status_code == 404
+
+
+async def test_a_customer_does_not_move_a_thread_someone_is_attending(
+    anonymous, as_agent, team
+):
+    """Cambiar de rama con un agente ya encima se la sacaría de su bandeja."""
+    admin = await as_agent(team["admin"]["email"])
+    primera = (await admin.post("/api/departments", json={"name": "Primera rama"})).json()
+    otra = (await admin.post("/api/departments", json={"name": "Otra rama"})).json()
+
+    transport = httpx.ASGITransport(app=anonymous.asgi_app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://pruebas") as cliente:
+        await cliente.post(
+            "/api/contact/register",
+            json={"email": "ya-atendido@clientes.local", "password": CLIENT_PASSWORD},
+        )
+        await cliente.put("/api/contact/department", json={"department_id": primera["id"]})
+        await cliente.post("/api/web/messages", json={"text": "Hola"})
+
+        hilos = (
+            await admin.get(f"/api/conversations?scope=all&department={primera['id']}")
+        ).json()
+        await admin.post(f"/api/conversations/{hilos[0]['id']}/claim")
+
+        respuesta = await cliente.put(
+            "/api/contact/department", json={"department_id": otra["id"]}
+        )
+        assert respuesta.status_code == 409
 
 
 async def test_admin_grants_extra_departments_to_an_agent(as_agent, team):
@@ -1969,9 +2185,11 @@ async def test_saml_login_never_opens_a_redirect_to_another_site(anonymous, monk
     assert query["RelayState"] == ["/console"]
 
 
-def _configure_google(monkeypatch: Any, settings: Any) -> None:
+def _configure_google(monkeypatch: Any, settings: Any, *, domains: str = "empresa.local") -> None:
     monkeypatch.setattr(settings, "google_client_id", "client-id.apps.googleusercontent.com")
     monkeypatch.setattr(settings, "google_client_secret", "client-secret")
+    # Sin lista de dominios, Google autentica pero no da de alta a nadie.
+    monkeypatch.setattr(settings, "sso_allowed_email_domains", domains)
 
 
 async def test_google_routes_are_hidden_when_not_configured(anonymous):
@@ -2045,10 +2263,335 @@ async def test_a_successful_google_callback_actually_opens_the_session(
     assert (await anonymous.get("/api/auth/me")).status_code == 200
 
 
+def _sso_settings(**overrides):
+    """Ajustes aislados del entorno, con la lista de dominios que pida la prueba."""
+    return Settings(_env_file=None, **overrides)
+
+
+# --------------------------------------------------------------------------- #
+# Credenciales por canal
+# --------------------------------------------------------------------------- #
+async def test_each_channel_only_accepts_its_own_credentials(as_agent, team):
+    """Un canal no guarda un valor que su adaptador nunca va a leer."""
+    admin = await as_agent(team["admin"]["email"])
+
+    rechazado = await admin.post(
+        "/api/channel-accounts",
+        json={
+            "channel": "telegram",
+            "external_id": "7654321",
+            "credentials": {"access_token": "123:ABC", "imap_host": "imap.ejemplo.local"},
+        },
+    )
+    assert rechazado.status_code == 422
+    assert "imap_host" in rechazado.json()["detail"]
+
+
+async def test_a_channel_without_a_global_fallback_demands_its_credentials(
+    as_agent, team, monkeypatch
+):
+    """Telegram, Twilio y el correo no tienen valor global en .env."""
+    from cryptography.fernet import Fernet
+    from pydantic import SecretStr
+
+    monkeypatch.setattr(
+        get_settings(), "secret_encryption_key", SecretStr(Fernet.generate_key().decode())
+    )
+    admin = await as_agent(team["admin"]["email"])
+
+    sin_token = await admin.post(
+        "/api/channel-accounts", json={"channel": "telegram", "external_id": "7654321"}
+    )
+    assert sin_token.status_code == 422
+    assert "access_token" in sin_token.json()["detail"]
+
+    con_token = await admin.post(
+        "/api/channel-accounts",
+        json={
+            "channel": "telegram",
+            "external_id": "7654321",
+            "credentials": {"access_token": "7654321:ABCdef", "verify_token": "secreto"},
+        },
+    )
+    assert con_token.status_code == 201, con_token.text
+    assert con_token.json()["has_own_credentials"] is True
+
+
+async def test_a_mailbox_stores_its_ten_settings(as_agent, team, monkeypatch):
+    """El correo no cabía en los tres campos con nombre propio que había."""
+    from cryptography.fernet import Fernet
+    from pydantic import SecretStr
+
+    monkeypatch.setattr(
+        get_settings(), "secret_encryption_key", SecretStr(Fernet.generate_key().decode())
+    )
+    admin = await as_agent(team["admin"]["email"])
+    alta = await admin.post(
+        "/api/channel-accounts",
+        json={
+            "channel": "email",
+            "external_id": "soporte@empresa.local",
+            "credentials": {
+                "imap_host": "imap.empresa.local",
+                "imap_username": "soporte",
+                "imap_password": "clave-imap",
+                "smtp_host": "smtp.empresa.local",
+                "smtp_username": "soporte",
+                "smtp_password": "clave-smtp",
+                "from_email": "soporte@empresa.local",
+            },
+        },
+    )
+    assert alta.status_code == 201, alta.text
+
+    async with session_scope() as session:
+        account = await repo.get_channel_account(session, uuid.UUID(alta.json()["id"]))
+        guardadas = decrypt_json(account.credentials_ciphertext, settings=get_settings())
+    assert guardadas["imap_password"] == "clave-imap"
+    assert guardadas["smtp_password"] == "clave-smtp"
+
+    # Y se cambia una sola sin tener que reescribir las otras nueve.
+    await admin.patch(
+        f"/api/channel-accounts/{alta.json()['id']}",
+        json={"credentials": {"smtp_password": "otra-clave"}},
+    )
+    async with session_scope() as session:
+        account = await repo.get_channel_account(session, uuid.UUID(alta.json()["id"]))
+        guardadas = decrypt_json(account.credentials_ciphertext, settings=get_settings())
+    assert guardadas["smtp_password"] == "otra-clave"
+    assert guardadas["imap_password"] == "clave-imap"
+
+
+# --------------------------------------------------------------------------- #
+# Cabeceras de seguridad y CORS
+# --------------------------------------------------------------------------- #
+async def test_every_response_carries_the_security_headers(anonymous):
+    """También las de error: el middleware envuelve la respuesta, no el endpoint."""
+    for response in (
+        await anonymous.get("/health"),
+        await anonymous.get("/api/conversations"),  # 401
+    ):
+        headers = response.headers
+        assert "script-src 'self'" in headers["content-security-policy"]
+        assert "frame-ancestors 'none'" in headers["content-security-policy"]
+        assert headers["x-content-type-options"] == "nosniff"
+        assert headers["x-frame-options"] == "DENY"
+        assert headers["referrer-policy"] == "same-origin"
+
+
+async def test_hsts_only_travels_when_the_cookie_is_secure(anonymous):
+    """Anunciarlo desde una instalación por HTTP dejaría el navegador fuera."""
+    response = await anonymous.get("/health")
+    esperado = get_settings().session_cookie_secure
+    assert ("strict-transport-security" in response.headers) is esperado
+
+
+def test_the_cors_wildcard_is_not_taken_as_an_origin():
+    """`*` con credenciales dejaría llamar a la API desde cualquier sitio web."""
+    con_comodin = Settings(_env_file=None, cors_allow_origins="*")
+    assert con_comodin.cors_origins == []
+    assert con_comodin.cors_wildcard_requested is True
+
+    concretos = Settings(_env_file=None, cors_allow_origins="https://a.local, https://b.local")
+    assert concretos.cors_origins == ["https://a.local", "https://b.local"]
+    assert concretos.cors_wildcard_requested is False
+
+
+# --------------------------------------------------------------------------- #
+# Freno a la prueba de contraseñas
+# --------------------------------------------------------------------------- #
+async def test_repeated_failures_leave_the_account_waiting(anonymous, team, monkeypatch):
+    """Pasado el tope, la contraseña correcta tampoco entra durante un rato."""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "login_max_attempts", 3)
+    monkeypatch.setattr(settings, "login_lockout_minutes", 15)
+
+    email = team["ana"]["email"]
+    for _ in range(3):
+        fallo = await anonymous.post(
+            "/api/auth/login", json={"email": email, "password": "no-es-esta"}
+        )
+        assert fallo.status_code == 401
+
+    # La buena tampoco vale ahora, y la respuesta es indistinguible de la
+    # anterior: un código propio delataría qué correos existen.
+    bloqueado = await anonymous.post(
+        "/api/auth/login", json={"email": email, "password": PASSWORD}
+    )
+    assert bloqueado.status_code == 401
+    assert bloqueado.json()["detail"] == "Credenciales no válidas"
+
+    async with session_scope() as session:
+        tenant = await repo.get_or_create_tenant(session, "default")
+        ana = await repo.find_agent_by_email(session, tenant_id=tenant.id, email=email)
+        assert repo.login_is_locked(ana) is True
+        # Cumplida la espera, se vuelve a entrar sin intervención de nadie.
+        ana.locked_until = datetime.now(UTC) - timedelta(seconds=1)
+
+    assert (
+        await anonymous.post("/api/auth/login", json={"email": email, "password": PASSWORD})
+    ).status_code == 200
+
+
+async def test_a_correct_password_clears_the_failure_count(anonymous, team, monkeypatch):
+    monkeypatch.setattr(get_settings(), "login_max_attempts", 3)
+    email = team["luis"]["email"]
+
+    for _ in range(2):
+        await anonymous.post("/api/auth/login", json={"email": email, "password": "mal"})
+    assert (
+        await anonymous.post("/api/auth/login", json={"email": email, "password": PASSWORD})
+    ).status_code == 200
+
+    async with session_scope() as session:
+        tenant = await repo.get_or_create_tenant(session, "default")
+        luis = await repo.find_agent_by_email(session, tenant_id=tenant.id, email=email)
+        assert luis.failed_login_count == 0
+        assert luis.locked_until is None
+
+
+async def test_the_unified_login_also_counts_the_failures(anonymous, team, monkeypatch):
+    """«/» es la entrada real del equipo: sin esto, el freno se rodeaba por ahí."""
+    monkeypatch.setattr(get_settings(), "login_max_attempts", 3)
+    email = team["marta"]["email"]
+
+    for _ in range(3):
+        fallo = await anonymous.post(
+            "/api/session/login", json={"email": email, "password": "mal"}
+        )
+        assert fallo.status_code == 401
+
+    assert (
+        await anonymous.post("/api/session/login", json={"email": email, "password": PASSWORD})
+    ).status_code == 401
+
+
+# --------------------------------------------------------------------------- #
+# Cuenta de arranque
+# --------------------------------------------------------------------------- #
+async def test_the_bootstrap_admin_gets_a_generated_password_that_must_change():
+    """Ya no hay contraseña fija y documentada, igual en todas las instalaciones."""
+    async with session_scope() as session:
+        tenant = await repo.get_or_create_tenant(session, "default")
+        secret = await repo.ensure_default_admin(session, tenant_id=tenant.id)
+
+    assert secret and len(secret) >= 20
+
+    async with session_scope() as session:
+        tenant = await repo.get_or_create_tenant(session, "default")
+        admin = await repo.find_agent_by_email(
+            session, tenant_id=tenant.id, email=repo.DEFAULT_ADMIN_EMAIL
+        )
+        assert admin is not None
+        assert admin.role == ROLE_ADMIN
+        assert admin.must_change_password is True
+        assert verify_password(secret, admin.password_hash)
+
+
+async def test_the_bootstrap_admin_keeps_the_password_it_was_given():
+    """Antes se reponía en cada arranque, de modo que cambiarla no servía."""
+    async with session_scope() as session:
+        tenant = await repo.get_or_create_tenant(session, "default")
+        await repo.ensure_default_admin(session, tenant_id=tenant.id, password=PASSWORD)
+        admin = await repo.find_agent_by_email(
+            session, tenant_id=tenant.id, email=repo.DEFAULT_ADMIN_EMAIL
+        )
+        admin.password_hash = hash_password("OtraClaveDistinta9")
+        admin.must_change_password = False
+
+    async with session_scope() as session:
+        tenant = await repo.get_or_create_tenant(session, "default")
+        assert await repo.ensure_default_admin(session, tenant_id=tenant.id) is None
+        admin = await repo.find_agent_by_email(
+            session, tenant_id=tenant.id, email=repo.DEFAULT_ADMIN_EMAIL
+        )
+        assert verify_password("OtraClaveDistinta9", admin.password_hash)
+
+
+async def test_the_bootstrap_admin_is_not_recreated_while_another_admin_exists(team):
+    async with session_scope() as session:
+        tenant = await repo.get_or_create_tenant(session, "default")
+        assert await repo.ensure_default_admin(session, tenant_id=tenant.id) is None
+        assert (
+            await repo.find_agent_by_email(
+                session, tenant_id=tenant.id, email=repo.DEFAULT_ADMIN_EMAIL
+            )
+        ) is None
+
+
+async def test_a_pending_password_change_blocks_the_console_but_not_the_change(
+    as_agent, team
+):
+    """La marca retiene la sesión: solo deja salir por el cambio de contraseña."""
+    async with session_scope() as session:
+        tenant = await repo.get_or_create_tenant(session, "default")
+        ana = await repo.find_agent_by_email(
+            session, tenant_id=tenant.id, email=team["ana"]["email"]
+        )
+        ana.must_change_password = True
+
+    cliente = await as_agent(team["ana"]["email"])
+
+    # La consola queda cerrada…
+    assert (await cliente.get("/api/conversations")).status_code == 403
+    # …pero se puede saber por qué, y salir.
+    yo = await cliente.get("/api/auth/me")
+    assert yo.status_code == 200
+    assert yo.json()["agent"]["must_change_password"] is True
+
+    # La contraseña actual se comprueba de verdad.
+    fallido = await cliente.post(
+        "/api/auth/password",
+        json={"current_password": "no-es-esta", "new_password": "ClaveNueva12345"},
+    )
+    assert fallido.status_code == 422
+
+    cambio = await cliente.post(
+        "/api/auth/password",
+        json={"current_password": PASSWORD, "new_password": "ClaveNueva12345"},
+    )
+    assert cambio.status_code == 200
+
+    # Y a partir de ahí la consola vuelve a abrirse con la misma sesión.
+    assert (await cliente.get("/api/conversations")).status_code == 200
+    assert (await cliente.get("/api/auth/me")).json()["agent"]["must_change_password"] is False
+
+
+async def test_a_google_account_outside_the_domain_list_gets_no_console(anonymous, monkeypatch):
+    """Google autentica a cualquiera con cuenta de Google; la consola, no."""
+    import app.api.google_auth as google_auth
+
+    _configure_google(monkeypatch, get_settings())
+
+    async def perfil_ajeno(**kwargs):
+        return {"email": "desconocido@gmail.com", "display_name": "Desconocido"}
+
+    monkeypatch.setattr(google_auth, "exchange_code_for_userinfo", perfil_ajeno)
+
+    inicio = await anonymous.get("/auth/google/login", follow_redirects=False)
+    state, _, _ = inicio.cookies["chatbox_google_state"].strip('"').partition(":")
+
+    respuesta = await anonymous.get(
+        f"/auth/google/callback?code=abc&state={state}", follow_redirects=False
+    )
+    assert respuesta.status_code == 403
+    assert "chatbox_session" not in respuesta.cookies
+
+    # Y tampoco queda la cuenta creada a medias.
+    async with session_scope() as session:
+        tenant = await repo.get_or_create_tenant(session, get_settings().default_tenant_slug)
+        assert (
+            await repo.find_agent_by_email(
+                session, tenant_id=tenant.id, email="desconocido@gmail.com"
+            )
+        ) is None
+
+
 async def test_login_or_provision_agent_creates_a_new_agent_with_the_basic_role(team):
     async with session_scope() as session:
         agent, created = await login_or_provision_agent(
             session,
+            settings=_sso_settings(sso_allowed_email_domains="empresa.local"),
             tenant_id=team["tenant_id"],
             email="nueva.persona@empresa.local",
             display_name="Nueva Persona",
@@ -2069,6 +2612,7 @@ async def test_login_or_provision_agent_does_not_elevate_an_existing_account(tea
     async with session_scope() as session:
         agent, created = await login_or_provision_agent(
             session,
+            settings=_sso_settings(),
             tenant_id=team["tenant_id"],
             email=team["admin"]["email"],
             display_name="Suplantado",
@@ -2088,10 +2632,50 @@ async def test_login_or_provision_agent_rejects_an_inactive_account(as_agent, te
         with pytest.raises(AgentInactiveError):
             await login_or_provision_agent(
                 session,
+                settings=_sso_settings(sso_allowed_email_domains="empresa.local"),
                 tenant_id=team["tenant_id"],
                 email=team["luis"]["email"],
                 display_name=None,
             )
+
+
+async def test_login_or_provision_agent_refuses_an_unknown_email_without_a_domain_list(team):
+    """Sin lista de dominios no se estrena cuenta: es el valor por omisión."""
+    async with session_scope() as session:
+        with pytest.raises(AgentNotProvisionedError):
+            await login_or_provision_agent(
+                session,
+                settings=_sso_settings(),
+                tenant_id=team["tenant_id"],
+                email="cualquiera@gmail.com",
+                display_name="Cualquiera",
+            )
+
+
+async def test_login_or_provision_agent_refuses_a_domain_outside_the_list(team):
+    """Google autentica a todo titular de una cuenta de Google; la lista corta."""
+    async with session_scope() as session:
+        with pytest.raises(AgentNotProvisionedError):
+            await login_or_provision_agent(
+                session,
+                settings=_sso_settings(sso_allowed_email_domains="empresa.local, filial.es"),
+                tenant_id=team["tenant_id"],
+                email="intruso@gmail.com",
+                display_name="Intruso",
+            )
+
+
+async def test_login_or_provision_agent_accepts_any_domain_on_the_list(team):
+    async with session_scope() as session:
+        agent, created = await login_or_provision_agent(
+            session,
+            settings=_sso_settings(sso_allowed_email_domains="empresa.local, filial.es"),
+            tenant_id=team["tenant_id"],
+            email="Alguien@Filial.ES",
+            display_name="Alguien",
+        )
+    assert created is True
+    assert agent.role == ROLE_AGENT
 
 
 # --------------------------------------------------------------------------- #
@@ -3295,7 +3879,7 @@ async def _hotel_room(
             "room_type_id": room_type["id"],
             "name": "Tarifa base",
             "nightly_price_cents": 5_000,
-            "currency": "USD",
+            "currency": "PYG",
         },
     )
     return (
@@ -3621,12 +4205,13 @@ async def _put_conversation_in_department(conversation_id: str, department_id: s
 
 
 def _tool_ctx(session: Any, conversation: Any, *, contact: Any = None) -> Any:
-    """Contexto mínimo: hotel_booking.dispatch solo mira estos cuatro campos."""
+    """Contexto mínimo: lo que miran hotel_booking.dispatch y las herramientas del asistente."""
     return SimpleNamespace(
         session=session,
         tenant=SimpleNamespace(id=conversation.tenant_id, slug="default"),
         conversation=conversation,
         contact=contact,
+        scratch={},
     )
 
 
@@ -3649,7 +4234,7 @@ async def test_the_ai_tool_lists_availability_with_price_and_capacity(
         )
     assert "Doble 101" in result
     assert "1 libres" in result
-    assert "50.00 USD/noche" in result
+    assert "Gs. 50/noche" in result
 
 
 async def test_the_ai_tool_creates_a_pending_reservation_and_blocks_the_room(
@@ -3742,6 +4327,27 @@ async def test_hotel_dispatch_ignores_tools_it_does_not_own(anonymous, as_agent,
             {"motivo": "x", "urgencia": "baja"},
         )
     assert result is None
+
+
+def test_tools_are_translated_to_the_providers_function_format():
+    """Las definiciones se escriben una vez y se adaptan al llamar.
+
+    Así el módulo de negocio no sabe con qué proveedor se habla, y cambiarlo
+    —como se hizo de Anthropic a Gemini— no obliga a reescribirlas.
+    """
+    traducida = _as_function_tool(HANDOFF_TOOL)
+
+    assert traducida["type"] == "function"
+    assert traducida["name"] == "derivar_a_agente"
+    assert traducida["parameters"]["required"] == ["motivo", "urgencia"]
+    # Lo del proveedor anterior no viaja: el esquema de Gemini lo rechaza.
+    assert "additionalProperties" not in traducida["parameters"]
+    assert "strict" not in traducida
+
+    for tool in hotel_booking.HOTEL_TOOLS:
+        convertida = _as_function_tool(tool)
+        assert convertida["name"] == tool["name"]
+        assert convertida["parameters"]["type"] == "object"
 
 
 async def test_hotel_tools_are_only_offered_once_the_module_is_active(anonymous, as_agent, team):
@@ -4017,7 +4623,7 @@ async def test_hotel_report_counts_arrivals_departures_occupancy_and_revenue(as_
     assert body["occupied_rooms"] == 2
     assert body["pending_count"] == 0
     # arr: 3 noches dentro de la ventana; sty: 1 noche; dep: 0 (ya terminó).
-    assert body["revenue_next_30_days"] == [{"currency": "USD", "total_cents": 20_000}]
+    assert body["revenue_next_30_days"] == [{"currency": "PYG", "total_cents": 20_000}]
 
 
 async def test_hotel_report_counts_pending_reservations(as_agent, team):

@@ -79,10 +79,26 @@ class Settings(BaseSettings):
     microsoft_validate_jwt: bool = True
 
     # ----------------------------------------------------------------------- IA
-    anthropic_api_key: SecretStr | None = None
-    ai_model: str = "claude-opus-5"
+    #: Clave de la API de Gemini (Google AI Studio). Sin ella el asistente
+    #: queda apagado y el turno cae en el aviso de reserva (ver
+    #: ``app/handlers/ai.py``); el resto de la consola funciona igual.
+    google_api_key: SecretStr | None = None
+    ai_model: str = "gemini-3.8-flash"
+    #: Alternativa a Gemini directo: OpenRouter da acceso a modelos de varios
+    #: proveedores con una sola clave y una sola factura, y no tiene el tope
+    #: diario de la tarifa gratuita de Google AI Studio. Con su clave puesta y
+    #: ``AI_PROVIDER=auto`` el asistente pasa a usarlo; la base de
+    #: conocimiento sigue calculando sus vectores con ``GOOGLE_API_KEY``.
+    openrouter_api_key: SecretStr | None = None
+    #: Identificador del modelo en OpenRouter (``proveedor/modelo``). Tiene
+    #: que admitir herramientas; si además admite imágenes, audio o PDF, el
+    #: asistente los ve en lugar de leer que hubo un adjunto.
+    openrouter_model: str = "google/gemini-3.8-flash"
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    #: Qué proveedor responde. ``auto`` prefiere OpenRouter si tiene clave y,
+    #: si no, Gemini; los otros dos valores fuerzan uno aunque estén ambas.
+    ai_provider: Literal["auto", "gemini", "openrouter"] = "auto"
     ai_max_tokens: int = 4_096
-    ai_effort: Literal["low", "medium", "high", "xhigh", "max"] = "medium"
     ai_history_turns: int = 12
     ai_system_prompt: str = (
         "Eres el asistente virtual de atención al cliente. "
@@ -90,6 +106,17 @@ class Settings(BaseSettings):
         "Si no dispones de la información solicitada, indícalo con claridad y "
         "ofrece derivar la conversación a un agente humano."
     )
+
+    @property
+    def ai_backend(self) -> Literal["gemini", "openrouter"] | None:
+        """Proveedor que atiende al asistente, o ``None`` si falta su clave."""
+        if self.ai_provider == "openrouter":
+            return "openrouter" if self.openrouter_api_key else None
+        if self.ai_provider == "gemini":
+            return "gemini" if self.google_api_key else None
+        if self.openrouter_api_key:
+            return "openrouter"
+        return "gemini" if self.google_api_key else None
 
     # -------------------------------------------------------------- orquestador
     outbox_workers: int = 2
@@ -130,6 +157,25 @@ class Settings(BaseSettings):
     def google_enabled(self) -> bool:
         return bool(self.google_client_id and self.google_client_secret)
 
+    # ------------------------------------- alta automática por SSO (SAML/Google)
+    #: Dominios de correo cuyos titulares pueden estrenar cuenta de agente
+    #: entrando por SSO, separados por comas (p. ej. "miempresa.com,filial.es").
+    #: **Vacío —el valor por omisión— significa que nadie se da de alta solo**:
+    #: por SSO entra quien ya tiene cuenta, y el resto recibe un rechazo. Es
+    #: deliberado que no exista un "acepta cualquier dominio": el proveedor de
+    #: identidad de Google autentica a cualquier titular de una cuenta de
+    #: Google, no solo a la plantilla, de modo que sin lista de dominios el
+    #: alta automática abre la consola a todo el mundo.
+    sso_allowed_email_domains: str = ""
+
+    @property
+    def sso_domains(self) -> set[str]:
+        return {
+            domain.strip().lower().lstrip("@")
+            for domain in self.sso_allowed_email_domains.split(",")
+            if domain.strip()
+        }
+
     # --------------------------------------------------- correo saliente ----
     #: Notificaciones de cuenta: confirmación de registro del chatbox e
     #: invitación al crear un supervisor o administrador. Mientras falten
@@ -146,6 +192,11 @@ class Settings(BaseSettings):
     #: Remitente que ve quien recibe el correo. Por omisión, la propia cuenta.
     smtp_from_email: str | None = None
     smtp_use_tls: bool = True
+    #: Cada cuántos segundos se mira el correo entrante de los buzones dados de
+    #: alta como canal. El correo no avisa: no hay webhook, hay que ir a mirar.
+    #: ``0`` apaga la recogida sin desconectar nada más —útil cuando el buzón se
+    #: consulta desde otro sitio o mientras se depura—.
+    imap_poll_interval_s: int = 120
 
     @property
     def smtp_enabled(self) -> bool:
@@ -157,12 +208,35 @@ class Settings(BaseSettings):
 
     # ------------------------------------------------------------------ consola
     admin_api_key: SecretStr | None = None
-    cors_allow_origins: str = "*"
+    #: Orígenes permitidos para peticiones entre sitios, separados por comas.
+    #: Vacío —lo normal— significa que no se instala CORS en absoluto: la
+    #: consola y el chatbox los sirve esta misma aplicación, así que no hay
+    #: petición entre orígenes que permitir. El comodín ``*`` se trata como
+    #: vacío y se avisa por el log: junto con las credenciales de sesión
+    #: dejaría que cualquier sitio llamase a la API con la cookie de quien lo
+    #: visita (ver ``app/main.py``).
+    cors_allow_origins: str = ""
+    #: Fallos de contraseña seguidos que dejan una cuenta en espera, y cuántos
+    #: minutos dura esa espera. Vale para los agentes y para los clientes.
+    login_max_attempts: int = 8
+    login_lockout_minutes: int = 15
+    #: Caducidad del contenido, en días. ``0`` —lo que viene puesto— desactiva
+    #: la limpieza y no se borra nada nunca. Con un valor, la tarea de
+    #: mantenimiento vacía a diario el texto y los adjuntos de los mensajes más
+    #: antiguos, sin borrar las filas: de ellas salen los recuentos de los
+    #: informes. La traza de auditoría se descarta entera, esa sí.
+    retention_days_messages: int = 0
+    retention_days_audit: int = 0
     #: Marca la cookie de sesión como ``Secure``. En una red local sin TLS debe
     #: quedar en falso, pues el navegador descartaría la cookie sobre HTTP.
     session_cookie_secure: bool = False
     #: Correo del supervisor creado por ``scripts/create_agent.py`` sin argumentos.
     bootstrap_supervisor_email: str | None = None
+    #: Contraseña de la cuenta de arranque ``admin@local``, que solo se crea
+    #: cuando el inquilino se queda sin ningún administrador activo. Si falta,
+    #: se genera una al azar y se imprime una vez en el log del arranque. En
+    #: ambos casos hay que cambiarla en el primer acceso.
+    bootstrap_admin_password: SecretStr | None = None
 
     # ------------------------------------------------------------------ adjuntos
     #: Directorio donde se guardan las imágenes subidas por el chatbox y la
@@ -205,7 +279,16 @@ class Settings(BaseSettings):
 
     @property
     def cors_origins(self) -> list[str]:
-        return [origin.strip() for origin in self.cors_allow_origins.split(",") if origin.strip()]
+        """Orígenes concretos. El comodín no cuenta: ver ``cors_allow_origins``."""
+        return [
+            origin.strip()
+            for origin in self.cors_allow_origins.split(",")
+            if origin.strip() and origin.strip() != "*"
+        ]
+
+    @property
+    def cors_wildcard_requested(self) -> bool:
+        return "*" in {origin.strip() for origin in self.cors_allow_origins.split(",")}
 
     @property
     def is_sqlite(self) -> bool:

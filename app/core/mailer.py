@@ -1,21 +1,88 @@
-"""Envío de correo saliente (SMTP), para las notificaciones de cuenta.
+"""Envío de correo saliente (SMTP).
 
-Un fallo de correo —credenciales vencidas, proveedor caído, SMTP sin
-configurar— nunca debe impedir un registro o el alta de un agente que ya
-quedaron guardados en la base: por eso ``send_email`` no lanza excepciones,
-solo registra el resultado y devuelve si el envío se realizó.
+Cubre dos usos con distinto remitente. Las **notificaciones de cuenta**
+—confirmación de registro, invitación a un agente— salen de la cuenta global
+de ``.env`` mediante :func:`send_email`, que nunca lanza: un fallo de correo no
+debe tumbar un registro que ya quedó guardado en la base.
+
+El **canal de correo** (``app/channels/email.py``) usa :class:`SmtpAccount` y
+:func:`deliver`, con las credenciales propias de cada buzón dado de alta en la
+consola. Ahí sí interesa la excepción: quien la recibe es la cola de salida,
+que sabe reintentar.
 """
 
 from __future__ import annotations
 
 import asyncio
 import smtplib
+from dataclasses import dataclass
 from email.message import EmailMessage
 
 from app.config import Settings
 from app.logging_setup import get_logger
 
 log = get_logger(__name__)
+
+#: Tiempo máximo de espera de una conexión SMTP, en segundos.
+SMTP_TIMEOUT_S = 20
+
+
+@dataclass(slots=True)
+class SmtpAccount:
+    """Servidor de salida concreto, con sus credenciales.
+
+    Existe para que el canal de correo no tenga que fabricarse un ``Settings``
+    falso con los valores de un buzón: cada cuenta dada de alta trae los suyos.
+    """
+
+    host: str
+    port: int
+    username: str
+    password: str
+    sender: str
+    use_tls: bool = True
+
+    @classmethod
+    def from_credentials(cls, credentials: dict[str, str]) -> SmtpAccount | None:
+        """Construye la cuenta desde lo guardado cifrado, o ``None`` si falta algo."""
+        host = credentials.get("smtp_host")
+        username = credentials.get("smtp_username")
+        password = credentials.get("smtp_password")
+        if not (host and username and password):
+            return None
+        try:
+            port = int(credentials.get("smtp_port") or 587)
+        except ValueError:
+            port = 587
+        return cls(
+            host=host,
+            port=port,
+            username=username,
+            password=password,
+            sender=credentials.get("from_email") or username,
+            use_tls=str(credentials.get("smtp_use_tls", "true")).lower() != "false",
+        )
+
+
+def _deliver_sync(account: SmtpAccount, message: EmailMessage) -> None:
+    with smtplib.SMTP(account.host, account.port, timeout=SMTP_TIMEOUT_S) as smtp:
+        if account.use_tls:
+            smtp.starttls()
+        smtp.login(account.username, account.password)
+        smtp.send_message(message)
+
+
+async def deliver(account: SmtpAccount, message: EmailMessage) -> None:
+    """Entrega un mensaje ya compuesto. **Lanza** si el envío falla.
+
+    A diferencia de :func:`send_email`, aquí la excepción es lo útil: quien
+    llama es la cola de salida, que distingue un fallo pasajero de uno
+    definitivo y reintenta con retroceso.
+
+    Corre en un hilo aparte porque ``smtplib`` es bloqueante y, si no, una
+    conexión lenta congelaría el bucle de eventos entero.
+    """
+    await asyncio.to_thread(_deliver_sync, account, message)
 
 
 def _send_sync(*, settings: Settings, to: str, subject: str, body: str) -> None:
@@ -25,11 +92,15 @@ def _send_sync(*, settings: Settings, to: str, subject: str, body: str) -> None:
     message["To"] = to
     message.set_content(body)
 
-    with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=10) as smtp:
-        if settings.smtp_use_tls:
-            smtp.starttls()
-        smtp.login(settings.smtp_username, settings.smtp_password.get_secret_value())
-        smtp.send_message(message)
+    account = SmtpAccount(
+        host=settings.smtp_host,
+        port=settings.smtp_port,
+        username=settings.smtp_username,
+        password=settings.smtp_password.get_secret_value(),
+        sender=settings.smtp_sender,
+        use_tls=settings.smtp_use_tls,
+    )
+    _deliver_sync(account, message)
 
 
 async def send_email(*, settings: Settings, to: str, subject: str, body: str) -> bool:

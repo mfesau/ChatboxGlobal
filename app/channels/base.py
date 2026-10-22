@@ -66,6 +66,7 @@ class ChannelAdapter(abc.ABC):
         headers: Mapping[str, str],
         body: bytes,
         credentials: Sequence[Mapping[str, str]] = (),
+        url: str | None = None,
     ) -> None:
         """Valida la autenticidad de la petición entrante.
 
@@ -79,6 +80,11 @@ class ChannelAdapter(abc.ABC):
         **antes** de leer el cuerpo, así que en ese momento todavía no se sabe
         a qué cuenta pertenece el mensaje: se acepta el que valide con
         cualquiera de las configuradas.
+
+        ``url`` es la dirección completa a la que llegó la petición. La mayoría
+        de los canales no la necesitan —firman solo el cuerpo—, pero Twilio la
+        incluye en el cálculo de su firma, de modo que sin ella no se puede
+        comprobar.
         """
         return
 

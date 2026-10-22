@@ -10,6 +10,7 @@ formulario de acceso: sin sesión de agente válida, redirige aquí.
 from __future__ import annotations
 
 import asyncio
+from datetime import timedelta
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request, Response, status
@@ -70,7 +71,23 @@ async def unified_login(
     contact_stored = contact.password_hash if contact is not None else _CONTACT_DUMMY_HASH
     contact_valid = await asyncio.to_thread(verify_password, body.password, contact_stored)
 
-    if agent is not None and agent.is_active and agent_valid:
+    # Las cuentas en espera por fallos seguidos no pasan, y la respuesta es la
+    # misma que a unas credenciales erróneas (ver ``app/api/auth.py``).
+    agent_ok = (
+        agent is not None
+        and agent.is_active
+        and agent_valid
+        and not repo.login_is_locked(agent)
+    )
+    contact_ok = (
+        contact is not None
+        and not contact.is_blocked
+        and contact_valid
+        and not repo.login_is_locked(contact)
+    )
+
+    if agent_ok:
+        repo.clear_failed_logins(agent)
         await issue_session(
             agent=agent,
             tenant=tenant,
@@ -90,7 +107,8 @@ async def unified_login(
         log.info("unified_login_ok", kind="agent", email=agent.email)
         return {"kind": "agent", "redirect": "/console", "agent": _serialize_agent(agent)}
 
-    if contact is not None and not contact.is_blocked and contact_valid:
+    if contact_ok:
+        repo.clear_failed_logins(contact)
         await issue_contact_session(
             contact=contact,
             request=request,
@@ -100,6 +118,18 @@ async def unified_login(
         )
         log.info("unified_login_ok", kind="contact", email=contact.primary_email)
         return {"kind": "contact", "redirect": "/", "contact": _serialize_contact(contact)}
+
+    # El fallo se apunta en la cuenta que exista y cuya contraseña no valió;
+    # si el correo pertenece a las dos tablas, en las dos.
+    lockout = timedelta(minutes=settings.login_lockout_minutes)
+    for account, valid in ((agent, agent_valid), (contact, contact_valid)):
+        if account is not None and not valid and not repo.login_is_locked(account):
+            await repo.note_failed_login(
+                session,
+                account,
+                max_attempts=settings.login_max_attempts,
+                lockout=lockout,
+            )
 
     log.warning("unified_login_rejected", email=body.email, tenant=tenant.slug)
     raise HTTPException(

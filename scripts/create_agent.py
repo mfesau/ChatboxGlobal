@@ -127,9 +127,14 @@ async def reset_password(email: str, tenant: str | None) -> None:
             await dispose_engine()
             raise SystemExit(1)
         agent.password_hash = hash_password(secret)
+        # Quien restablece desde aquí conoce la contraseña que acaba de
+        # imprimirse, así que se pide el cambio en el primer acceso. Es además
+        # cómo se desatasca una cuenta de arranque cuya contraseña se perdió.
+        agent.must_change_password = True
 
     await dispose_engine()
-    print(f"Contraseña de {email} restablecida: {secret}")
+    print(f"Contraseña provisional de {email}: {secret}")
+    print("Habrá que cambiarla en el primer acceso a la consola.")
 
 
 def main() -> None:

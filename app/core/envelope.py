@@ -21,6 +21,9 @@ class ChannelKind(StrEnum):
     WHATSAPP = "whatsapp"
     FACEBOOK = "facebook"    # Messenger (Meta Graph API)
     MSBOT = "msbot"          # Microsoft Bot Framework (Teams, Web Chat, Direct Line)
+    TELEGRAM = "telegram"    # Bot API
+    EMAIL = "email"          # Correo corriente (IMAP de entrada, SMTP de salida)
+    SMS = "sms"              # Mensajes de texto a través de Twilio
     WEB = "web"              # Chatbox propio embebido
     INTERNAL = "internal"    # Mensajes generados por el sistema
 

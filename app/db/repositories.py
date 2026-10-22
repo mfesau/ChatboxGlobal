@@ -6,11 +6,12 @@ quien orquesta, no el repositorio.
 
 from __future__ import annotations
 
+import secrets
 import uuid
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import Text, cast, delete, func, or_, select, update
+from sqlalchemy import Text, and_, cast, delete, func, or_, select, true, update
 from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -51,12 +52,14 @@ from app.db.models import (
     HotelRoomType,
     InboundDedupe,
     InternalNote,
+    KnowledgeDocument,
     Label,
     Macro,
     Message,
     MessageEvent,
     OutboxItem,
     SavedView,
+    ScheduledMessage,
     Tenant,
 )
 
@@ -198,6 +201,23 @@ async def list_channel_accounts(
         .where(ChannelAccount.tenant_id == tenant_id)
         .options(selectinload(ChannelAccount.department))
         .order_by(ChannelAccount.channel, ChannelAccount.display_name, ChannelAccount.external_id)
+    )
+    return list((await session.execute(stmt)).scalars())
+
+
+async def list_channel_accounts_of_kind(
+    session: AsyncSession, *, channel: ChannelKind
+) -> list[ChannelAccount]:
+    """Cuentas activas de un canal, de todos los inquilinos.
+
+    La usa el recogedor de correo, que no atiende una petición de nadie: va por
+    su cuenta a mirar los buzones y no tiene inquilino de contexto, igual que
+    ``list_channel_credential_blobs`` no lo tiene al comprobar una firma.
+    """
+    stmt = (
+        select(ChannelAccount)
+        .where(ChannelAccount.channel == channel, ChannelAccount.is_active.is_(True))
+        .order_by(ChannelAccount.external_id)
     )
     return list((await session.execute(stmt)).scalars())
 
@@ -540,6 +560,18 @@ async def list_contact_comments(
     return list((await session.execute(stmt)).scalars())
 
 
+def _in_departments(department_ids: set[uuid.UUID] | None) -> Any:
+    """Condición «la conversación es de estos departamentos o de ninguno».
+
+    Es la misma regla que ``_restrict_to_departments``, en forma de expresión
+    para poder usarla dentro de un ``JOIN`` o de un ``EXISTS``.
+    """
+    return or_(
+        Conversation.department_id.is_(None),
+        Conversation.department_id.in_(department_ids or set()),
+    )
+
+
 async def list_contacts(
     session: AsyncSession,
     *,
@@ -547,13 +579,28 @@ async def list_contacts(
     search: str | None = None,
     limit: int = 50,
     offset: int = 0,
+    department_ids: set[uuid.UUID] | None = None,
 ) -> list[tuple[Contact, int, datetime | None]]:
     """Directorio de contactos con su número de conversaciones y última
-    actividad, para el listado global de la consola (solo supervisión)."""
+    actividad, para el listado global de la consola (solo supervisión).
+
+    ``department_ids`` acota a una supervisión restringida: solo aparecen los
+    contactos con alguna conversación de sus departamentos —o de la cola
+    común—, y los recuentos cuentan solo esas. Un cliente del Hotel no es
+    asunto de quien supervisa Informática.
+    """
+    if department_ids is None:
+        join = Conversation.contact_id == Contact.id
+        stmt = select(
+            Contact, func.count(Conversation.id), func.max(Conversation.last_message_at)
+        ).outerjoin(Conversation, join)
+    else:
+        join = and_(Conversation.contact_id == Contact.id, _in_departments(department_ids))
+        stmt = select(
+            Contact, func.count(Conversation.id), func.max(Conversation.last_message_at)
+        ).join(Conversation, join)
     stmt = (
-        select(Contact, func.count(Conversation.id), func.max(Conversation.last_message_at))
-        .outerjoin(Conversation, Conversation.contact_id == Contact.id)
-        .where(Contact.tenant_id == tenant_id)
+        stmt.where(Contact.tenant_id == tenant_id)
         .group_by(Contact.id)
         .order_by(func.max(Conversation.last_message_at).desc().nulls_last())
         .limit(limit)
@@ -595,11 +642,16 @@ async def search_contacts(
 
 
 async def list_conversations_for_contact(
-    session: AsyncSession, contact_id: uuid.UUID
+    session: AsyncSession,
+    contact_id: uuid.UUID,
+    department_ids: set[uuid.UUID] | None = None,
 ) -> list[Conversation]:
+    """Conversaciones de un contacto; ``department_ids`` acota como en la bandeja."""
+    stmt = select(Conversation).where(Conversation.contact_id == contact_id)
+    if department_ids is not None:
+        stmt = stmt.where(_in_departments(department_ids))
     stmt = (
-        select(Conversation)
-        .where(Conversation.contact_id == contact_id)
+        stmt
         .options(
             selectinload(Conversation.contact),
             selectinload(Conversation.assignee),
@@ -761,6 +813,13 @@ def _restrict_to_departments(stmt: Any, department_ids: set[uuid.UUID] | None) -
     )
 
 
+def _department_filter(department: uuid.UUID, include_unrouted: bool) -> Any:
+    """Las de ese departamento y, si se pide, también las que no tienen ninguno."""
+    if include_unrouted:
+        return or_(Conversation.department_id == department, Conversation.department_id.is_(None))
+    return Conversation.department_id == department
+
+
 async def list_conversations(
     session: AsyncSession,
     *,
@@ -771,6 +830,7 @@ async def list_conversations(
     agent_id: uuid.UUID | None = None,
     department_ids: set[uuid.UUID] | None = None,
     department: uuid.UUID | None = None,
+    include_unrouted: bool = False,
     label: uuid.UUID | None = None,
     limit: int = 50,
     offset: int = 0,
@@ -788,6 +848,9 @@ async def list_conversations(
     quien pregunta (``None`` = sin restricción); ``department`` es un filtro
     de interfaz para ver solo un departamento concreto de entre los propios,
     nunca una forma de ver más de lo que ``department_ids`` ya permite.
+    ``include_unrouted`` suma a ese departamento lo que todavía no tiene
+    ninguno: quien trabaja en un departamento tiene que seguir viendo lo que
+    entra sin clasificar, o nadie más que administración lo vería.
 
     El filtro se aplica en SQL y no en memoria: un agente jamás recibe filas
     ajenas que después haya que descartar.
@@ -797,7 +860,7 @@ async def list_conversations(
     if channel:
         stmt = stmt.where(Conversation.channel == channel)
     if department:
-        stmt = stmt.where(Conversation.department_id == department)
+        stmt = stmt.where(_department_filter(department, include_unrouted))
     if label:
         stmt = stmt.where(Conversation.labels.any(Label.id == label))
 
@@ -836,6 +899,7 @@ async def count_conversations(
     agent_id: uuid.UUID | None = None,
     department_ids: set[uuid.UUID] | None = None,
     department: uuid.UUID | None = None,
+    include_unrouted: bool = False,
     status: str | None = "open",
 ) -> int:
     """Recuento para las pestañas de la consola, sin traer las filas.
@@ -849,7 +913,7 @@ async def count_conversations(
     )
     stmt = _restrict_to_status(stmt, status)
     if department:
-        stmt = stmt.where(Conversation.department_id == department)
+        stmt = stmt.where(_department_filter(department, include_unrouted))
     if scope == "unassigned":
         stmt = stmt.where(Conversation.assignee_id.is_(None))
         stmt = _restrict_to_accessible_departments(stmt, department_ids)
@@ -1214,6 +1278,179 @@ async def record_audit(
     )
 
 
+async def tenant_has_knowledge(session: AsyncSession, *, tenant_id: uuid.UUID) -> bool:
+    """Indica si el inquilino tiene algún documento activo en la base.
+
+    Lo consulta el asistente antes de ofrecerle al modelo la herramienta de
+    búsqueda: sin documentos, ofrecerla solo lo invitaría a buscar en el vacío
+    y a gastar una vuelta del bucle en nada.
+    """
+    found = await session.execute(
+        select(KnowledgeDocument.id)
+        .where(
+            KnowledgeDocument.tenant_id == tenant_id,
+            KnowledgeDocument.is_active.is_(True),
+            # Uno que aún se está procesando no tiene trozos: ofrecer la
+            # herramienta por él sería mandar al modelo a buscar en el vacío.
+            KnowledgeDocument.status == "ready",
+        )
+        .limit(1)
+    )
+    return found.scalar_one_or_none() is not None
+
+
+async def schedule_message(
+    session: AsyncSession,
+    *,
+    conversation: Conversation,
+    outbound: OutboundMessage,
+    send_at: datetime,
+    created_by: str | None = None,
+) -> ScheduledMessage:
+    """Deja un saliente esperando su hora."""
+    item = ScheduledMessage(
+        tenant_id=conversation.tenant_id,
+        conversation_id=conversation.id,
+        payload=outbound.to_dict(),
+        send_at=send_at,
+        created_by=created_by,
+    )
+    session.add(item)
+    await session.flush()
+    return item
+
+
+async def enqueue_scheduled(
+    session: AsyncSession, *, item: ScheduledMessage, conversation: Conversation
+) -> None:
+    """Pasa un programado vencido a la cola de salida, y lo marca enviado.
+
+    Recorre el mismo camino que cualquier otro saliente —queda su fila en
+    ``messages`` y su entrada en ``outbox``—, de modo que en el hilo se ve
+    igual que si lo hubiera escrito alguien.
+    """
+    outbound = OutboundMessage.from_dict(item.payload)
+    message = await record_outbound(session, conversation=conversation, outbound=outbound)
+    await enqueue_outbound(
+        session,
+        conversation=conversation,
+        message=message,
+        ref=ConversationRef.from_dict(conversation.conversation_ref),
+        outbound=outbound,
+    )
+    item.status = "sent"
+    item.sent_at = utcnow()
+
+
+async def due_scheduled_messages(
+    session: AsyncSession, *, limit: int = 50
+) -> list[ScheduledMessage]:
+    """Mensajes programados cuya hora ya pasó, de todos los inquilinos.
+
+    Sin acotar por inquilino igual que el resto del mantenimiento: la tarea que
+    los despacha no atiende la petición de nadie.
+    """
+    stmt = (
+        select(ScheduledMessage)
+        .where(
+            ScheduledMessage.status == "pending",
+            ScheduledMessage.send_at <= utcnow(),
+        )
+        .order_by(ScheduledMessage.send_at)
+        .limit(limit)
+    )
+    return list((await session.execute(stmt)).scalars())
+
+
+async def cancel_scheduled_messages(
+    session: AsyncSession, *, conversation_id: uuid.UUID
+) -> int:
+    """Cancela lo que quedara pendiente de una conversación.
+
+    Se llama cuando el cliente vuelve a escribir: un recordatorio de «¿sigue
+    ahí?» programado ayer no debe salir justo después de que conteste.
+    """
+    result = await session.execute(
+        update(ScheduledMessage)
+        .where(
+            ScheduledMessage.conversation_id == conversation_id,
+            ScheduledMessage.status == "pending",
+        )
+        .values(status="cancelled")
+    )
+    return result.rowcount or 0
+
+
+async def list_audit(
+    session: AsyncSession,
+    *,
+    tenant_id: uuid.UUID,
+    department_ids: set[uuid.UUID] | None = None,
+    own_actor: str | None = None,
+    actor: str | None = None,
+    action: str | None = None,
+    subject_id: str | None = None,
+    since: datetime | None = None,
+    until: datetime | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> list[AuditLog]:
+    """Traza del inquilino, de la más reciente a la más antigua.
+
+    El filtro por actor es por coincidencia parcial: el valor guardado lleva el
+    prefijo del tipo (``agent:ana@empresa.local``), y quien busca escribe el
+    correo, no el prefijo.
+    """
+    stmt = select(AuditLog).where(AuditLog.tenant_id == tenant_id)
+    if department_ids is not None:
+        # Supervisión acotada: lo que pasó en conversaciones de sus
+        # departamentos, y lo que hizo ella misma. El resto de la traza —otros
+        # departamentos, usuarios, configuración— es de administración.
+        # Los identificadores se comparan sin guiones: PostgreSQL convierte un
+        # UUID a texto con ellos y SQLite lo guarda sin ellos.
+        visibles = select(func.replace(cast(Conversation.id, Text), "-", "")).where(
+            Conversation.tenant_id == tenant_id, _in_departments(department_ids)
+        )
+        stmt = stmt.where(
+            or_(
+                and_(
+                    AuditLog.subject_type == "conversation",
+                    func.replace(AuditLog.subject_id, "-", "").in_(visibles),
+                ),
+                AuditLog.actor == (own_actor or ""),
+            )
+        )
+    if actor:
+        stmt = stmt.where(AuditLog.actor.ilike(f"%{actor.strip()}%"))
+    if action:
+        stmt = stmt.where(AuditLog.action == action.strip())
+    if subject_id:
+        stmt = stmt.where(AuditLog.subject_id == subject_id.strip())
+    if since is not None:
+        stmt = stmt.where(AuditLog.created_at >= since)
+    if until is not None:
+        stmt = stmt.where(AuditLog.created_at <= until)
+    stmt = stmt.order_by(AuditLog.created_at.desc(), AuditLog.id.desc())
+    return list((await session.execute(stmt.limit(limit).offset(offset))).scalars())
+
+
+async def list_audit_actions(session: AsyncSession, *, tenant_id: uuid.UUID) -> list[str]:
+    """Acciones distintas presentes en la traza, en orden alfabético."""
+    stmt = (
+        select(AuditLog.action)
+        .where(AuditLog.tenant_id == tenant_id)
+        .distinct()
+        .order_by(AuditLog.action)
+    )
+    return list((await session.execute(stmt)).scalars())
+
+
+async def purge_audit(session: AsyncSession, *, older_than: datetime) -> int:
+    """Descarta la traza anterior a esa fecha. Devuelve cuántas filas se fueron."""
+    result = await session.execute(delete(AuditLog).where(AuditLog.created_at < older_than))
+    return result.rowcount or 0
+
+
 async def channel_stats(
     session: AsyncSession,
     tenant_id: uuid.UUID,
@@ -1288,47 +1525,110 @@ async def create_agent(
     return agent
 
 
-#: Cuenta de arranque documentada en el README. Hardcodeada a propósito: no
-#: depende de que alguien haya ejecutado ``create_agent.py`` antes, ni de una
-#: variable de entorno que pueda faltar en un despliegue nuevo.
+#: Cuenta de arranque. El correo sí es fijo —no depende de que alguien haya
+#: ejecutado ``create_agent.py`` antes, ni de una variable de entorno que pueda
+#: faltar en un despliegue nuevo—, pero la contraseña ya no: se toma de
+#: ``BOOTSTRAP_ADMIN_PASSWORD`` o se genera al azar y se imprime una sola vez
+#: en el log del arranque. Una contraseña fija y documentada valía para todas
+#: las instalaciones a la vez.
 DEFAULT_ADMIN_EMAIL = "admin@local"
-DEFAULT_ADMIN_PASSWORD = "Admin1234"
 
 
-async def ensure_default_admin(session: AsyncSession, *, tenant_id: uuid.UUID) -> None:
+async def ensure_default_admin(
+    session: AsyncSession, *, tenant_id: uuid.UUID, password: str | None = None
+) -> str | None:
     """Garantiza que el inquilino tenga al menos un administrador activo.
 
     Se ejecuta en cada arranque. Si ya existe un administrador activo —el de
     por defecto u otro creado a mano— no toca nada: borrar ``admin@local`` una
     vez dado de alta un reemplazo es seguro y definitivo. Solo reaparece si el
     inquilino se queda sin ningún administrador, como red de seguridad.
+
+    Devuelve la contraseña que hay que anunciar, o ``None`` cuando no hubo que
+    fijar ninguna. Una cuenta ``admin@local`` que ya existía **conserva su
+    contraseña**: antes se reponía en cada arranque, de modo que cambiarla no
+    servía de nada mientras la cuenta siguiera siendo el único administrador.
     """
     has_active_admin = (
         await session.execute(
             select(Agent.id)
-            .where(Agent.tenant_id == tenant_id, Agent.role == ROLE_ADMIN, Agent.is_active.is_(True))
+            .where(
+                Agent.tenant_id == tenant_id,
+                Agent.role == ROLE_ADMIN,
+                Agent.is_active.is_(True),
+            )
             .limit(1)
         )
     ).scalar_one_or_none()
     if has_active_admin is not None:
-        return
+        return None
 
-    default_hash = hash_password(DEFAULT_ADMIN_PASSWORD)
     existing = await find_agent_by_email(session, tenant_id=tenant_id, email=DEFAULT_ADMIN_EMAIL)
     if existing is not None:
         existing.role = ROLE_ADMIN
         existing.is_active = True
-        existing.password_hash = default_hash
-        return
+        if existing.password_hash is None:
+            secret = password or secrets.token_urlsafe(18)
+            existing.password_hash = hash_password(secret)
+            existing.must_change_password = True
+            return secret
+        return None
 
-    await create_agent(
+    secret = password or secrets.token_urlsafe(18)
+    agent = await create_agent(
         session,
         tenant_id=tenant_id,
         email=DEFAULT_ADMIN_EMAIL,
         display_name="Administrador",
         role=ROLE_ADMIN,
-        password_hash=default_hash,
+        password_hash=hash_password(secret),
     )
+    agent.must_change_password = True
+    return secret
+
+
+# --------------------------------------------------------------------------- #
+# Freno a la prueba de contraseñas
+# --------------------------------------------------------------------------- #
+def login_is_locked(account: Agent | Contact) -> bool:
+    """Indica si la cuenta está en espera por fallos seguidos."""
+    return account.locked_until is not None and as_utc(account.locked_until) > utcnow()
+
+
+def register_failed_login(
+    account: Agent | Contact, *, max_attempts: int, lockout: timedelta
+) -> bool:
+    """Anota un fallo. Devuelve si ese fallo ha dejado la cuenta en espera.
+
+    No emite consulta alguna: modifica la fila ya cargada y la sesión la
+    escribe al confirmar, dentro de la misma transacción del login.
+    """
+    account.failed_login_count = (account.failed_login_count or 0) + 1
+    if account.failed_login_count >= max_attempts:
+        account.locked_until = utcnow() + lockout
+        account.failed_login_count = 0
+        return True
+    return False
+
+
+def clear_failed_logins(account: Agent | Contact) -> None:
+    """Un acceso correcto borra el rastro de los intentos anteriores."""
+    account.failed_login_count = 0
+    account.locked_until = None
+
+
+async def note_failed_login(
+    session: AsyncSession, account: Agent | Contact, *, max_attempts: int, lockout: timedelta
+) -> bool:
+    """Anota el fallo y lo confirma en el acto. Devuelve si dejó la cuenta en espera.
+
+    La confirmación explícita es imprescindible: la dependencia de sesión
+    revierte la transacción en cuanto el endpoint lanza la excepción del 401, y
+    sin esto se perdería justo el apunte que hace subir el contador.
+    """
+    locked = register_failed_login(account, max_attempts=max_attempts, lockout=lockout)
+    await session.commit()
+    return locked
 
 
 async def touch_agent_presence(
@@ -1792,7 +2092,7 @@ async def create_hotel_reservation(
     conversation_id: uuid.UUID | None = None,
     created_by_agent_id: uuid.UUID | None = None,
     nightly_price_cents: int | None = None,
-    currency: str = "USD",
+    currency: str = "PYG",
     notes: str | None = None,
     status: str = "confirmed",
 ) -> HotelReservation:
@@ -1980,11 +2280,42 @@ async def hotel_department_report(
 # --------------------------------------------------------------------------- #
 # Respuestas guardadas
 # --------------------------------------------------------------------------- #
+def visible_in_departments(model: Any, department_ids: set[uuid.UUID] | None) -> Any:
+    """Condición «de toda la empresa o de uno de estos departamentos».
+
+    Para respuestas guardadas, etiquetas y macros. ``None`` es administración,
+    que lo ve todo.
+    """
+    if department_ids is None:
+        return true()
+    return or_(model.department_id.is_(None), model.department_id.in_(department_ids))
+
+
+def fits_department(row: Any, department_id: uuid.UUID | None) -> bool:
+    """¿Se puede usar ``row`` en algo de ese departamento?
+
+    Lo de toda la empresa vale en cualquier parte; lo de un departamento, solo
+    en ese. Una conversación de la cola común (sin departamento) solo admite
+    lo de toda la empresa.
+    """
+    return row.department_id is None or row.department_id == department_id
+
+
 async def create_canned_response(
-    session: AsyncSession, *, tenant_id: uuid.UUID, shortcode: str, title: str, body: str
+    session: AsyncSession,
+    *,
+    tenant_id: uuid.UUID,
+    shortcode: str,
+    title: str,
+    body: str,
+    department_id: uuid.UUID | None = None,
 ) -> CannedResponse:
     canned = CannedResponse(
-        tenant_id=tenant_id, shortcode=shortcode.strip(), title=title.strip(), body=body
+        tenant_id=tenant_id,
+        shortcode=shortcode.strip(),
+        title=title.strip(),
+        body=body,
+        department_id=department_id,
     )
     session.add(canned)
     await session.flush()
@@ -2011,9 +2342,15 @@ async def find_canned_response_by_shortcode(
 
 
 async def list_canned_responses(
-    session: AsyncSession, *, tenant_id: uuid.UUID
+    session: AsyncSession,
+    *,
+    tenant_id: uuid.UUID,
+    department_ids: set[uuid.UUID] | None = None,
 ) -> list[CannedResponse]:
-    stmt = select(CannedResponse).where(CannedResponse.tenant_id == tenant_id)
+    stmt = select(CannedResponse).where(
+        CannedResponse.tenant_id == tenant_id,
+        visible_in_departments(CannedResponse, department_ids),
+    )
     return list((await session.execute(stmt.order_by(CannedResponse.shortcode))).scalars())
 
 
@@ -2026,9 +2363,16 @@ async def delete_canned_response(session: AsyncSession, canned_response: CannedR
 # Etiquetas
 # --------------------------------------------------------------------------- #
 async def create_label(
-    session: AsyncSession, *, tenant_id: uuid.UUID, name: str, color: str
+    session: AsyncSession,
+    *,
+    tenant_id: uuid.UUID,
+    name: str,
+    color: str,
+    department_id: uuid.UUID | None = None,
 ) -> Label:
-    label = Label(tenant_id=tenant_id, name=name.strip(), color=color.strip())
+    label = Label(
+        tenant_id=tenant_id, name=name.strip(), color=color.strip(), department_id=department_id
+    )
     session.add(label)
     await session.flush()
     return label
@@ -2051,8 +2395,15 @@ async def find_label_by_name(
     ).scalar_one_or_none()
 
 
-async def list_labels(session: AsyncSession, *, tenant_id: uuid.UUID) -> list[Label]:
-    stmt = select(Label).where(Label.tenant_id == tenant_id)
+async def list_labels(
+    session: AsyncSession,
+    *,
+    tenant_id: uuid.UUID,
+    department_ids: set[uuid.UUID] | None = None,
+) -> list[Label]:
+    stmt = select(Label).where(
+        Label.tenant_id == tenant_id, visible_in_departments(Label, department_ids)
+    )
     return list((await session.execute(stmt.order_by(Label.name))).scalars())
 
 
@@ -2132,9 +2483,16 @@ async def breach_overdue_first_responses(session: AsyncSession, limit: int = 200
 # Macros
 # --------------------------------------------------------------------------- #
 async def create_macro(
-    session: AsyncSession, *, tenant_id: uuid.UUID, name: str, steps: list[Any]
+    session: AsyncSession,
+    *,
+    tenant_id: uuid.UUID,
+    name: str,
+    steps: list[Any],
+    department_id: uuid.UUID | None = None,
 ) -> Macro:
-    macro = Macro(tenant_id=tenant_id, name=name.strip(), steps=steps)
+    macro = Macro(
+        tenant_id=tenant_id, name=name.strip(), steps=steps, department_id=department_id
+    )
     session.add(macro)
     await session.flush()
     return macro
@@ -2157,8 +2515,17 @@ async def find_macro_by_name(
     ).scalar_one_or_none()
 
 
-async def list_macros(session: AsyncSession, *, tenant_id: uuid.UUID) -> list[Macro]:
-    stmt = select(Macro).where(Macro.tenant_id == tenant_id).order_by(Macro.name)
+async def list_macros(
+    session: AsyncSession,
+    *,
+    tenant_id: uuid.UUID,
+    department_ids: set[uuid.UUID] | None = None,
+) -> list[Macro]:
+    stmt = (
+        select(Macro)
+        .where(Macro.tenant_id == tenant_id, visible_in_departments(Macro, department_ids))
+        .order_by(Macro.name)
+    )
     return list((await session.execute(stmt)).scalars())
 
 

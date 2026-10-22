@@ -88,6 +88,21 @@
           <button type="button" class="link-button" id="show-login" data-i18n="gate.login">Inicie sesión</button>
         </p>
       </form>
+
+      <!-- Paso intermedio entre el acceso y el hilo: con qué rama quiere
+           hablar. La elección fija el departamento de la conversación, de modo
+           que el primer mensaje ya nace en la cola correcta y el asistente
+           puede ofrecer lo que ese departamento tenga activo (por ejemplo,
+           reservar una habitación). Se salta si el inquilino no tiene
+           departamentos dados de alta (ver chat.js). -->
+      <div class="gate__card" id="department-card" hidden>
+        <h1 data-i18n="gate.departmentTitle">¿Con quién quiere hablar?</h1>
+        <p class="gate__hint" data-i18n="gate.departmentHint">
+          Elija el área que atiende su consulta.
+        </p>
+        <p class="gate__error" id="department-error" hidden></p>
+        <div class="gate__departments" id="department-options"></div>
+      </div>
     </div>
 
     <!-- Aplicación ----------------------------------------------------------- -->
@@ -97,10 +112,25 @@
           <span class="identity__dot" id="status-dot" aria-hidden="true"></span>
           <div>
             <h1 class="identity__name" id="identity-name">ChatboxGlobal</h1>
-            <p class="identity__state" id="status-text" data-i18n="chat.connecting">Conectando…</p>
+            <p class="identity__state">
+              <span id="status-text" data-i18n="chat.connecting">Conectando…</span>
+              <!-- La rama elegida es además el modo de cambiarla: sin esto,
+                   quien elige una vez queda encerrado ahí para siempre. -->
+              <button
+                type="button"
+                id="identity-department"
+                class="identity__department"
+                data-i18n-title="chat.changeDepartment"
+                hidden
+              ></button>
+            </p>
           </div>
         </div>
         <div class="header-actions">
+          <!-- Solo si la rama elegida lleva hotel (ver chat.js). -->
+          <button type="button" class="ghost-button" id="booking-open" data-i18n="booking.open" hidden>
+            Reservar
+          </button>
           <button
             type="button"
             class="ghost-button"
@@ -156,6 +186,40 @@
         </div>
       </section>
 
+      <!-- Reservar sin depender del asistente: quien entra a una rama con
+           hotel activo tiene aquí el formulario, aunque no haya modelo
+           configurado ni nadie del equipo mirando la bandeja. La reserva nace
+           pendiente; la confirma el hotel. -->
+      <section class="booking" id="booking" hidden>
+        <header class="booking__header">
+          <h2 data-i18n="booking.title">Reservar una habitación</h2>
+          <button type="button" class="ghost-button" id="booking-close" data-i18n="booking.close">
+            Cerrar
+          </button>
+        </header>
+        <p class="gate__error" id="booking-error" hidden></p>
+
+        <form class="booking__form" id="booking-form">
+          <label>
+            <span data-i18n="booking.checkIn">Entrada</span>
+            <input type="date" id="booking-check-in" required />
+          </label>
+          <label>
+            <span data-i18n="booking.checkOut">Salida</span>
+            <input type="date" id="booking-check-out" required />
+          </label>
+          <label>
+            <span data-i18n="booking.guests">Personas</span>
+            <input type="number" id="booking-guests" min="1" max="20" value="2" required />
+          </label>
+          <button type="submit" class="send-button" id="booking-search" data-i18n="booking.search">
+            Ver disponibilidad
+          </button>
+        </form>
+
+        <div class="booking__results" id="booking-results"></div>
+      </section>
+
       <div class="typing" id="typing" hidden>
         <span></span><span></span><span></span>
       </div>
@@ -163,6 +227,16 @@
       <div class="quick-replies" id="quick-replies" hidden></div>
 
       <footer class="composer">
+        <!-- Cuando el equipo da la conversación por resuelta, el cliente lo ve
+             aquí en lugar de seguir escribiendo en un hilo que ya nadie mira. -->
+        <div class="composer__closed" id="closed-notice" hidden>
+          <span data-i18n="chat.closedNotice">
+            Esta conversación se dio por resuelta.
+          </span>
+          <button type="button" class="send-button" id="new-chat-button"
+                  data-i18n="chat.startNew">Iniciar una conversación nueva</button>
+        </div>
+
         <form id="composer-form" class="composer__form">
           <label class="visually-hidden" for="composer-input" data-i18n="chat.messageLabel">Mensaje</label>
           <textarea

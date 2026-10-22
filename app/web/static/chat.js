@@ -9,6 +9,12 @@
   "use strict";
 
   const WIDTHS = ["comfortable", "wide", "full"];
+  //: Cada cuánto se manda un latido. Un WebSocket en silencio lo corta el
+  //: proxy inverso —nginx lo hace al minuto si no se le dice otra cosa—, y
+  //: cada corte trae una reconexión. El servidor ya contesta a `ping` con
+  //: `pong` (ver app/api/ws.py); solo faltaba que alguien preguntara.
+  const HEARTBEAT_MS = 25_000;
+
   const MAX_RECONNECT_DELAY_MS = 15000;
   const CHAR_LIMIT = 4000;
 
@@ -30,6 +36,22 @@
     charCount: document.getElementById("char-count"),
     statusDot: document.getElementById("status-dot"),
     statusText: document.getElementById("status-text"),
+    identityDepartment: document.getElementById("identity-department"),
+    bookingOpen: document.getElementById("booking-open"),
+    booking: document.getElementById("booking"),
+    bookingClose: document.getElementById("booking-close"),
+    bookingForm: document.getElementById("booking-form"),
+    bookingCheckIn: document.getElementById("booking-check-in"),
+    bookingCheckOut: document.getElementById("booking-check-out"),
+    bookingGuests: document.getElementById("booking-guests"),
+    bookingSearch: document.getElementById("booking-search"),
+    bookingResults: document.getElementById("booking-results"),
+    bookingError: document.getElementById("booking-error"),
+    closedNotice: document.getElementById("closed-notice"),
+    newChatButton: document.getElementById("new-chat-button"),
+    departmentCard: document.getElementById("department-card"),
+    departmentOptions: document.getElementById("department-options"),
+    departmentError: document.getElementById("department-error"),
     widthToggle: document.getElementById("width-toggle"),
     resetButton: document.getElementById("reset-button"),
     logoutButton: document.getElementById("logout-button"),
@@ -62,9 +84,12 @@
   const state = {
     socket: null,
     reconnectAttempt: 0,
+    heartbeat: null,
     streamingBubble: null,
     typingTimer: null,
     clientName: null,
+    department: null,
+    closed: false,
     pendingAttachment: null,
   };
 
@@ -139,6 +164,11 @@
   function showGate() {
     dom.gate.hidden = false;
     dom.shell.hidden = true;
+    // Se vuelve siempre al acceso: si se cayó la sesión con el selector de
+    // rama a la vista, dejarlo puesto ofrecería elegir sin estar identificado.
+    dom.departmentCard.hidden = true;
+    dom.registerForm.hidden = true;
+    dom.loginForm.hidden = false;
     if (state.socket) {
       state.socket.close();
       state.socket = null;
@@ -148,6 +178,220 @@
   function showApp() {
     dom.gate.hidden = true;
     dom.shell.hidden = false;
+  }
+
+  /* ------------------------------------------------------- elegir con quién */
+
+  /** Entra al hilo, ya con la rama decidida (o sin ninguna si no hay). */
+  function enterChat(department) {
+    state.department = department || null;
+    dom.identityDepartment.textContent = department ? department.name : "";
+    dom.identityDepartment.hidden = !department;
+    // Reservar solo tiene sentido en una rama con el módulo activo.
+    dom.bookingOpen.hidden = !department?.hotel;
+    dom.booking.hidden = true;
+    showApp();
+    connect();
+  }
+
+  /* ----------------------------------------------------------- reservar */
+
+  function showBookingError(message) {
+    dom.bookingError.textContent = message;
+    dom.bookingError.hidden = !message;
+  }
+
+  function money(cents, currency) {
+    // El guaraní no tiene céntimos y se escribe con punto de miles: «Gs. 350.000».
+    if (currency === "PYG") {
+      const entero = String(Math.round(cents / 100)).replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+      return `Gs. ${entero}`;
+    }
+    return `${(cents / 100).toFixed(2)} ${currency}`;
+  }
+
+  dom.bookingOpen.addEventListener("click", () => {
+    showBookingError("");
+    dom.bookingResults.textContent = "";
+    dom.booking.hidden = false;
+  });
+
+  dom.bookingClose.addEventListener("click", () => {
+    dom.booking.hidden = true;
+  });
+
+  dom.bookingForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    showBookingError("");
+    dom.bookingResults.textContent = "";
+    dom.bookingSearch.disabled = true;
+    const stay = {
+      check_in: dom.bookingCheckIn.value,
+      check_out: dom.bookingCheckOut.value,
+      guests: Number(dom.bookingGuests.value),
+    };
+    try {
+      const params = new URLSearchParams({
+        check_in: stay.check_in,
+        check_out: stay.check_out,
+      });
+      const options = await api(`/api/contact/hotel/availability?${params}`);
+      renderBookingOptions(options, stay);
+    } catch (error) {
+      showBookingError(error.message);
+    } finally {
+      dom.bookingSearch.disabled = false;
+    }
+  });
+
+  function renderBookingOptions(options, stay) {
+    // Sin cupo no se deja al cliente mirando un panel vacío preguntándose si
+    // falló algo: se le dice, y las fechas quedan puestas para probar otras.
+    const libres = options.filter((option) => option.available > 0);
+    if (libres.length === 0) {
+      dom.bookingResults.textContent = i18n.t("booking.none");
+      return;
+    }
+    libres.forEach((option) => {
+      const card = document.createElement("div");
+      card.className = "booking__option";
+
+      const title = document.createElement("strong");
+      title.textContent = option.name;
+      card.appendChild(title);
+
+      const detail = document.createElement("p");
+      const partes = [
+        i18n.t("booking.capacity", { capacity: option.capacity }),
+        i18n.t("booking.free", { count: option.available }),
+      ];
+      if (option.nightly_price_cents !== null) {
+        partes.push(`${money(option.nightly_price_cents, option.currency)} / ${i18n.t("booking.night")}`);
+      }
+      detail.textContent = partes.join(" · ");
+      card.appendChild(detail);
+
+      if (option.total_price_cents !== null) {
+        const total = document.createElement("p");
+        total.className = "booking__total";
+        total.textContent = i18n.t("booking.total", {
+          nights: option.nights,
+          amount: money(option.total_price_cents, option.currency),
+        });
+        card.appendChild(total);
+      }
+
+      const reservar = document.createElement("button");
+      reservar.type = "button";
+      reservar.className = "send-button";
+      reservar.textContent = i18n.t("booking.reserve");
+      reservar.addEventListener("click", () => reserve(option, stay, reservar));
+      card.appendChild(reservar);
+
+      dom.bookingResults.appendChild(card);
+    });
+  }
+
+  async function reserve(option, stay, button) {
+    showBookingError("");
+    button.disabled = true;
+    try {
+      const reserva = await api("/api/contact/hotel/reservations", {
+        method: "POST",
+        body: JSON.stringify({
+          check_in: stay.check_in,
+          check_out: stay.check_out,
+          guests: stay.guests,
+          room_type_id: option.room_type_id,
+          guest_name: state.clientName || i18n.t("chat.client"),
+        }),
+      });
+      dom.booking.hidden = true;
+      // El acuse va al hilo: así queda por escrito en la conversación, que es
+      // donde el cliente va a volver a buscarlo, y el equipo lo ve en la
+      // bandeja junto al resto.
+      sendMessage(
+        i18n.t("booking.sent", {
+          type: reserva.room_type,
+          checkIn: reserva.check_in,
+          checkOut: reserva.check_out,
+        }),
+      );
+    } catch (error) {
+      showBookingError(error.message);
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  // La rama de la cabecera abre otra vez el selector: es la única salida para
+  // quien eligió mal la primera vez. Si ya hay alguien atendiendo el hilo, el
+  // servidor lo rechaza y el error se muestra en el propio selector.
+  dom.identityDepartment.addEventListener("click", () => chooseBeforeChatting());
+
+  /** Muestra el selector de rama, o entra directo si no hay entre qué elegir. */
+  async function chooseBeforeChatting() {
+    let departments = [];
+    let fallo = false;
+    try {
+      departments = await api("/api/contact/departments");
+    } catch {
+      fallo = true;
+    }
+    // Sin áreas dadas de alta no hay nada que elegir: todo va a la cola común.
+    if (!fallo && departments.length === 0) {
+      enterChat(null);
+      return;
+    }
+
+    dom.departmentError.hidden = true;
+    dom.loginForm.hidden = true;
+    dom.registerForm.hidden = true;
+    dom.departmentCard.hidden = false;
+    dom.gate.hidden = false;
+    dom.shell.hidden = true;
+
+    dom.departmentOptions.textContent = "";
+    // Elegir es obligatorio: si la lista no llega, no se entra al chat sin
+    // área —el servidor no aceptaría el mensaje—, se ofrece reintentar.
+    if (fallo) {
+      dom.departmentError.textContent = i18n.t("gate.departmentUnavailable");
+      dom.departmentError.hidden = false;
+      const retry = document.createElement("button");
+      retry.type = "button";
+      retry.className = "gate__department";
+      retry.textContent = i18n.t("gate.retry");
+      retry.addEventListener("click", () => chooseBeforeChatting());
+      dom.departmentOptions.appendChild(retry);
+      return;
+    }
+    departments.forEach((department) => {
+      const option = document.createElement("button");
+      option.type = "button";
+      option.className = "gate__department";
+      option.textContent = department.name;
+      option.addEventListener("click", () => chooseDepartment(department, option));
+      dom.departmentOptions.appendChild(option);
+    });
+  }
+
+  async function chooseDepartment(department, option) {
+    dom.departmentError.hidden = true;
+    option.disabled = true;
+    try {
+      await api("/api/contact/department", {
+        method: "PUT",
+        body: JSON.stringify({ department_id: department.id }),
+      });
+      dom.departmentCard.hidden = true;
+      dom.loginForm.hidden = false;
+      enterChat(department);
+    } catch (error) {
+      dom.departmentError.textContent = error.message;
+      dom.departmentError.hidden = false;
+    } finally {
+      option.disabled = false;
+    }
   }
 
   function updateHeaderIdentity({ control, assigneeName } = {}) {
@@ -201,8 +445,13 @@
       const data = await api("/api/contact/me");
       state.clientName = data.contact?.display_name || null;
       updateHeaderIdentity();
-      showApp();
-      connect();
+      // Quien ya eligió rama vuelve directo a su hilo; solo se pregunta la
+      // primera vez.
+      if (data.department) {
+        enterChat(data.department);
+      } else {
+        await chooseBeforeChatting();
+      }
       return true;
     } catch {
       showGate();
@@ -241,8 +490,9 @@
       }
       state.clientName = data.contact?.display_name || null;
       updateHeaderIdentity();
-      showApp();
-      connect();
+      // Recién identificado: se le pregunta con qué rama quiere hablar, salvo
+      // que ya lo hubiera elegido en una visita anterior.
+      await loadIdentity();
     } catch (error) {
       dom.loginError.textContent = error.message;
       dom.loginError.hidden = false;
@@ -267,8 +517,8 @@
       dom.registerPassword.value = "";
       state.clientName = data.contact?.display_name || null;
       updateHeaderIdentity();
-      showApp();
-      connect();
+      // Cuenta nueva: nunca eligió rama, así que el selector sale sí o sí.
+      await chooseBeforeChatting();
     } catch (error) {
       dom.registerError.textContent = error.message;
       dom.registerError.hidden = false;
@@ -390,6 +640,7 @@
       state.reconnectAttempt = 0;
       setStatus("online", i18n.t("chat.online"));
       updateSendButton();
+      startHeartbeat(socket);
     });
 
     socket.addEventListener("message", (event) => {
@@ -406,6 +657,7 @@
     });
 
     socket.addEventListener("close", (event) => {
+      stopHeartbeat();
       if (state.socket !== socket) return;
       if (event.code === 4401) {
         showGate();
@@ -417,6 +669,24 @@
     });
 
     socket.addEventListener("error", () => socket.close());
+  }
+
+  function startHeartbeat(socket) {
+    stopHeartbeat();
+    state.heartbeat = window.setInterval(() => {
+      if (socket.readyState !== WebSocket.OPEN) {
+        stopHeartbeat();
+        return;
+      }
+      socket.send(JSON.stringify({ type: "ping" }));
+    }, HEARTBEAT_MS);
+  }
+
+  function stopHeartbeat() {
+    if (state.heartbeat) {
+      window.clearInterval(state.heartbeat);
+      state.heartbeat = null;
+    }
   }
 
   function scheduleReconnect() {
@@ -432,6 +702,13 @@
   function handleEvent(payload) {
     switch (payload.type) {
       case "ready":
+        // El hilo se vacía antes de volver a pintarlo. `ready` llega en cada
+        // conexión, no solo en la primera, y una reconexión es de lo más
+        // normal: basta un rato en silencio para que el proxy corte el
+        // WebSocket. Pintando encima de lo que ya había, el historial entero
+        // se duplicaba solo, sin que nadie tocara nada.
+        dom.thread.textContent = "";
+        state.streamingBubble = null;
         (payload.history || []).forEach((row) => {
           if (row.text || (row.attachments || []).length > 0) {
             addBubble(
@@ -444,6 +721,11 @@
         });
         scrollToEnd(true);
         updateHeaderIdentity({ control: payload.control, assigneeName: payload.assignee_name });
+        setClosed(payload.status === "closed");
+        break;
+
+      case "state_changed":
+        setClosed(payload.status === "closed");
         break;
 
       case "control_changed":
@@ -452,6 +734,18 @@
 
       case "ack":
         showTyping(true);
+        break;
+
+      case "department_required":
+        // Se escribió sin área elegida (por ejemplo, desde otra pestaña que
+        // empezó una conversación nueva). Lo escrito vuelve al cuadro de
+        // texto para enviarlo después de elegir.
+        showTyping(false);
+        dom.thread.lastElementChild?.remove();
+        if (payload.text && !dom.input.value) {
+          dom.input.value = payload.text;
+        }
+        chooseBeforeChatting();
         break;
 
       case "typing":
@@ -580,8 +874,19 @@
   function updateSendButton() {
     const hasText = dom.input.value.trim().length > 0;
     const connected = state.socket && state.socket.readyState === WebSocket.OPEN;
-    dom.sendButton.disabled = (!hasText && !state.pendingAttachment) || !connected;
+    dom.sendButton.disabled =
+      state.closed || (!hasText && !state.pendingAttachment) || !connected;
     dom.charCount.textContent = `${dom.input.value.length} / ${CHAR_LIMIT}`;
+  }
+
+  /* El equipo puede dar la conversación por resuelta desde su consola. Sin
+     enseñarlo aquí, el cliente seguía con el hilo abierto delante y al escribir
+     la reabría sin que nadie se enterase. */
+  function setClosed(closed) {
+    state.closed = Boolean(closed);
+    dom.closedNotice.hidden = !state.closed;
+    dom.form.hidden = state.closed;
+    updateSendButton();
   }
 
   /* -------------------------------------------------------------- escuchas */
@@ -621,6 +926,34 @@
     const next = WIDTHS[(WIDTHS.indexOf(current) + 1) % WIDTHS.length];
     dom.shell.dataset.width = next;
     localStorage.setItem("chatbox.width", next);
+  });
+
+  dom.newChatButton.addEventListener("click", async () => {
+    dom.newChatButton.disabled = true;
+    try {
+      const respuesta = await fetch("/api/contact/conversations", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+      });
+      if (!respuesta.ok) {
+        throw new Error(await respuesta.text());
+      }
+    } catch (error) {
+      console.warn("No se pudo empezar una conversación nueva", error);
+      dom.newChatButton.disabled = false;
+      return;
+    }
+    // Una consulta nueva puede ser para otra área: se vuelve a elegir. Al
+    // entrar, el socket se reconecta y trae el hilo nuevo, ya vacío.
+    setClosed(false);
+    dom.thread.textContent = "";
+    dom.newChatButton.disabled = false;
+    if (state.socket) {
+      state.socket.close();
+      state.socket = null;
+    }
+    await chooseBeforeChatting();
   });
 
   dom.resetButton.addEventListener("click", () => {

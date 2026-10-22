@@ -1,7 +1,22 @@
 # Entorno local completo: PostgreSQL más el orquestador.
+
+# Tope de los logs de Docker: sin él crecen sin límite hasta llenar el disco.
+# Tres ficheros de 10 MB por servicio; lo anterior se descarta.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   postgres:
-    image: postgres:17-alpine
+    logging: *default-logging
+    # postgres:17-alpine con la extensión `vector` compilada dentro: la base de
+    # conocimiento del asistente guarda vectores de significado (ver
+    # 0017_knowledge_base.sql). No se usa la imagen pgvector/pgvector porque es
+    # Debian, y cambiar de musl a glibc bajo el mismo ./pgdata desordena los
+    # índices de texto. Ver docker/postgres/Dockerfile.
+    build: ./docker/postgres
     container_name: chatbox-postgres
     environment:
       POSTGRES_USER: chatbox
@@ -25,6 +40,7 @@ services:
       retries: 10
 
   api:
+    logging: *default-logging
     build: .
     container_name: chatbox-api
     depends_on:
@@ -39,10 +55,12 @@ services:
       # Sin este volumen, reconstruir la imagen borraría las imágenes subidas.
       - uploads-data:/app/uploads
     ports:
-      # Con el proxy inverso delante (perfil `tls`), cambie esto por
-      # "127.0.0.1:8000:8000": el equipo entra por HTTPS y nadie de la red
-      # puede saltarse el certificado hablando HTTP directo con la API.
-      - "8000:8000"
+      # Solo el bucle local: delante hay un proxy inverso que termina TLS, y
+      # publicar el puerto en toda la red dejaba entrar por HTTP directo a
+      # cualquiera del segmento, saltándose el certificado. Quien no tenga
+      # proxy delante y sirva en una red local de confianza puede volver a
+      # "8000:8000".
+      - "127.0.0.1:8000:8000"
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://localhost:8000/health')\""]
       interval: 15s
@@ -54,6 +72,7 @@ services:
   # siendo válido. Con certificado:
   #   docker compose --profile tls up -d
   nginx:
+    logging: *default-logging
     image: nginx:1.27-alpine
     container_name: chatbox-nginx
     profiles:
