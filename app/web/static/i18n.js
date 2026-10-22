@@ -406,6 +406,8 @@
 
       "admin.tab.knowledge": "Conocimiento",
       "knowledge.title": "Base de conocimiento",
+      "work.label": "Departamento de trabajo:",
+      "work.unrouted": "Cola común",
       "assistant.byDepartment": "Por departamento",
       "assistant.byDepartmentHint": "Cada departamento decide si el asistente contesta en sus conversaciones y qué tiene que saber además de lo general: horarios, precios, cómo tratar al cliente. Apagado, los mensajes esperan al equipo sin respuesta automática. Las conversaciones que aún no tienen departamento siguen con el asistente encendido.",
       "assistant.departmentEnabled": "El asistente responde en este departamento",
@@ -1018,6 +1020,8 @@
 
       "admin.tab.knowledge": "Knowledge",
       "knowledge.title": "Knowledge base",
+      "work.label": "Working in:",
+      "work.unrouted": "Common queue",
       "assistant.byDepartment": "By department",
       "assistant.byDepartmentHint": "Each department decides whether the assistant answers in its conversations and what it needs to know beyond the general instructions: opening hours, prices, how to treat customers. When off, messages wait for the team without an automatic reply. Conversations without a department keep the assistant on.",
       "assistant.departmentEnabled": "The assistant answers in this department",
@@ -1631,6 +1635,8 @@
 
       "admin.tab.knowledge": "Wissen",
       "knowledge.title": "Wissensbasis",
+      "work.label": "Abteilung:",
+      "work.unrouted": "Gemeinsame Warteschlange",
       "assistant.byDepartment": "Pro Abteilung",
       "assistant.byDepartmentHint": "Jede Abteilung entscheidet, ob der Assistent in ihren Unterhaltungen antwortet und was er über die allgemeinen Anweisungen hinaus wissen muss: Öffnungszeiten, Preise, Umgang mit Kunden. Ausgeschaltet warten die Nachrichten ohne automatische Antwort auf das Team. Unterhaltungen ohne Abteilung behalten den Assistenten.",
       "assistant.departmentEnabled": "Der Assistent antwortet in dieser Abteilung",

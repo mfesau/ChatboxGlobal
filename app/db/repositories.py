@@ -813,6 +813,13 @@ def _restrict_to_departments(stmt: Any, department_ids: set[uuid.UUID] | None) -
     )
 
 
+def _department_filter(department: uuid.UUID, include_unrouted: bool) -> Any:
+    """Las de ese departamento y, si se pide, también las que no tienen ninguno."""
+    if include_unrouted:
+        return or_(Conversation.department_id == department, Conversation.department_id.is_(None))
+    return Conversation.department_id == department
+
+
 async def list_conversations(
     session: AsyncSession,
     *,
@@ -823,6 +830,7 @@ async def list_conversations(
     agent_id: uuid.UUID | None = None,
     department_ids: set[uuid.UUID] | None = None,
     department: uuid.UUID | None = None,
+    include_unrouted: bool = False,
     label: uuid.UUID | None = None,
     limit: int = 50,
     offset: int = 0,
@@ -840,6 +848,9 @@ async def list_conversations(
     quien pregunta (``None`` = sin restricción); ``department`` es un filtro
     de interfaz para ver solo un departamento concreto de entre los propios,
     nunca una forma de ver más de lo que ``department_ids`` ya permite.
+    ``include_unrouted`` suma a ese departamento lo que todavía no tiene
+    ninguno: quien trabaja en un departamento tiene que seguir viendo lo que
+    entra sin clasificar, o nadie más que administración lo vería.
 
     El filtro se aplica en SQL y no en memoria: un agente jamás recibe filas
     ajenas que después haya que descartar.
@@ -849,7 +860,7 @@ async def list_conversations(
     if channel:
         stmt = stmt.where(Conversation.channel == channel)
     if department:
-        stmt = stmt.where(Conversation.department_id == department)
+        stmt = stmt.where(_department_filter(department, include_unrouted))
     if label:
         stmt = stmt.where(Conversation.labels.any(Label.id == label))
 
@@ -888,6 +899,7 @@ async def count_conversations(
     agent_id: uuid.UUID | None = None,
     department_ids: set[uuid.UUID] | None = None,
     department: uuid.UUID | None = None,
+    include_unrouted: bool = False,
     status: str | None = "open",
 ) -> int:
     """Recuento para las pestañas de la consola, sin traer las filas.
@@ -901,7 +913,7 @@ async def count_conversations(
     )
     stmt = _restrict_to_status(stmt, status)
     if department:
-        stmt = stmt.where(Conversation.department_id == department)
+        stmt = stmt.where(_department_filter(department, include_unrouted))
     if scope == "unassigned":
         stmt = stmt.where(Conversation.assignee_id.is_(None))
         stmt = _restrict_to_accessible_departments(stmt, department_ids)

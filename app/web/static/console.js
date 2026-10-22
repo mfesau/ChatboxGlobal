@@ -446,6 +446,7 @@
       const params = new URLSearchParams();
       if (dom.departmentFilter.value) {
         params.set("department", dom.departmentFilter.value);
+        params.set("include_unrouted", "true");
       }
       const query = params.toString();
       const summary = await api(`/api/inbox/summary${query ? `?${query}` : ""}`);
@@ -482,7 +483,10 @@
       params.set("channel", dom.channelFilter.value);
     }
     if (dom.departmentFilter.value) {
+      // Lo que aún no tiene departamento también se ve: si no, lo que entra
+      // sin clasificar solo lo vería administración.
       params.set("department", dom.departmentFilter.value);
+      params.set("include_unrouted", "true");
     }
     if (dom.labelFilter.value) {
       params.set("label", dom.labelFilter.value);
@@ -1340,6 +1344,11 @@
     dom.labelFilter,
   ];
 
+  dom.departmentFilter.addEventListener("change", () => {
+    rememberWorkDepartment();
+    fillLabelFilter();
+  });
+
   FILTERS.forEach((element) => {
     reflectFilterTitle(element);
     element.addEventListener("change", async () => {
@@ -1492,7 +1501,13 @@
     // a una vista más amplia en vez de romperse.
     dom.statusFilter.value = status || "";
     dom.channelFilter.value = channel || "";
-    dom.departmentFilter.value = department || "";
+    // Una vista de otro departamento —o de «todos», para quien no puede
+    // verlos— no cambia el departamento de trabajo.
+    if ([...dom.departmentFilter.options].some((o) => o.value === (department || ""))) {
+      dom.departmentFilter.value = department || "";
+      rememberWorkDepartment();
+      fillLabelFilter();
+    }
     dom.labelFilter.value = label || "";
     syncDepartmentTabs();
     renderSavedViews();
@@ -1810,7 +1825,7 @@
       ? state.departments.filter((department) => state.me.department_ids.includes(department.id))
       : state.departments;
 
-    fillWithPlaceholder(dom.departmentFilter, i18n.t("filter.department.all"), attendable);
+    fillWorkDepartment(attendable);
     renderDepartmentTabs(attendable);
     fillWithPlaceholder(dom.transferDepartment, i18n.t("aside.choose"));
     fillWithPlaceholder(dom.newUserDepartment, i18n.t("admin.noDepartment"));
@@ -1966,8 +1981,78 @@
     dom.hotelDepartment.dispatchEvent(new Event("change"));
   }
 
+  /* ------------------------------------------- departamento de trabajo */
+
+  /* El departamento de la barra superior es aquel en el que la persona está
+     trabajando: la bandeja, los contadores, las etiquetas del filtro y los
+     informes lo siguen. Cada agente elige solo entre los suyos; ver todos a
+     la vez es cosa de administración. Se recuerda en el navegador, por
+     persona, para no tener que elegirlo en cada visita. */
+
+  function workDepartmentKey() {
+    return `chatbox.workDepartment.${state.me?.agent?.id || "anon"}`;
+  }
+
+  /** Administración no tiene acotación por departamento y puede ver todos. */
+  function seesAllDepartments() {
+    return !state.me?.department_ids;
+  }
+
+  let workDepartmentReady = false;
+
+  function fillWorkDepartment(attendable) {
+    const select = dom.departmentFilter;
+    const previous = select.value;
+    select.textContent = "";
+    // Sin departamentos asignados solo queda la cola común: lo que todavía
+    // no tiene departamento.
+    if (seesAllDepartments() || attendable.length === 0) {
+      const all = document.createElement("option");
+      all.value = "";
+      all.textContent = seesAllDepartments()
+        ? i18n.t("filter.department.all")
+        : i18n.t("work.unrouted");
+      select.appendChild(all);
+    }
+    attendable.forEach((department) => {
+      const option = document.createElement("option");
+      option.value = department.id;
+      option.textContent = department.name;
+      select.appendChild(option);
+    });
+
+    let saved = null;
+    try {
+      saved = window.localStorage.getItem(workDepartmentKey());
+    } catch {
+      saved = null;
+    }
+    const allowed = [...select.options].map((option) => option.value);
+    // Al entrar manda lo recordado; después, lo que ya estaba elegido.
+    const candidates = workDepartmentReady ? [previous, saved] : [saved, previous];
+    select.value = candidates.find((value) => value !== null && allowed.includes(value))
+      ?? allowed[0];
+    workDepartmentReady = true;
+    reflectFilterTitle(select);
+  }
+
+  function rememberWorkDepartment() {
+    try {
+      window.localStorage.setItem(workDepartmentKey(), dom.departmentFilter.value);
+    } catch {
+      // Sin almacenamiento (ventana privada): se elige de nuevo en cada visita.
+    }
+  }
+
   function renderDepartmentTabs(options) {
     dom.departmentTabs.textContent = "";
+
+    // Rótulo fijo: deja claro en qué departamento se está trabajando, también
+    // a quien tiene uno solo y no tiene nada que elegir.
+    const rotulo = document.createElement("span");
+    rotulo.className = "department-tabs__label";
+    rotulo.textContent = i18n.t("work.label");
+    dom.departmentTabs.appendChild(rotulo);
 
     const buildTab = (id, name, logoUrl) => {
       const tab = document.createElement("button");
@@ -1996,7 +2081,11 @@
       return tab;
     };
 
-    dom.departmentTabs.appendChild(buildTab("", i18n.t("filter.department.all"), null));
+    if (seesAllDepartments()) {
+      dom.departmentTabs.appendChild(buildTab("", i18n.t("filter.department.all"), null));
+    } else if (options.length === 0) {
+      dom.departmentTabs.appendChild(buildTab("", i18n.t("work.unrouted"), null));
+    }
     options.forEach((department) => {
       dom.departmentTabs.appendChild(buildTab(department.id, department.name, department.logo_url));
     });
@@ -2404,6 +2493,31 @@
 
   /* -------------------------------------------------------------- etiquetas */
 
+  /** El filtro de etiquetas ofrece las de toda la empresa y las del
+      departamento de trabajo. */
+  function fillLabelFilter() {
+    const elegida = dom.labelFilter.value;
+    const departamento = dom.departmentFilter.value;
+    dom.labelFilter.textContent = "";
+    const placeholder = document.createElement("option");
+    placeholder.value = "";
+    placeholder.textContent = i18n.t("filter.label.all");
+    dom.labelFilter.appendChild(placeholder);
+    state.labels
+      .filter((label) => !departamento || !label.department_id || label.department_id === departamento)
+      .forEach((label) => {
+        const option = document.createElement("option");
+        option.value = label.id;
+        option.textContent = label.name;
+        dom.labelFilter.appendChild(option);
+      });
+    // Si la etiqueta elegida no es de este departamento, se quita el filtro.
+    dom.labelFilter.value = [...dom.labelFilter.options].some((o) => o.value === elegida)
+      ? elegida
+      : "";
+    reflectFilterTitle(dom.labelFilter);
+  }
+
   async function loadLabels() {
     try {
       state.labels = await api("/api/labels");
@@ -2411,17 +2525,7 @@
       state.labels = [];
     }
 
-    dom.labelFilter.textContent = "";
-    const placeholder = document.createElement("option");
-    placeholder.value = "";
-    placeholder.textContent = i18n.t("filter.label.all");
-    dom.labelFilter.appendChild(placeholder);
-    state.labels.forEach((label) => {
-      const option = document.createElement("option");
-      option.value = label.id;
-      option.textContent = label.name;
-      dom.labelFilter.appendChild(option);
-    });
+    fillLabelFilter();
 
     dom.labelList.textContent = "";
     dom.labelList.classList.add("panel__list--removable");
@@ -3352,13 +3456,18 @@
   async function loadReports() {
     // El desplegable se llena con lo ya cargado; «todos» respeta el alcance
     // que el servidor aplique a quien pregunta.
-    const elegido = dom.reportsDepartment.value;
+    // Solo los departamentos que la persona atiende, y de entrada el de
+    // trabajo: un informe de otro departamento el servidor no lo daría.
+    const elegido = dom.reportsDepartment.value || dom.departmentFilter.value;
     dom.reportsDepartment.replaceChildren();
     const todos = document.createElement("option");
     todos.value = "";
     todos.textContent = i18n.t("reports.allDepartments");
     dom.reportsDepartment.appendChild(todos);
-    for (const department of state.departments) {
+    const propios = seesAllDepartments()
+      ? state.departments
+      : state.departments.filter((d) => state.me.department_ids.includes(d.id));
+    for (const department of propios) {
       const option = document.createElement("option");
       option.value = department.id;
       option.textContent = department.name;

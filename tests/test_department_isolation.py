@@ -358,3 +358,38 @@ async def test_a_canned_response_can_move_to_another_department(ramas):
         f"/api/canned-responses/{recursos['empresa']['canned']}", json={"department_id": None}
     )
     assert a_toda.json()["department_id"] is None
+
+
+# --------------------------------------------------------------------------- #
+# Departamento de trabajo
+# --------------------------------------------------------------------------- #
+async def test_the_working_department_still_shows_what_has_no_department(
+    ramas, anonymous, as_agent, team
+):
+    """Trabajar en el Hotel no esconde lo que entra sin clasificar."""
+    sin_rama = await arrive(anonymous, "cliente-sin-rama", "Hola, ¿con quién hablo?")
+    ana = await as_agent(team["ana"]["email"])
+    hotel = ramas["hotel"]["id"]
+
+    solo = {
+        fila["id"]
+        for fila in (
+            await ana.get(f"/api/conversations?scope=unassigned&department={hotel}")
+        ).json()
+    }
+    con_cola = {
+        fila["id"]
+        for fila in (
+            await ana.get(
+                f"/api/conversations?scope=unassigned&department={hotel}&include_unrouted=true"
+            )
+        ).json()
+    }
+    assert solo == {ramas["propia"]}
+    assert con_cola == {ramas["propia"], sin_rama}
+    assert ramas["ajena"] not in con_cola
+
+    contadores = (
+        await ana.get(f"/api/inbox/summary?department={hotel}&include_unrouted=true")
+    ).json()
+    assert contadores["unassigned"] == 2

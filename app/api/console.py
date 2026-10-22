@@ -675,6 +675,7 @@ async def list_conversations(
     conversation_status: str | None = Query(default="open", alias="status"),
     channel: ChannelKind | None = None,
     department: uuid.UUID | None = None,
+    include_unrouted: bool = False,
     label: uuid.UUID | None = None,
     tenant: str | None = None,
     limit: int = Query(default=50, ge=1, le=200),
@@ -700,6 +701,7 @@ async def list_conversations(
         agent_id=principal.id,
         department_ids=principal.department_ids,
         department=department,
+        include_unrouted=include_unrouted,
         label=label,
         limit=limit,
         offset=offset,
@@ -713,6 +715,7 @@ async def inbox_summary(
     settings: SettingsDep,
     principal: PrincipalDep,
     department: uuid.UUID | None = None,
+    include_unrouted: bool = False,
     tenant: str | None = None,
 ) -> dict[str, Any]:
     """Contadores de las pestañas: cola común, cartera propia y total.
@@ -730,6 +733,7 @@ async def inbox_summary(
             scope="unassigned",
             department_ids=principal.department_ids,
             department=department,
+            include_unrouted=include_unrouted,
         ),
         "mine": await repo.count_conversations(
             session,
@@ -737,6 +741,7 @@ async def inbox_summary(
             scope="mine",
             agent_id=principal.id,
             department=department,
+            include_unrouted=include_unrouted,
         )
         if principal.id
         else 0,
@@ -748,6 +753,7 @@ async def inbox_summary(
             tenant_id=tenant_row.id,
             department_ids=principal.department_ids,
             department=department,
+            include_unrouted=include_unrouted,
         )
     return summary
 

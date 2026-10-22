@@ -250,6 +250,19 @@
   border-bottom: 1px solid var(--border);
 }
 
+/* «Departamento de trabajo:» delante de las pestañas. */
+.department-tabs__label {
+  display: flex;
+  flex: none;
+  align-items: center;
+  padding: 0 8px 0 0;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
 .department-tab {
   display: flex;
   flex: none;
@@ -283,6 +296,7 @@
    línea de la barra, y es lo que da la sensación de pestaña. */
 .department-tab[aria-selected="true"] {
   margin-bottom: -1px;
+  font-weight: 600;
   color: var(--text);
   background: var(--surface);
   border-color: var(--border);
