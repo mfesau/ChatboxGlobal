@@ -6,6 +6,7 @@ consola solo sabe si está puesta.
 
 from __future__ import annotations
 
+import uuid
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
@@ -34,6 +35,60 @@ def _payload(tenant_row: Any, settings: Any) -> dict[str, Any]:
         "default_model": settings.openrouter_model,
         "efforts": list(ai_settings.EFFORTS),
     }
+
+
+class DepartmentAssistantIn(BaseModel):
+    enabled: bool = True
+    instructions: str = Field(default="", max_length=ai_settings.INSTRUCTIONS_MAX_LENGTH)
+
+
+def _department_payload(department: Any) -> dict[str, Any]:
+    elegido = ai_settings.for_department(department)
+    return {
+        "id": str(department.id),
+        "name": department.name,
+        "is_active": department.is_active,
+        "enabled": elegido.enabled,
+        "instructions": elegido.instructions,
+    }
+
+
+@router.get("/departments")
+async def list_department_assistants(
+    session: SessionDep, settings: SettingsDep, principal: AdminDep
+) -> list[dict[str, Any]]:
+    """Si el asistente responde en cada departamento, y con qué instrucciones."""
+    tenant_row = await repo.get_or_create_tenant(session, settings.default_tenant_slug)
+    departments = await repo.list_departments(session, tenant_id=tenant_row.id, only_active=False)
+    return [_department_payload(row) for row in departments]
+
+
+@router.put("/departments/{department_id}")
+async def set_department_assistant(
+    department_id: uuid.UUID,
+    body: DepartmentAssistantIn,
+    session: SessionDep,
+    settings: SettingsDep,
+    principal: AdminDep,
+) -> dict[str, Any]:
+    tenant_row = await repo.get_or_create_tenant(session, settings.default_tenant_slug)
+    department = await repo.get_department(session, department_id)
+    if department is None or department.tenant_id != tenant_row.id:
+        raise HTTPException(status_code=404, detail="El departamento no existe")
+    ai_settings.set_for_department(
+        department, enabled=body.enabled, instructions=body.instructions
+    )
+    await session.flush()
+    await repo.record_audit(
+        session,
+        tenant_id=tenant_row.id,
+        actor=principal.audit_actor,
+        action="department_assistant_updated",
+        subject_type="department",
+        subject_id=str(department.id),
+        detail={"enabled": body.enabled, "instructions_length": len(body.instructions)},
+    )
+    return _department_payload(department)
 
 
 @router.get("")

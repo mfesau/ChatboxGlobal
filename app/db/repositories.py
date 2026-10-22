@@ -11,7 +11,7 @@ import uuid
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import Text, and_, cast, delete, func, or_, select, update
+from sqlalchemy import Text, and_, cast, delete, func, or_, select, true, update
 from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -2268,11 +2268,42 @@ async def hotel_department_report(
 # --------------------------------------------------------------------------- #
 # Respuestas guardadas
 # --------------------------------------------------------------------------- #
+def visible_in_departments(model: Any, department_ids: set[uuid.UUID] | None) -> Any:
+    """Condición «de toda la empresa o de uno de estos departamentos».
+
+    Para respuestas guardadas, etiquetas y macros. ``None`` es administración,
+    que lo ve todo.
+    """
+    if department_ids is None:
+        return true()
+    return or_(model.department_id.is_(None), model.department_id.in_(department_ids))
+
+
+def fits_department(row: Any, department_id: uuid.UUID | None) -> bool:
+    """¿Se puede usar ``row`` en algo de ese departamento?
+
+    Lo de toda la empresa vale en cualquier parte; lo de un departamento, solo
+    en ese. Una conversación de la cola común (sin departamento) solo admite
+    lo de toda la empresa.
+    """
+    return row.department_id is None or row.department_id == department_id
+
+
 async def create_canned_response(
-    session: AsyncSession, *, tenant_id: uuid.UUID, shortcode: str, title: str, body: str
+    session: AsyncSession,
+    *,
+    tenant_id: uuid.UUID,
+    shortcode: str,
+    title: str,
+    body: str,
+    department_id: uuid.UUID | None = None,
 ) -> CannedResponse:
     canned = CannedResponse(
-        tenant_id=tenant_id, shortcode=shortcode.strip(), title=title.strip(), body=body
+        tenant_id=tenant_id,
+        shortcode=shortcode.strip(),
+        title=title.strip(),
+        body=body,
+        department_id=department_id,
     )
     session.add(canned)
     await session.flush()
@@ -2299,9 +2330,15 @@ async def find_canned_response_by_shortcode(
 
 
 async def list_canned_responses(
-    session: AsyncSession, *, tenant_id: uuid.UUID
+    session: AsyncSession,
+    *,
+    tenant_id: uuid.UUID,
+    department_ids: set[uuid.UUID] | None = None,
 ) -> list[CannedResponse]:
-    stmt = select(CannedResponse).where(CannedResponse.tenant_id == tenant_id)
+    stmt = select(CannedResponse).where(
+        CannedResponse.tenant_id == tenant_id,
+        visible_in_departments(CannedResponse, department_ids),
+    )
     return list((await session.execute(stmt.order_by(CannedResponse.shortcode))).scalars())
 
 
@@ -2314,9 +2351,16 @@ async def delete_canned_response(session: AsyncSession, canned_response: CannedR
 # Etiquetas
 # --------------------------------------------------------------------------- #
 async def create_label(
-    session: AsyncSession, *, tenant_id: uuid.UUID, name: str, color: str
+    session: AsyncSession,
+    *,
+    tenant_id: uuid.UUID,
+    name: str,
+    color: str,
+    department_id: uuid.UUID | None = None,
 ) -> Label:
-    label = Label(tenant_id=tenant_id, name=name.strip(), color=color.strip())
+    label = Label(
+        tenant_id=tenant_id, name=name.strip(), color=color.strip(), department_id=department_id
+    )
     session.add(label)
     await session.flush()
     return label
@@ -2339,8 +2383,15 @@ async def find_label_by_name(
     ).scalar_one_or_none()
 
 
-async def list_labels(session: AsyncSession, *, tenant_id: uuid.UUID) -> list[Label]:
-    stmt = select(Label).where(Label.tenant_id == tenant_id)
+async def list_labels(
+    session: AsyncSession,
+    *,
+    tenant_id: uuid.UUID,
+    department_ids: set[uuid.UUID] | None = None,
+) -> list[Label]:
+    stmt = select(Label).where(
+        Label.tenant_id == tenant_id, visible_in_departments(Label, department_ids)
+    )
     return list((await session.execute(stmt.order_by(Label.name))).scalars())
 
 
@@ -2420,9 +2471,16 @@ async def breach_overdue_first_responses(session: AsyncSession, limit: int = 200
 # Macros
 # --------------------------------------------------------------------------- #
 async def create_macro(
-    session: AsyncSession, *, tenant_id: uuid.UUID, name: str, steps: list[Any]
+    session: AsyncSession,
+    *,
+    tenant_id: uuid.UUID,
+    name: str,
+    steps: list[Any],
+    department_id: uuid.UUID | None = None,
 ) -> Macro:
-    macro = Macro(tenant_id=tenant_id, name=name.strip(), steps=steps)
+    macro = Macro(
+        tenant_id=tenant_id, name=name.strip(), steps=steps, department_id=department_id
+    )
     session.add(macro)
     await session.flush()
     return macro
@@ -2445,8 +2503,17 @@ async def find_macro_by_name(
     ).scalar_one_or_none()
 
 
-async def list_macros(session: AsyncSession, *, tenant_id: uuid.UUID) -> list[Macro]:
-    stmt = select(Macro).where(Macro.tenant_id == tenant_id).order_by(Macro.name)
+async def list_macros(
+    session: AsyncSession,
+    *,
+    tenant_id: uuid.UUID,
+    department_ids: set[uuid.UUID] | None = None,
+) -> list[Macro]:
+    stmt = (
+        select(Macro)
+        .where(Macro.tenant_id == tenant_id, visible_in_departments(Macro, department_ids))
+        .order_by(Macro.name)
+    )
     return list((await session.execute(stmt)).scalars())
 
 

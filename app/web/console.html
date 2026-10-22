@@ -443,6 +443,7 @@
               <h3 data-i18n="admin.labels">Etiquetas</h3>
               <label class="panel__field"><span data-i18n="aside.name">Nombre</span><input type="text" id="new-label-name" maxlength="80" required /></label>
               <label class="panel__field"><span data-i18n="admin.color">Color</span><input type="color" id="new-label-color" value="#6b7280" /></label>
+              <label class="panel__field"><span data-i18n="table.department">Departamento</span><select id="new-label-department"></select></label>
               <button type="submit" class="send-button" data-i18n="admin.createLabel">Crear etiqueta</button>
               <ul class="panel__list" id="label-list"></ul>
             </form>
@@ -451,6 +452,7 @@
               <label class="panel__field"><span data-i18n="admin.shortcode">Atajo</span><input type="text" id="new-canned-shortcode" maxlength="40" pattern="[a-z0-9_\-]+" placeholder="p-ej. saludo" required /></label>
               <label class="panel__field"><span data-i18n="admin.title2">Título</span><input type="text" id="new-canned-title" maxlength="160" required /></label>
               <label class="panel__field"><span data-i18n="admin.text">Texto</span><textarea id="new-canned-body" rows="3" maxlength="4000" required></textarea></label>
+              <label class="panel__field"><span data-i18n="table.department">Departamento</span><select id="new-canned-department"></select></label>
               <button type="submit" class="send-button" data-i18n="admin.createCanned">Crear respuesta</button>
               <ul class="panel__list" id="canned-response-list"></ul>
             </form>
@@ -465,6 +467,9 @@
               <span data-i18n="aside.name">Nombre</span>
               <input type="text" id="new-macro-name" maxlength="80" required />
             </label>
+            <!-- Al elegir departamento, los pasos solo ofrecen etiquetas y
+                 respuestas de toda la empresa o de ese departamento. -->
+            <label class="panel__field"><span data-i18n="table.department">Departamento</span><select id="new-macro-department"></select></label>
             <label class="panel__field">
               <span data-i18n="macro.addStep">Añadir paso</span>
               <select id="macro-step-action">
@@ -826,6 +831,18 @@
                           data-i18n="assistant.reset">Volver al modelo del .env</button>
                 </div>
               </form>
+            </section>
+            <section class="panel">
+              <h3 data-i18n="assistant.byDepartment">Por departamento</h3>
+              <p class="console__muted" data-i18n="assistant.byDepartmentHint">
+                Cada departamento decide si el asistente contesta en sus
+                conversaciones y qué tiene que saber además de lo general:
+                horarios, precios, cómo tratar al cliente. Apagado, los
+                mensajes esperan al equipo sin respuesta automática. Las
+                conversaciones que aún no tienen departamento siguen con el
+                asistente encendido.
+              </p>
+              <div class="assistant-departments" id="assistant-departments"></div>
             </section>
           </div>
 

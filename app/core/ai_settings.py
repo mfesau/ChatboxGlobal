@@ -135,3 +135,41 @@ async def fetch_catalog(
 def forget_catalog() -> None:
     """Vacía la caché; para las pruebas."""
     _catalog.update(at=0.0, models=None)
+
+
+# --------------------------------------------------------------------------- #
+# Por departamento
+# --------------------------------------------------------------------------- #
+#: Clave dentro de ``Department.enabled_modules``, junto a los demás módulos
+#: de la rama (hotel, encuesta). Sin nada guardado el asistente responde y no
+#: hay instrucciones propias: así funcionaba antes de que existiera.
+DEPARTMENT_KEY = "assistant"
+INSTRUCTIONS_MAX_LENGTH = 4_000
+
+
+@dataclass(frozen=True, slots=True)
+class DepartmentAssistant:
+    enabled: bool
+    instructions: str
+
+
+def for_department(department: Any) -> DepartmentAssistant:
+    """Cómo atiende el asistente en ese departamento."""
+    stored = ((getattr(department, "enabled_modules", None) or {}).get(DEPARTMENT_KEY)) or {}
+    if not isinstance(stored, dict):
+        stored = {}
+    return DepartmentAssistant(
+        enabled=stored.get("enabled", True) is not False,
+        instructions=str(stored.get("instructions") or "").strip(),
+    )
+
+
+def set_for_department(department: Any, *, enabled: bool, instructions: str) -> None:
+    """Guarda la configuración, reasignando el diccionario para que se note.
+
+    Mutarlo en el sitio pasaría inadvertido para SQLAlchemy en una columna
+    JSON, igual que con los demás módulos.
+    """
+    modules = dict(department.enabled_modules or {})
+    modules[DEPARTMENT_KEY] = {"enabled": enabled, "instructions": instructions.strip()}
+    department.enabled_modules = modules

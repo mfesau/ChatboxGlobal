@@ -32,7 +32,8 @@ from google import genai
 from google.genai import errors as genai_errors
 
 from app.core import ai_settings, hotel_booking, knowledge
-from app.core.envelope import Direction
+from app.core.business_hours import resolve_service_policy, resolve_timezone
+from app.core.envelope import Direction, utcnow
 from app.core.hub import access_scope, conversation_topic, hub, inbox_topic
 from app.core.pipeline import Handler, NextFn, TurnContext
 from app.core.storage import resolve_upload
@@ -228,6 +229,16 @@ class AIHandler(Handler):
             await next_()
             return
 
+        # Cada departamento decide si el asistente contesta en sus
+        # conversaciones. Apagado, el mensaje queda en la cola para el equipo,
+        # sin respuesta automática y sin el aviso de «no he podido procesar».
+        department = await self._department(ctx)
+        if department is not None and not ai_settings.for_department(department).enabled:
+            log.info("ai_off_for_department", department=department.name)
+            ctx.suppress_reply = True
+            return
+        ctx.scratch["department"] = department
+
         started = time.monotonic()
         messages = self._build_messages(ctx)
         system = self._build_system_prompt(ctx)
@@ -307,11 +318,35 @@ class AIHandler(Handler):
         await next_()
 
     # ------------------------------------------------------------- contexto
+    async def _department(self, ctx: TurnContext) -> Any:
+        """Departamento de la conversación, o ``None`` en la cola común."""
+        if ctx.conversation.department_id is None:
+            return None
+        return await repo.get_department(ctx.session, ctx.conversation.department_id)
+
     def _build_system_prompt(self, ctx: TurnContext) -> str:
-        """Instrucción del sistema: lo estable primero, el contexto después."""
+        """Instrucción del sistema: lo estable primero, el contexto después.
+
+        Las instrucciones del departamento van detrás de las generales: las
+        completan y, si chocan, mandan, porque son más concretas. La fecha y
+        la hora van siempre: sin ellas el modelo no sabe qué es «mañana», y
+        una reserva de hotel depende justo de eso.
+        """
         contact_name = (ctx.contact.display_name if ctx.contact else None) or "el usuario"
+        department = ctx.scratch.get("department")
+        partes = [self.settings.ai_system_prompt]
+        if department is not None:
+            partes.append(f"Atiendes en nombre del departamento «{department.name}».")
+            instrucciones = ai_settings.for_department(department).instructions
+            if instrucciones:
+                partes.append(
+                    "Instrucciones propias de este departamento, que mandan sobre las "
+                    f"anteriores si no coinciden:\n{instrucciones}"
+                )
+        partes.append(_current_moment(department, ctx.tenant))
         return (
-            f"{self.settings.ai_system_prompt}\n\n"
+            "\n\n".join(partes)
+            + "\n\n"
             f"Canal de la conversación: {ctx.conversation.channel}. "
             f"Nombre del interlocutor: {contact_name}. "
             "Si el canal es whatsapp, evita el formato Markdown enriquecido y "
@@ -438,7 +473,9 @@ class AIHandler(Handler):
         department_id = ctx.conversation.department_id
         if department_id is None:
             return tools
-        department = await repo.get_department(ctx.session, department_id)
+        department = ctx.scratch.get("department") or await repo.get_department(
+            ctx.session, department_id
+        )
         if department is None or not repo.hotel_module_enabled(department):
             return tools
         return [*tools, *hotel_booking.HOTEL_TOOLS]
@@ -839,6 +876,28 @@ USAGE_FIELDS = {
     "total_thought_tokens": "thoughts_token_count",
     "total_tokens": "total_tokens",
 }
+
+
+_WEEKDAYS = ("lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo")
+_MONTHS = (
+    "enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto",
+    "septiembre", "octubre", "noviembre", "diciembre",
+)
+
+
+def _current_moment(department: Any, tenant: Any) -> str:
+    """«Fecha y hora actual: jueves 22 de octubre de 2026, 14:35 (America/Asuncion).»
+
+    En la zona del departamento, o la de la empresa si no fija una; es la
+    misma con la que se calcula el horario de atención.
+    """
+    policy = resolve_service_policy(department, getattr(tenant, "settings", None))
+    zone = resolve_timezone(policy.timezone)
+    ahora = utcnow().astimezone(zone)
+    return (
+        f"Fecha y hora actual: {_WEEKDAYS[ahora.weekday()]} {ahora.day} de "
+        f"{_MONTHS[ahora.month - 1]} de {ahora.year}, {ahora:%H:%M} ({zone.key})."
+    )
 
 
 def _gemini_usage(usage: Any) -> dict[str, int]:

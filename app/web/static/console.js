@@ -231,6 +231,9 @@
     reportsChannels: document.querySelector("#reports-channels tbody"),
     reportsAgents: document.querySelector("#reports-agents tbody"),
     knowledgeForm: document.getElementById("knowledge-form"),
+    newLabelDepartment: document.getElementById("new-label-department"),
+    newCannedDepartment: document.getElementById("new-canned-department"),
+    newMacroDepartment: document.getElementById("new-macro-department"),
     assistantForm: document.getElementById("assistant-form"),
     assistantProvider: document.getElementById("assistant-provider"),
     assistantModel: document.getElementById("assistant-model"),
@@ -239,6 +242,7 @@
     assistantEffort: document.getElementById("assistant-effort"),
     assistantSave: document.getElementById("assistant-save"),
     assistantReset: document.getElementById("assistant-reset"),
+    assistantDepartments: document.getElementById("assistant-departments"),
     knowledgeTitle: document.getElementById("knowledge-title"),
     knowledgeDepartment: document.getElementById("knowledge-department"),
     knowledgeText: document.getElementById("knowledge-text"),
@@ -610,7 +614,21 @@
     renderConversationState();
     renderConversations();
     renderConversationLabelToggles();
+    renderMacroButtons();
     await Promise.all([loadMessages(), loadNotes(), loadAssignments(), loadContact()]);
+  }
+
+  /** ¿Sirve este recurso en esa conversación? Lo de toda la empresa, siempre;
+      lo de un departamento, solo en sus conversaciones. */
+  function fitsConversation(row, conversation) {
+    return !row.department_id || (conversation && row.department_id === conversation.department_id);
+  }
+
+  /** « · Hotel» detrás del nombre, para distinguir en las listas de
+      administración lo que es de un departamento. */
+  function departmentSuffix(row) {
+    const department = state.departments.find((d) => d.id === row.department_id);
+    return department ? ` · ${department.name}` : "";
   }
 
   function renderConversationLabelToggles() {
@@ -632,15 +650,19 @@
       return;
     }
     const activeIds = new Set((conversation.labels || []).map((label) => label.id));
-    state.labels.forEach((label) => {
-      const chip = document.createElement("button");
-      chip.type = "button";
-      chip.className = `label-toggle${activeIds.has(label.id) ? " is-active" : ""}`;
-      chip.style.backgroundColor = label.color;
-      chip.textContent = label.name;
-      chip.addEventListener("click", () => toggleConversationLabel(label.id));
-      dom.conversationLabelToggles.appendChild(chip);
-    });
+    // Las que ya tiene se muestran siempre, para poder quitarlas aunque sean
+    // de un departamento anterior a una derivación.
+    state.labels
+      .filter((label) => activeIds.has(label.id) || fitsConversation(label, conversation))
+      .forEach((label) => {
+        const chip = document.createElement("button");
+        chip.type = "button";
+        chip.className = `label-toggle${activeIds.has(label.id) ? " is-active" : ""}`;
+        chip.style.backgroundColor = label.color;
+        chip.textContent = label.name;
+        chip.addEventListener("click", () => toggleConversationLabel(label.id));
+        dom.conversationLabelToggles.appendChild(chip);
+      });
   }
 
   async function toggleConversationLabel(labelId) {
@@ -1237,8 +1259,9 @@
     const query = match[1].toLowerCase();
     state.cannedMatches = state.cannedResponses.filter(
       (canned) =>
-        canned.shortcode.toLowerCase().includes(query)
-        || canned.title.toLowerCase().includes(query),
+        fitsConversation(canned, state.selected)
+        && (canned.shortcode.toLowerCase().includes(query)
+          || canned.title.toLowerCase().includes(query)),
     );
     state.cannedHighlight = state.cannedMatches.length > 0 ? 0 : -1;
     renderCannedSuggestions();
@@ -1795,6 +1818,15 @@
     fillWithPlaceholder(dom.hotelAdminDepartment, i18n.t("aside.choose"));
     fillWithPlaceholder(dom.hotelDepartment, i18n.t("aside.choose"));
     fillCsatDepartments();
+    for (const select of [
+      dom.newLabelDepartment,
+      dom.newCannedDepartment,
+      dom.newMacroDepartment,
+    ]) {
+      const elegido = select.value;
+      fillWithPlaceholder(select, i18n.t("knowledge.wholeCompany"));
+      select.value = elegido;
+    }
 
     // El horario conserva el departamento elegido si sigue existiendo, para
     // no perder la selección al recargar la lista tras guardar. La opción de
@@ -2034,13 +2066,21 @@
       { label: "label", reply: "reply", transfer_department: "transfer" }[action]
     }`);
     dom.macroStepTarget.textContent = "";
-    (state[spec.origen] || []).forEach((row) => {
-      const option = document.createElement("option");
-      option.value = row.id;
-      option.textContent = row.name || `/${row.shortcode} — ${row.title}`;
-      dom.macroStepTarget.appendChild(option);
-    });
+    const departamento = dom.newMacroDepartment.value || null;
+    (state[spec.origen] || [])
+      .filter(
+        (row) =>
+          spec.origen === "departments" || !row.department_id || row.department_id === departamento,
+      )
+      .forEach((row) => {
+        const option = document.createElement("option");
+        option.value = row.id;
+        option.textContent = row.name || `/${row.shortcode} — ${row.title}`;
+        dom.macroStepTarget.appendChild(option);
+      });
   }
+
+  dom.newMacroDepartment.addEventListener("change", refreshMacroStepFields);
 
   function renderMacroDraft() {
     dom.macroSteps.textContent = "";
@@ -2114,7 +2154,11 @@
     try {
       await api("/api/macros", {
         method: "POST",
-        body: JSON.stringify({ name, steps: state.macroDraft }),
+        body: JSON.stringify({
+          name,
+          steps: state.macroDraft,
+          department_id: dom.newMacroDepartment.value || null,
+        }),
       });
       dom.newMacroName.value = "";
       state.macroDraft = [];
@@ -2144,10 +2188,10 @@
       state.macros.forEach((macro) => {
         const item = document.createElement("li");
         const label = document.createElement("span");
-        label.textContent = i18n.t("macro.stepCount", {
+        label.textContent = `${i18n.t("macro.stepCount", {
           name: macro.name,
           n: macro.steps.length,
-        });
+        })}${departmentSuffix(macro)}`;
         label.title = macro.steps.map(describeMacroStep).join(" → ");
         item.appendChild(label);
         const remove = document.createElement("button");
@@ -2171,8 +2215,9 @@
 
   function renderMacroButtons() {
     dom.macroButtons.textContent = "";
-    dom.macroPanel.hidden = state.macros.length === 0;
-    state.macros.forEach((macro) => {
+    const aplicables = state.macros.filter((macro) => fitsConversation(macro, state.selected));
+    dom.macroPanel.hidden = aplicables.length === 0;
+    aplicables.forEach((macro) => {
       const button = document.createElement("button");
       button.type = "button";
       button.className = "macro-run";
@@ -2389,7 +2434,7 @@
       state.labels.forEach((label) => {
         const item = document.createElement("li");
         const swatch = document.createElement("span");
-        swatch.textContent = label.name;
+        swatch.textContent = `${label.name}${departmentSuffix(label)}`;
         swatch.style.color = label.color;
         item.appendChild(swatch);
         const remove = document.createElement("button");
@@ -2425,7 +2470,11 @@
     try {
       await api("/api/labels", {
         method: "POST",
-        body: JSON.stringify({ name, color: dom.newLabelColor.value }),
+        body: JSON.stringify({
+          name,
+          color: dom.newLabelColor.value,
+          department_id: dom.newLabelDepartment.value || null,
+        }),
       });
       dom.newLabelName.value = "";
       await loadLabels();
@@ -2455,7 +2504,7 @@
       state.cannedResponses.forEach((canned) => {
         const item = document.createElement("li");
         const label = document.createElement("span");
-        label.textContent = `/${canned.shortcode} — ${canned.title}`;
+        label.textContent = `/${canned.shortcode} — ${canned.title}${departmentSuffix(canned)}`;
         item.appendChild(label);
         const remove = document.createElement("button");
         remove.type = "button";
@@ -2487,7 +2536,12 @@
     try {
       await api("/api/canned-responses", {
         method: "POST",
-        body: JSON.stringify({ shortcode, title, body }),
+        body: JSON.stringify({
+          shortcode,
+          title,
+          body,
+          department_id: dom.newCannedDepartment.value || null,
+        }),
       });
       dom.newCannedShortcode.value = "";
       dom.newCannedTitle.value = "";
@@ -4002,6 +4056,88 @@
     dom.assistantModelInfo.textContent = describeModel(settings.model);
   }
 
+  /** Una ficha por departamento: interruptor, instrucciones y «Guardar». */
+  function buildDepartmentAssistant(row) {
+    const card = document.createElement("form");
+    card.className = "assistant-department";
+
+    const title = document.createElement("h4");
+    title.textContent = row.is_active ? row.name : `${row.name} (${i18n.t("rules.inactive").toLowerCase()})`;
+    card.appendChild(title);
+
+    const toggle = document.createElement("label");
+    toggle.className = "panel__field panel__field--checkbox";
+    const enabled = document.createElement("input");
+    enabled.type = "checkbox";
+    enabled.id = `assistant-enabled-${row.id}`;
+    enabled.checked = row.enabled;
+    const toggleText = document.createElement("span");
+    toggleText.textContent = i18n.t("assistant.departmentEnabled");
+    toggle.append(enabled, toggleText);
+    card.appendChild(toggle);
+
+    const field = document.createElement("label");
+    field.className = "panel__field";
+    const fieldText = document.createElement("span");
+    fieldText.textContent = i18n.t("assistant.departmentInstructions");
+    const instructions = document.createElement("textarea");
+    instructions.id = `assistant-instructions-${row.id}`;
+    instructions.rows = 4;
+    instructions.maxLength = 4000;
+    instructions.placeholder = i18n.t("assistant.departmentPlaceholder");
+    instructions.value = row.instructions;
+    field.append(fieldText, instructions);
+    card.appendChild(field);
+
+    const save = document.createElement("button");
+    save.type = "submit";
+    save.className = "send-button";
+    save.textContent = i18n.t("assistant.save");
+    card.appendChild(save);
+
+    card.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      showAdminError("");
+      save.disabled = true;
+      try {
+        await api(`/api/admin/ai/departments/${row.id}`, {
+          method: "PUT",
+          body: JSON.stringify({
+            enabled: enabled.checked,
+            instructions: instructions.value,
+          }),
+        });
+        setStatus(i18n.t("assistant.departmentSaved", { name: row.name }));
+      } catch (error) {
+        showAdminError(error.message);
+      } finally {
+        save.disabled = false;
+      }
+    });
+    return card;
+  }
+
+  async function loadDepartmentAssistants() {
+    dom.assistantDepartments.replaceChildren();
+    let rows;
+    try {
+      rows = await api("/api/admin/ai/departments");
+    } catch (error) {
+      showAdminError(error.message);
+      return;
+    }
+    if (rows.length === 0) {
+      const empty = document.createElement("p");
+      empty.className = "console__muted";
+      empty.textContent = i18n.t("admin.departmentsEmpty");
+      dom.assistantDepartments.appendChild(empty);
+      return;
+    }
+    for (const row of rows) {
+      dom.assistantDepartments.appendChild(buildDepartmentAssistant(row));
+    }
+  }
+
   async function loadAssistant() {
     try {
       fillAssistant(await api("/api/admin/ai"));
@@ -4009,6 +4145,7 @@
       showAdminError(error.message);
       return;
     }
+    await loadDepartmentAssistants();
     // El catálogo llega aparte: puede tardar, o no llegar, y el formulario
     // tiene que poder usarse igual.
     try {

@@ -4205,12 +4205,13 @@ async def _put_conversation_in_department(conversation_id: str, department_id: s
 
 
 def _tool_ctx(session: Any, conversation: Any, *, contact: Any = None) -> Any:
-    """Contexto mínimo: hotel_booking.dispatch solo mira estos cuatro campos."""
+    """Contexto mínimo: lo que miran hotel_booking.dispatch y las herramientas del asistente."""
     return SimpleNamespace(
         session=session,
         tenant=SimpleNamespace(id=conversation.tenant_id, slug="default"),
         conversation=conversation,
         contact=contact,
+        scratch={},
     )
 
 

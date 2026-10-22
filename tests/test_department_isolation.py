@@ -208,3 +208,153 @@ async def test_ai_usage_in_reports_follows_the_department_scope(ramas, as_agent,
 
     assert suyo["input_tokens"] == 100
     assert total["input_tokens"] == 1_100
+
+
+# --------------------------------------------------------------------------- #
+# Respuestas guardadas, etiquetas y macros por departamento
+# --------------------------------------------------------------------------- #
+async def _recursos(ramas) -> dict[str, Any]:
+    """Una de cada: de toda la empresa, del Hotel y de Informática."""
+    admin = ramas["admin"]
+    creados: dict[str, Any] = {}
+    for clave, departamento in (
+        ("empresa", None),
+        ("hotel", ramas["hotel"]["id"]),
+        ("informatica", ramas["informatica"]["id"]),
+    ):
+        etiqueta = await admin.post(
+            "/api/labels", json={"name": f"etiqueta-{clave}", "department_id": departamento}
+        )
+        respuesta = await admin.post(
+            "/api/canned-responses",
+            json={
+                "shortcode": f"r-{clave}",
+                "title": clave,
+                "body": f"texto {clave}",
+                "department_id": departamento,
+            },
+        )
+        assert etiqueta.status_code == respuesta.status_code == 201, etiqueta.text
+        macro = await admin.post(
+            "/api/macros",
+            json={
+                "name": f"macro-{clave}",
+                "department_id": departamento,
+                "steps": [{"action": "label", "label_id": etiqueta.json()["id"]}],
+            },
+        )
+        assert macro.status_code == 201, macro.text
+        creados[clave] = {
+            "label": etiqueta.json()["id"],
+            "canned": respuesta.json()["id"],
+            "macro": macro.json()["id"],
+        }
+    return creados
+
+
+async def test_each_agent_only_lists_what_belongs_to_her_departments(ramas, as_agent, team):
+    recursos = await _recursos(ramas)
+    ana = await as_agent(team["ana"]["email"])
+
+    for ruta, clave in (("/api/labels", "label"), ("/api/canned-responses", "canned"),
+                        ("/api/macros", "macro")):
+        suyos = {fila["id"] for fila in (await ana.get(ruta)).json()}
+        todos = {fila["id"] for fila in (await ramas["admin"].get(ruta)).json()}
+        assert recursos["empresa"][clave] in suyos, ruta
+        assert recursos["hotel"][clave] in suyos, ruta
+        assert recursos["informatica"][clave] not in suyos, ruta
+        assert recursos["informatica"][clave] in todos, ruta
+
+
+async def test_a_label_of_another_department_cannot_be_applied(ramas, as_agent, team):
+    recursos = await _recursos(ramas)
+    admin = ramas["admin"]
+    propia = ramas["propia"]  # conversación del Hotel
+
+    ajena = await admin.put(
+        f"/api/conversations/{propia}/labels",
+        json={"label_ids": [recursos["informatica"]["label"]]},
+    )
+    assert ajena.status_code == 422
+
+    valida = await admin.put(
+        f"/api/conversations/{propia}/labels",
+        json={"label_ids": [recursos["empresa"]["label"], recursos["hotel"]["label"]]},
+    )
+    assert valida.status_code == 200, valida.text
+
+
+async def test_labels_already_applied_survive_a_transfer(ramas, as_agent, team):
+    """Derivar no obliga a quitar lo que se puso en el departamento anterior."""
+    recursos = await _recursos(ramas)
+    admin = ramas["admin"]
+    propia = ramas["propia"]
+    await admin.put(
+        f"/api/conversations/{propia}/labels", json={"label_ids": [recursos["hotel"]["label"]]}
+    )
+    await admin.post(
+        f"/api/conversations/{propia}/transfer",
+        json={"to_department_id": ramas["informatica"]["id"]},
+    )
+
+    otra_mas = await admin.put(
+        f"/api/conversations/{propia}/labels",
+        json={"label_ids": [recursos["hotel"]["label"], recursos["informatica"]["label"]]},
+    )
+    assert otra_mas.status_code == 200, otra_mas.text
+
+
+async def test_a_macro_only_runs_in_its_department(ramas, as_agent, team):
+    recursos = await _recursos(ramas)
+    ana = await as_agent(team["ana"]["email"])
+    await ana.post(f"/api/conversations/{ramas['propia']}/claim")
+
+    ajena = await ramas["admin"].post(
+        f"/api/conversations/{ramas['propia']}/macros/{recursos['informatica']['macro']}"
+    )
+    assert ajena.status_code == 422
+
+    # Ana ni siquiera la ve: para ella no existe.
+    oculta = await ana.post(
+        f"/api/conversations/{ramas['propia']}/macros/{recursos['informatica']['macro']}"
+    )
+    assert oculta.status_code == 404
+
+    propia = await ana.post(
+        f"/api/conversations/{ramas['propia']}/macros/{recursos['hotel']['macro']}"
+    )
+    assert propia.status_code == 200, propia.text
+
+
+async def test_a_company_macro_cannot_use_a_department_label(ramas):
+    recursos = await _recursos(ramas)
+
+    respuesta = await ramas["admin"].post(
+        "/api/macros",
+        json={
+            "name": "mezcla",
+            "steps": [{"action": "label", "label_id": recursos["hotel"]["label"]}],
+        },
+    )
+    assert respuesta.status_code == 422
+
+
+async def test_a_canned_response_can_move_to_another_department(ramas):
+    recursos = await _recursos(ramas)
+    admin = ramas["admin"]
+
+    movida = await admin.patch(
+        f"/api/canned-responses/{recursos['empresa']['canned']}",
+        json={"department_id": ramas["informatica"]["id"]},
+    )
+    assert movida.json()["department_id"] == ramas["informatica"]["id"]
+
+    sin_tocar = await admin.patch(
+        f"/api/canned-responses/{recursos['empresa']['canned']}", json={"title": "otro"}
+    )
+    assert sin_tocar.json()["department_id"] == ramas["informatica"]["id"]
+
+    a_toda = await admin.patch(
+        f"/api/canned-responses/{recursos['empresa']['canned']}", json={"department_id": None}
+    )
+    assert a_toda.json()["department_id"] is None

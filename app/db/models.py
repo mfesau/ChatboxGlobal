@@ -297,6 +297,11 @@ class CannedResponse(Base, TimestampMixin):
     shortcode: Mapped[str] = mapped_column(String(40), nullable=False)
     title: Mapped[str] = mapped_column(String(160), nullable=False)
     body: Mapped[str] = mapped_column(Text, nullable=False)
+    #: Nulo = de toda la empresa; con departamento, solo lo ve y lo usa quien
+    #: atiende ese departamento (ver ``repositories.visible_in_departments``).
+    department_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("departments.id", ondelete="CASCADE"), index=True
+    )
 
 
 class Label(Base, TimestampMixin):
@@ -311,6 +316,11 @@ class Label(Base, TimestampMixin):
     )
     name: Mapped[str] = mapped_column(String(80), nullable=False)
     color: Mapped[str] = mapped_column(String(20), default="#6b7280", nullable=False)
+    #: Nulo = de toda la empresa; con departamento, solo lo ve y lo usa quien
+    #: atiende ese departamento (ver ``repositories.visible_in_departments``).
+    department_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("departments.id", ondelete="CASCADE"), index=True
+    )
 
 
 class SavedView(Base, TimestampMixin):
@@ -357,6 +367,11 @@ class Macro(Base, TimestampMixin):
     )
     name: Mapped[str] = mapped_column(String(80), nullable=False)
     steps: Mapped[list[Any]] = mapped_column(JSONBType, default=list, nullable=False)
+    #: Nulo = de toda la empresa; con departamento, solo lo ve y lo usa quien
+    #: atiende ese departamento (ver ``repositories.visible_in_departments``).
+    department_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("departments.id", ondelete="CASCADE"), index=True
+    )
 
 
 class ConversationLabel(Base):

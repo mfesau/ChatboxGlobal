@@ -103,6 +103,8 @@ class LabelOut(BaseModel):
     id: uuid.UUID
     name: str
     color: str
+    #: Nulo = de toda la empresa.
+    department_id: uuid.UUID | None = None
 
 
 class ConversationOut(BaseModel):
@@ -372,12 +374,15 @@ class CannedResponseOut(BaseModel):
     shortcode: str
     title: str
     body: str
+    department_id: uuid.UUID | None = None
 
 
 class CannedResponseIn(BaseModel):
     shortcode: str = Field(min_length=1, max_length=40, pattern=SHORTCODE_PATTERN)
     title: str = Field(min_length=1, max_length=160)
     body: str = Field(min_length=1, max_length=4_000)
+    #: Nulo = de toda la empresa.
+    department_id: uuid.UUID | None = None
 
 
 class CannedResponsePatchIn(BaseModel):
@@ -386,11 +391,14 @@ class CannedResponsePatchIn(BaseModel):
     )
     title: str | None = Field(default=None, min_length=1, max_length=160)
     body: str | None = Field(default=None, min_length=1, max_length=4_000)
+    #: Solo se cambia si viene en la petición; ``null`` la pasa a toda la empresa.
+    department_id: uuid.UUID | None = None
 
 
 class LabelIn(BaseModel):
     name: str = Field(min_length=1, max_length=80)
     color: str = Field(default="#6b7280", max_length=20)
+    department_id: uuid.UUID | None = None
 
 
 class ConversationLabelsIn(BaseModel):
@@ -422,11 +430,13 @@ class MacroOut(BaseModel):
     id: uuid.UUID
     name: str
     steps: list[MacroStep]
+    department_id: uuid.UUID | None = None
 
 
 class MacroIn(BaseModel):
     name: str = Field(min_length=1, max_length=80)
     steps: list[MacroStep] = Field(min_length=1, max_length=20)
+    department_id: uuid.UUID | None = None
 
     @field_validator("steps")
     @classmethod
@@ -3078,16 +3088,48 @@ async def hotel_report(
 # Respuestas guardadas
 # --------------------------------------------------------------------------- #
 def _canned_response_out(row: CannedResponse) -> CannedResponseOut:
-    return CannedResponseOut(id=row.id, shortcode=row.shortcode, title=row.title, body=row.body)
+    return CannedResponseOut(
+        id=row.id,
+        shortcode=row.shortcode,
+        title=row.title,
+        body=row.body,
+        department_id=row.department_id,
+    )
+
+
+def _label_out(row: Any) -> LabelOut:
+    return LabelOut(id=row.id, name=row.name, color=row.color, department_id=row.department_id)
+
+
+def _usable_by(principal: Principal, row: Any) -> bool:
+    """¿Puede quien pregunta ver y usar este recurso de un departamento?"""
+    allowed = principal.department_ids
+    return allowed is None or row.department_id is None or row.department_id in allowed
+
+
+async def _require_department(
+    session: Any, *, tenant_id: uuid.UUID, department_id: uuid.UUID | None
+) -> None:
+    """El departamento al que se ata un recurso tiene que existir en el inquilino."""
+    if department_id is None:
+        return
+    department = await repo.get_department(session, department_id)
+    if department is None or department.tenant_id != tenant_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="El departamento no existe"
+        )
 
 
 @router.get("/canned-responses", response_model=list[CannedResponseOut])
 async def list_canned_responses(
     session: SessionDep, settings: SettingsDep, principal: PrincipalDep, tenant: str | None = None
 ) -> list[CannedResponseOut]:
-    """Lista de respuestas guardadas. Cualquier agente las usa al responder."""
+    """Respuestas guardadas que quien pregunta puede usar: las de toda la
+    empresa y las de sus departamentos. Administración las ve todas."""
     tenant_row = await repo.get_or_create_tenant(session, tenant or settings.default_tenant_slug)
-    canned_responses = await repo.list_canned_responses(session, tenant_id=tenant_row.id)
+    canned_responses = await repo.list_canned_responses(
+        session, tenant_id=tenant_row.id, department_ids=principal.department_ids
+    )
     return [_canned_response_out(row) for row in canned_responses]
 
 
@@ -3109,8 +3151,14 @@ async def create_canned_response(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail="Ya existe una respuesta con ese atajo"
         )
+    await _require_department(session, tenant_id=tenant_row.id, department_id=body.department_id)
     canned_response = await repo.create_canned_response(
-        session, tenant_id=tenant_row.id, shortcode=body.shortcode, title=body.title, body=body.body
+        session,
+        tenant_id=tenant_row.id,
+        shortcode=body.shortcode,
+        title=body.title,
+        body=body.body,
+        department_id=body.department_id,
     )
     await repo.record_audit(
         session,
@@ -3154,6 +3202,11 @@ async def update_canned_response(
         canned_response.title = body.title
     if body.body is not None:
         canned_response.body = body.body
+    if "department_id" in body.model_fields_set:
+        await _require_department(
+            session, tenant_id=tenant_row.id, department_id=body.department_id
+        )
+        canned_response.department_id = body.department_id
     await session.flush()
     return _canned_response_out(canned_response)
 
@@ -3192,10 +3245,13 @@ async def delete_canned_response(
 async def list_labels(
     session: SessionDep, settings: SettingsDep, principal: PrincipalDep, tenant: str | None = None
 ) -> list[LabelOut]:
-    """Lista de etiquetas del inquilino."""
+    """Etiquetas que quien pregunta puede usar: las de toda la empresa y las
+    de sus departamentos. Administración las ve todas."""
     tenant_row = await repo.get_or_create_tenant(session, tenant or settings.default_tenant_slug)
-    labels = await repo.list_labels(session, tenant_id=tenant_row.id)
-    return [LabelOut(id=label.id, name=label.name, color=label.color) for label in labels]
+    labels = await repo.list_labels(
+        session, tenant_id=tenant_row.id, department_ids=principal.department_ids
+    )
+    return [_label_out(label) for label in labels]
 
 
 @router.post("/labels", status_code=status.HTTP_201_CREATED, response_model=LabelOut)
@@ -3212,8 +3268,13 @@ async def create_label(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail="Ya existe una etiqueta con ese nombre"
         )
+    await _require_department(session, tenant_id=tenant_row.id, department_id=body.department_id)
     label = await repo.create_label(
-        session, tenant_id=tenant_row.id, name=body.name, color=body.color
+        session,
+        tenant_id=tenant_row.id,
+        name=body.name,
+        color=body.color,
+        department_id=body.department_id,
     )
     await repo.record_audit(
         session,
@@ -3224,7 +3285,7 @@ async def create_label(
         subject_id=str(label.id),
         detail={"name": label.name},
     )
-    return LabelOut(id=label.id, name=label.name, color=label.color)
+    return _label_out(label)
 
 
 @router.delete("/labels/{label_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -3259,13 +3320,29 @@ async def set_conversation_labels(
     session: SessionDep,
     principal: PrincipalDep,
 ) -> list[LabelOut]:
-    """Fija las etiquetas de una conversación. Cualquiera con acceso a ella puede hacerlo."""
+    """Fija las etiquetas de una conversación. Cualquiera con acceso a ella puede hacerlo.
+
+    Una etiqueta nueva tiene que ser de toda la empresa o del departamento de
+    la conversación. Las que ya tenía se respetan aunque no lo sean —una
+    conversación derivada conserva lo que le pusieron antes—: quitarlas al
+    tocar otra sería borrar algo que nadie pidió borrar.
+    """
+    await session.refresh(conversation, attribute_names=["labels"])
+    ya_puestas = {label.id for label in conversation.labels}
     for label_id in body.label_ids:
         label = await repo.get_label(session, label_id)
         if label is None or label.tenant_id != conversation.tenant_id:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Una de las etiquetas indicadas no existe",
+            )
+        if label_id not in ya_puestas and not (
+            repo.fits_department(label, conversation.department_id)
+            and _usable_by(principal, label)
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"La etiqueta «{label.name}» es de otro departamento",
             )
     await repo.set_conversation_labels(session, conversation=conversation, label_ids=body.label_ids)
     await repo.record_audit(
@@ -3278,7 +3355,7 @@ async def set_conversation_labels(
         detail={"label_ids": [str(i) for i in body.label_ids]},
     )
     return [
-        LabelOut(id=label.id, name=label.name, color=label.color)
+        _label_out(label)
         for label in conversation.labels
     ]
 
@@ -3287,16 +3364,25 @@ async def set_conversation_labels(
 # Macros
 # --------------------------------------------------------------------------- #
 def _macro_out(row: Any) -> MacroOut:
-    return MacroOut(id=row.id, name=row.name, steps=[MacroStep(**s) for s in row.steps or []])
+    return MacroOut(
+        id=row.id,
+        name=row.name,
+        steps=[MacroStep(**s) for s in row.steps or []],
+        department_id=row.department_id,
+    )
 
 
 @router.get("/macros", response_model=list[MacroOut])
 async def list_macros(
     session: SessionDep, settings: SettingsDep, principal: PrincipalDep, tenant: str | None = None
 ) -> list[MacroOut]:
-    """Macros del inquilino. Cualquier agente las ejecuta sobre sus hilos."""
+    """Macros que quien pregunta puede ejecutar: las de toda la empresa y las
+    de sus departamentos. Administración las ve todas."""
     tenant_row = await repo.get_or_create_tenant(session, tenant or settings.default_tenant_slug)
-    return [_macro_out(row) for row in await repo.list_macros(session, tenant_id=tenant_row.id)]
+    rows = await repo.list_macros(
+        session, tenant_id=tenant_row.id, department_ids=principal.department_ids
+    )
+    return [_macro_out(row) for row in rows]
 
 
 @router.post("/macros", status_code=status.HTTP_201_CREATED, response_model=MacroOut)
@@ -3313,16 +3399,32 @@ async def create_macro(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail="Ya existe una macro con ese nombre"
         )
+    await _require_department(session, tenant_id=tenant_row.id, department_id=body.department_id)
     # Lo que la macro apunta debe existir ahora: guardar una macro rota sería
-    # descubrirlo recién el día que alguien la use.
+    # descubrirlo recién el día que alguien la use. Y debe valer allí donde la
+    # macro se usa: una macro de toda la empresa no puede poner una etiqueta
+    # del Hotel en una conversación de Informática.
     for step in body.steps:
-        await _resolve_macro_step(session, step, tenant_id=tenant_row.id)
+        target = await _resolve_macro_step(session, step, tenant_id=tenant_row.id)
+        if (
+            step.action in {"label", "reply"}
+            and target.department_id is not None
+            and target.department_id != body.department_id
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    "Un paso usa una etiqueta o respuesta de otro departamento que el "
+                    "de la macro"
+                ),
+            )
 
     macro = await repo.create_macro(
         session,
         tenant_id=tenant_row.id,
         name=body.name,
         steps=[s.model_dump(mode="json", exclude_none=True) for s in body.steps],
+        department_id=body.department_id,
     )
     await repo.record_audit(
         session,
@@ -3405,8 +3507,17 @@ async def run_macro(
     respuesta que la macro prometía—.
     """
     macro = await repo.get_macro(session, macro_id)
-    if macro is None or macro.tenant_id != conversation.tenant_id:
+    if (
+        macro is None
+        or macro.tenant_id != conversation.tenant_id
+        or not _usable_by(principal, macro)
+    ):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Macro no encontrada")
+    if not repo.fits_department(macro, conversation.department_id):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Esta macro es de otro departamento que la conversación",
+        )
 
     aplicados: list[str] = []
     for raw in macro.steps or []:
@@ -4306,7 +4417,7 @@ def _conversation_out(row: Conversation) -> ConversationOut:
         sla_status=_sla_status(row),
         sla_due_at=row.first_response_due_at.isoformat() if row.first_response_due_at else None,
         labels=[
-            LabelOut(id=label.id, name=label.name, color=label.color) for label in row.labels
+            _label_out(label) for label in row.labels
         ],
     )
 
