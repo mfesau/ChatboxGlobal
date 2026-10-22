@@ -239,6 +239,9 @@
     systemGenerated: document.getElementById("system-generated"),
     systemCards: document.getElementById("system-cards"),
     systemChannels: document.querySelector("#system-channels tbody"),
+    translateReplyField: document.getElementById("translate-reply-field"),
+    translateReply: document.getElementById("translate-reply"),
+    translateReplyLabel: document.getElementById("translate-reply-label"),
     assistantForm: document.getElementById("assistant-form"),
     assistantProvider: document.getElementById("assistant-provider"),
     assistantModel: document.getElementById("assistant-model"),
@@ -317,7 +320,8 @@
       ...options,
     });
     if (response.status === 401) {
-      showGate();
+      // La sesión caducó: lo atiende el acceso (ver «console:session-expired»).
+      document.dispatchEvent(new CustomEvent("console:session-expired"));
       const detail = await response.text();
       throw new Error(extractDetail(detail, response.status, "Sesión no válida"));
     }
@@ -358,6 +362,8 @@
   }
 
   /* ---------------------------------------------------------------- acceso */
+
+  document.addEventListener("console:session-expired", () => showGate());
 
   function showGate() {
     // "/" es la entrada única de la aplicación: sin sesión de agente válida,
@@ -730,6 +736,7 @@
     try {
       const messages = await api(`/api/conversations/${state.selected.id}/messages`);
       dom.thread.textContent = "";
+      const burbujas = new Map();
       messages.forEach((message) => {
         // El cliente queda a la izquierda; el equipo, a la derecha.
         const side = message.direction === "inbound" ? "outbound" : "inbound";
@@ -750,13 +757,99 @@
         )}`;
         bubble.appendChild(meta);
         dom.thread.appendChild(bubble);
+        burbujas.set(message.id, { bubble, meta, message });
       });
       dom.thread.scrollTop = dom.thread.scrollHeight;
       setStatus(i18n.t("thread.messageCount", { n: messages.length }));
       updateSend();
+      translateThread(state.selected.id, burbujas);
     } catch (error) {
       handleThreadError(error, i18n.t("thread.loadFailed", { error: error.message }));
     }
+  }
+
+  /* ----------------------------------------------------------- traducción */
+
+  /* Lo que escribe el cliente aparece también en el idioma de la consola, y
+     la respuesta puede salir en el del cliente. Así cualquier agente puede
+     llevar cualquier conversación. El original nunca se tapa: la traducción
+     va debajo, con su idioma delante. */
+
+  //: Idioma del cliente en la conversación abierta, si se conoce.
+  state.customerLanguage = null;
+
+  function languageName(code) {
+    const clave = `translate.lang.${code}`;
+    const nombre = i18n.t(clave);
+    return nombre === clave ? code : nombre;
+  }
+
+  function showTranslation(entry, texto) {
+    if (!texto || texto === entry.message.text) {
+      return;
+    }
+    entry.bubble.querySelector(".bubble__translation")?.remove();
+    const linea = document.createElement("span");
+    linea.className = "bubble__translation";
+    const etiqueta = document.createElement("strong");
+    etiqueta.textContent = i18n.t("translate.in", { lang: languageName(i18n.current()) });
+    linea.append(etiqueta, document.createTextNode(` ${texto}`));
+    entry.bubble.insertBefore(linea, entry.meta);
+  }
+
+  function renderTranslateReply() {
+    const cliente = state.customerLanguage;
+    const visible = Boolean(cliente) && cliente !== i18n.current();
+    dom.translateReplyField.hidden = !visible;
+    if (visible) {
+      dom.translateReplyLabel.textContent = i18n.t("translate.reply", {
+        lang: languageName(cliente),
+      });
+    }
+  }
+
+  async function translateThread(conversationId, burbujas) {
+    const destino = i18n.current();
+    // Lo ya traducido se pinta al momento; solo se pregunta por lo que falta.
+    let faltan = false;
+    for (const entry of burbujas.values()) {
+      const guardadas = entry.message.translations || {};
+      if (!entry.message.text) {
+        continue;
+      }
+      if (destino in guardadas) {
+        showTranslation(entry, guardadas[destino]);
+      } else {
+        faltan = true;
+      }
+    }
+    state.customerLanguage = null;
+    let respuesta;
+    try {
+      respuesta = await api(`/api/conversations/${conversationId}/translate`, {
+        method: "POST",
+        body: JSON.stringify({ target: destino }),
+      });
+    } catch (error) {
+      // Sin asistente configurado no hay traducción; el hilo se lee igual.
+      if (faltan) {
+        setStatus(i18n.t("translate.unavailable"));
+      }
+      renderTranslateReply();
+      return;
+    }
+    // La conversación abierta pudo cambiar mientras se traducía.
+    if (state.selected?.id !== conversationId) {
+      return;
+    }
+    for (const [id, texto] of Object.entries(respuesta.translations || {})) {
+      const entry = burbujas.get(id);
+      if (entry) {
+        showTranslation(entry, texto);
+      }
+    }
+    state.customerLanguage = respuesta.customer_language;
+    renderTranslateReply();
   }
 
   /* Un adjunto se muestra según lo que sea. Antes solo se contemplaba la
@@ -1154,9 +1247,19 @@
     }
     dom.send.disabled = true;
     try {
+      const traducir =
+        text && !dom.translateReplyField.hidden && dom.translateReply.checked;
+      if (traducir) {
+        setStatus(i18n.t("translate.sending", { lang: languageName(state.customerLanguage) }));
+      }
       await api(`/api/conversations/${state.selected.id}/reply`, {
         method: "POST",
-        body: JSON.stringify({ text, attachments: attachment ? [attachment] : [] }),
+        body: JSON.stringify({
+          text,
+          attachments: attachment ? [attachment] : [],
+          translate_to: traducir ? state.customerLanguage : null,
+          source_language: i18n.current(),
+        }),
       });
       dom.input.value = "";
       dom.input.style.height = "auto";
@@ -5409,6 +5512,9 @@
   /* Al cambiar de idioma, lo marcado en el HTML lo traduce `i18n` solo; aquí
      se rehace lo que dibuja esta hoja, que no lleva marcas. */
   document.addEventListener("languagechange", () => {
+    if (state.selected) {
+      loadMessages();
+    }
     buildHoursRows();
     refreshMacroStepFields();
     renderMacroDraft();

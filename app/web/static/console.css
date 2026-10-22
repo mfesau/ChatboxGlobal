@@ -1564,3 +1564,25 @@
 .system-pill--ok { background: var(--ok); }
 .system-pill--warn { background: var(--warn); }
 .system-pill--error { background: var(--danger); }
+
+/* Traducción para el equipo, debajo del original. */
+.bubble__translation {
+  display: block;
+  margin-top: 6px;
+  padding-top: 6px;
+  font-size: 13px;
+  border-top: 1px dashed currentColor;
+  opacity: 0.85;
+  white-space: pre-wrap;
+}
+.bubble__translation strong {
+  font-weight: 600;
+}
+.composer__translate {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 0 0;
+  font-size: 13px;
+  color: var(--text-muted);
+}

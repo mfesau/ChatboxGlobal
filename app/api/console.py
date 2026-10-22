@@ -39,7 +39,7 @@ from app.api.deps import (
     authorized_conversation,
 )
 from app.channels.whatsapp import TemplatesUnavailable
-from app.core import csat
+from app.core import csat, translation
 from app.core.branding import (
     BRANDING_SETTINGS_KEY,
     InvalidColor,
@@ -84,6 +84,8 @@ from app.db.models import (
     HotelReservation,
     HotelRoom,
     HotelRoomType,
+    Message,
+    OutboxItem,
     Tenant,
 )
 from app.handlers.builtin import FallbackHandler
@@ -139,6 +141,8 @@ class MessageOut(BaseModel):
     text: str | None
     attachments: list[dict[str, Any]]
     created_at: str | None
+    #: Idioma original y traducciones para el equipo (ver app/core/translation.py).
+    translations: dict[str, Any] = Field(default_factory=dict)
 
 
 class AssignmentOut(BaseModel):
@@ -564,6 +568,11 @@ class ReplyIn(BaseModel):
     text: str = Field(default="", max_length=8_000)
     quick_replies: list[dict[str, str]] = Field(default_factory=list)
     attachments: list[AttachmentIn] = Field(default_factory=list)
+    #: Si viene, el texto se traduce a este idioma antes de enviarlo; el cliente
+    #: recibe la traducción y la consola guarda también lo que se escribió.
+    translate_to: str | None = None
+    #: Idioma en que escribe el agente (el de su consola).
+    source_language: str | None = None
 
 
 class TransferIn(BaseModel):
@@ -777,6 +786,7 @@ async def list_messages(
             text=row.text,
             attachments=list(row.attachments or []),
             created_at=row.created_at.isoformat() if row.created_at else None,
+            translations=dict(row.translations or {}),
         )
         for row in messages
     ]
@@ -787,6 +797,7 @@ async def reply_as_agent(
     conversation: ConversationDep,
     body: ReplyIn,
     session: SessionDep,
+    settings: SettingsDep,
     principal: PrincipalDep,
     orchestrator: OrchestratorDep,
 ) -> dict[str, str]:
@@ -811,6 +822,23 @@ async def reply_as_agent(
             detail="La respuesta necesita texto o al menos un adjunto",
         )
 
+    original = body.text
+    texto = body.text
+    if body.translate_to and body.text:
+        destino = body.translate_to.lower()
+        if destino not in translation.LANGUAGES:
+            raise HTTPException(status_code=422, detail=f"Idioma no admitido: {destino}")
+        tenant_row = await session.get(Tenant, conversation.tenant_id)
+        try:
+            texto = await translation.translate_text(settings, tenant_row, body.text, destino)
+        except translation.TranslationUnavailable as exc:
+            # Mejor no enviar nada que enviar sin traducir algo que el cliente
+            # quizá no entienda: el agente decide si lo manda tal cual.
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=f"No se pudo traducir la respuesta: {exc}",
+            ) from exc
+
     attachments = [Attachment.from_dict(a.model_dump()) for a in body.attachments]
     content_type = (
         attachments[0].content_type if attachments and not body.text else ContentType.TEXT
@@ -818,7 +846,7 @@ async def reply_as_agent(
     outbox_id = await orchestrator.send_from_agent(
         conversation_id=conversation.id,
         outbound=OutboundMessage(
-            text=body.text or None,
+            text=texto or None,
             quick_replies=body.quick_replies,
             attachments=attachments,
             content_type=content_type,
@@ -836,6 +864,17 @@ async def reply_as_agent(
     # encolar y no al entregar, porque lo que se mide es cuánto tardó el
     # equipo en atender, no cuánto tardó el canal en despachar el mensaje.
     await repo.mark_first_human_response(session, conversation=conversation)
+    if texto != original:
+        # Lo que escribió el agente queda como «traducción» a su idioma: así
+        # la consola enseña ambas versiones igual que en lo que escribe el cliente.
+        item = await session.get(OutboxItem, outbox_id)
+        message = await session.get(Message, item.message_id) if item else None
+        if message is not None:
+            idioma = (body.source_language or "").lower() or None
+            message.translations = {
+                translation.SOURCE_KEY: body.translate_to.lower(),
+                **({idioma: original} if idioma else {}),
+            }
     return {"status": "queued", "outbox_id": str(outbox_id)}
 
 

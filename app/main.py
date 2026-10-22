@@ -36,6 +36,7 @@ from app.api import (
     saml,
     session,
     system,
+    translation,
     webhooks,
     ws,
 )
@@ -212,6 +213,7 @@ def create_app() -> FastAPI:
     application.include_router(rules.router)
     application.include_router(ai_settings.router)
     application.include_router(system.router)
+    application.include_router(translation.router)
     application.include_router(console.router)
     application.include_router(attachments.router)
 

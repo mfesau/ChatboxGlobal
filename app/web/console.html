@@ -208,6 +208,13 @@
               Responder
             </button>
           </form>
+          <!-- Se ofrece solo cuando el cliente escribe en otro idioma que el
+               de la consola: la respuesta sale traducida y en el hilo quedan
+               las dos versiones. -->
+          <label class="composer__translate" id="translate-reply-field" hidden>
+            <input type="checkbox" id="translate-reply" checked />
+            <span id="translate-reply-label"></span>
+          </label>
           <p class="composer__meta">
             <span id="console-status" data-i18n="composer.noSelection">Sin conversación seleccionada</span>
             <span class="composer__hint" data-i18n="composer.hint">La respuesta sale por el canal de origen</span>

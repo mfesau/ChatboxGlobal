@@ -639,6 +639,11 @@ class Message(Base, TimestampMixin):
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     #: Carga original del proveedor, conservada para auditoría y reproceso.
     raw: Mapped[dict[str, Any]] = mapped_column(JSONBType, default=dict, nullable=False)
+    #: ``{"_source": "es", "de": "…"}``: idioma original y traducciones para el
+    #: equipo (ver ``app/core/translation.py``). Nulo en un idioma = ya estaba en él.
+    translations: Mapped[dict[str, Any]] = mapped_column(
+        JSONBType, default=dict, nullable=False
+    )
 
     conversation: Mapped[Conversation] = relationship(back_populates="messages")
     events: Mapped[list[MessageEvent]] = relationship(
