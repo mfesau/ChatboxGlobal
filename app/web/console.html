@@ -325,6 +325,8 @@
                     data-i18n="admin.tab.knowledge">Conocimiento</button>
             <button type="button" role="tab" data-admin-tab="assistant" aria-selected="false"
                     data-i18n="admin.tab.assistant">Asistente IA</button>
+            <button type="button" role="tab" data-admin-tab="system" aria-selected="false"
+                    data-i18n="admin.tab.system">Estado del sistema</button>
             <button type="button" role="tab" data-admin-tab="audit" aria-selected="false"
                     data-i18n="admin.tab.audit">Auditoría</button>
           </nav>
@@ -843,6 +845,42 @@
                 asistente encendido.
               </p>
               <div class="assistant-departments" id="assistant-departments"></div>
+            </section>
+          </div>
+
+          <div class="admin-tab-panel" id="admin-tab-system" hidden>
+            <section class="panel">
+              <div class="system-head">
+                <h3 data-i18n="system.title">Estado del sistema</h3>
+                <span class="system-pill" id="system-overall"></span>
+                <button type="button" class="ghost-button" id="system-refresh"
+                        data-i18n="system.refresh">Actualizar</button>
+              </div>
+              <p class="console__muted" data-i18n="system.hint">
+                Las cifras de las últimas 24 horas que delatan un problema antes
+                de que lo note un cliente: errores por canal, fallos del
+                asistente, mensajes atascados en la cola de salida y espacio
+                en disco.
+              </p>
+              <p class="console__muted" id="system-generated"></p>
+              <div class="system-grid" id="system-cards"></div>
+              <h4 data-i18n="system.channels">Canales</h4>
+              <div class="table-scroll">
+                <table class="data-table" id="system-channels">
+                  <thead>
+                    <tr>
+                      <th data-i18n="system.channel">Canal</th>
+                      <th data-i18n="table.status">Estado</th>
+                      <th data-i18n="system.accounts">Cuentas activas</th>
+                      <th data-i18n="system.lastIn">Último recibido</th>
+                      <th data-i18n="system.lastOut">Último enviado</th>
+                      <th data-i18n="system.failures">Envíos fallidos (24 h)</th>
+                      <th data-i18n="system.lastError">Último error</th>
+                    </tr>
+                  </thead>
+                  <tbody></tbody>
+                </table>
+              </div>
             </section>
           </div>
 

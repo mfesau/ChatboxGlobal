@@ -35,6 +35,7 @@ from app.api import (
     rules,
     saml,
     session,
+    system,
     webhooks,
     ws,
 )
@@ -43,6 +44,7 @@ from app.channels.base import ChannelRegistry
 from app.config import get_settings
 from app.core.branding import brand_css, read_accent
 from app.core.dispatcher import OutboxDispatcher
+from app.core.envelope import utcnow
 from app.core.mail_poller import MailPoller
 from app.core.orchestrator import Orchestrator
 from app.db import repositories as repo
@@ -147,6 +149,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.orchestrator = orchestrator
     app.state.dispatcher = dispatcher
     app.state.mail_poller = mail_poller
+    app.state.started_at = utcnow()
 
     await dispatcher.start()
     await mail_poller.start()
@@ -208,6 +211,7 @@ def create_app() -> FastAPI:
     application.include_router(reports.router)
     application.include_router(rules.router)
     application.include_router(ai_settings.router)
+    application.include_router(system.router)
     application.include_router(console.router)
     application.include_router(attachments.router)
 

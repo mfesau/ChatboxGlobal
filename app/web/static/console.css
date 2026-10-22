@@ -242,12 +242,39 @@
 .console__department-tabs {
   display: flex;
   flex: none;
-  align-items: stretch;
-  gap: 4px;
-  padding: 8px 16px 0;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
   overflow-x: auto;
   background: var(--surface-alt);
   border-bottom: 1px solid var(--border);
+}
+
+/* Campo para elegir el departamento de trabajo. */
+.work-department {
+  align-self: center;
+  min-width: 200px;
+  max-width: 320px;
+  padding: 7px 32px 7px 12px;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  background-color: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+}
+.work-department:disabled {
+  cursor: default;
+  opacity: 1;
+}
+.work-department:focus-visible {
+  outline: 2px solid var(--accent, currentColor);
+  outline-offset: 2px;
+}
+.console__department-tabs > .department-tab__logo {
+  align-self: center;
 }
 
 /* «Departamento de trabajo:» delante de las pestañas. */
@@ -1469,3 +1496,71 @@
 .assistant-department h4 {
   margin: 0;
 }
+
+/* Estado del sistema: un semáforo por apartado. */
+.system-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+.system-head h3 {
+  margin: 0;
+}
+.system-head .ghost-button {
+  margin-left: auto;
+}
+.system-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+  margin-block: 12px 20px;
+}
+.system-card {
+  padding: 12px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left-width: 4px;
+  border-radius: 8px;
+}
+.system-card--ok { border-left-color: var(--ok); }
+.system-card--warn { border-left-color: var(--warn); }
+.system-card--error { border-left-color: var(--danger); }
+.system-card header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.system-card h4 {
+  margin: 0;
+}
+.system-card dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 10px;
+  margin: 10px 0 0;
+  font-size: 13px;
+}
+.system-card dt {
+  color: var(--text-muted);
+}
+.system-card dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.system-pill {
+  display: inline-block;
+  padding: 2px 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #fff;
+  border-radius: 999px;
+}
+.system-pill:empty {
+  display: none;
+}
+.system-pill--ok { background: var(--ok); }
+.system-pill--warn { background: var(--warn); }
+.system-pill--error { background: var(--danger); }

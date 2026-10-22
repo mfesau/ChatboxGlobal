@@ -234,6 +234,11 @@
     newLabelDepartment: document.getElementById("new-label-department"),
     newCannedDepartment: document.getElementById("new-canned-department"),
     newMacroDepartment: document.getElementById("new-macro-department"),
+    systemOverall: document.getElementById("system-overall"),
+    systemRefresh: document.getElementById("system-refresh"),
+    systemGenerated: document.getElementById("system-generated"),
+    systemCards: document.getElementById("system-cards"),
+    systemChannels: document.querySelector("#system-channels tbody"),
     assistantForm: document.getElementById("assistant-form"),
     assistantProvider: document.getElementById("assistant-provider"),
     assistantModel: document.getElementById("assistant-model"),
@@ -1956,15 +1961,23 @@
      sentido dentro del departamento que lleva hotel. */
   function syncDepartmentTabs() {
     const active = dom.departmentFilter.value;
-    dom.departmentTabs.querySelectorAll(".department-tab").forEach((tab) => {
-      tab.setAttribute("aria-selected", String(tab.dataset.department === active));
-    });
+    const department = (state.departments || []).find((row) => row.id === active);
+    if (dom.workDepartmentSelect) {
+      dom.workDepartmentSelect.value = active;
+      dom.workDepartmentSelect.title =
+        dom.workDepartmentSelect.options[dom.workDepartmentSelect.selectedIndex]?.textContent || "";
+    }
+    if (dom.workDepartmentLogo) {
+      dom.workDepartmentLogo.hidden = !department?.logo_url;
+      if (department?.logo_url) {
+        dom.workDepartmentLogo.src = department.logo_url;
+      }
+    }
     // Puede correr antes de que las pestañas existan (un filtro que cambia
     // durante el arranque): sin botón todavía, no hay nada que ajustar.
     if (!dom.departmentHotelButton) {
       return;
     }
-    const department = (state.departments || []).find((row) => row.id === active);
     dom.departmentHotelButton.hidden = !department?.hotel_enabled;
   }
 
@@ -2054,41 +2067,35 @@
     rotulo.textContent = i18n.t("work.label");
     dom.departmentTabs.appendChild(rotulo);
 
-    const buildTab = (id, name, logoUrl) => {
-      const tab = document.createElement("button");
-      tab.type = "button";
-      tab.className = "department-tab";
-      tab.setAttribute("role", "tab");
-      tab.dataset.department = id;
-      tab.setAttribute("aria-selected", String(dom.departmentFilter.value === id));
-      if (logoUrl) {
-        const img = document.createElement("img");
-        img.className = "department-tab__logo";
-        img.src = logoUrl;
-        img.alt = "";
-        tab.appendChild(img);
-      }
-      const label = document.createElement("span");
-      label.textContent = name;
-      tab.appendChild(label);
-      tab.addEventListener("click", () => {
-        if (dom.departmentFilter.value === id) {
-          return;
-        }
-        dom.departmentFilter.value = id;
-        dom.departmentFilter.dispatchEvent(new Event("change"));
-      });
-      return tab;
-    };
+    // Un desplegable y no una pestaña por departamento: con muchos áreas las
+    // pestañas no caben, y un campo deja claro que se elige uno solo. Copia
+    // las opciones del filtro oculto, que sigue siendo la fuente de verdad.
+    const logo = document.createElement("img");
+    logo.className = "department-tab__logo";
+    logo.alt = "";
+    logo.hidden = true;
+    dom.departmentTabs.appendChild(logo);
+    dom.workDepartmentLogo = logo;
 
-    if (seesAllDepartments()) {
-      dom.departmentTabs.appendChild(buildTab("", i18n.t("filter.department.all"), null));
-    } else if (options.length === 0) {
-      dom.departmentTabs.appendChild(buildTab("", i18n.t("work.unrouted"), null));
+    const select = document.createElement("select");
+    select.className = "work-department";
+    select.id = "work-department";
+    select.setAttribute("aria-label", i18n.t("work.label"));
+    for (const option of dom.departmentFilter.options) {
+      select.appendChild(new Option(option.textContent, option.value));
     }
-    options.forEach((department) => {
-      dom.departmentTabs.appendChild(buildTab(department.id, department.name, department.logo_url));
+    // Con una sola opción no hay nada que elegir, pero se sigue viendo dónde
+    // se trabaja.
+    select.disabled = select.options.length <= 1;
+    select.addEventListener("change", () => {
+      if (dom.departmentFilter.value === select.value) {
+        return;
+      }
+      dom.departmentFilter.value = select.value;
+      dom.departmentFilter.dispatchEvent(new Event("change"));
     });
+    dom.departmentTabs.appendChild(select);
+    dom.workDepartmentSelect = select;
 
     const hotel = document.createElement("button");
     hotel.type = "button";
@@ -3766,6 +3773,9 @@
       if (tab.dataset.adminTab === "assistant") {
         loadAssistant();
       }
+      if (tab.dataset.adminTab === "system") {
+        loadSystem();
+      }
       if (tab.dataset.adminTab === "rules") {
         loadRules();
       }
@@ -4116,6 +4126,136 @@
       showAdminError(error.message);
     }
   });
+
+  /* ---------------------------------------------- estado del sistema */
+
+  function formatBytes(bytes) {
+    if (bytes == null) {
+      return "—";
+    }
+    const unidades = ["B", "KB", "MB", "GB", "TB"];
+    let valor = bytes;
+    let i = 0;
+    while (valor >= 1024 && i < unidades.length - 1) {
+      valor /= 1024;
+      i += 1;
+    }
+    return `${valor.toFixed(i === 0 ? 0 : 1)} ${unidades[i]}`;
+  }
+
+  function formatSeconds(seconds) {
+    if (seconds == null) {
+      return "—";
+    }
+    if (seconds < 60) {
+      return `${seconds} s`;
+    }
+    if (seconds < 3600) {
+      return `${Math.round(seconds / 60)} min`;
+    }
+    return `${(seconds / 3600).toFixed(1)} h`;
+  }
+
+  function statusPill(status) {
+    const pill = document.createElement("span");
+    pill.className = `system-pill system-pill--${status}`;
+    pill.textContent = i18n.t(`system.status.${status}`);
+    return pill;
+  }
+
+  /** Una tarjeta: título, semáforo y pares «dato: valor». */
+  function systemCard(title, status, rows) {
+    const card = document.createElement("article");
+    card.className = `system-card system-card--${status}`;
+    const head = document.createElement("header");
+    const h = document.createElement("h4");
+    h.textContent = title;
+    head.append(h, statusPill(status));
+    card.appendChild(head);
+    const list = document.createElement("dl");
+    for (const [label, value] of rows) {
+      const dt = document.createElement("dt");
+      dt.textContent = label;
+      const dd = document.createElement("dd");
+      dd.textContent = value;
+      list.append(dt, dd);
+    }
+    card.appendChild(list);
+    return card;
+  }
+
+  async function loadSystem() {
+    showAdminError("");
+    let data;
+    try {
+      data = await api("/api/admin/system");
+    } catch (error) {
+      showAdminError(error.message);
+      return;
+    }
+    dom.systemOverall.className = `system-pill system-pill--${data.status}`;
+    dom.systemOverall.textContent = i18n.t(`system.status.${data.status}`);
+    dom.systemGenerated.textContent = i18n.t("system.generated", {
+      at: formatTime(data.generated_at),
+      since: formatTime(data.started_at) || "—",
+    });
+
+    const ai = data.ai;
+    const outbox = data.outbox;
+    const disk = data.disk;
+    dom.systemCards.replaceChildren(
+      systemCard(i18n.t("system.ai"), ai.status, [
+        [i18n.t("system.provider"), ai.provider ? `${ai.provider} · ${ai.model}` : i18n.t("system.aiOff")],
+        [i18n.t("system.runs"), String(ai.runs_24h)],
+        [i18n.t("system.errors"), `${ai.errors_24h} (${Math.round(ai.error_rate * 100)} %)`],
+        [i18n.t("system.lastError"), ai.last_error
+          ? `${formatTime(ai.last_error.at)} — ${ai.last_error.text}`
+          : "—"],
+      ]),
+      systemCard(i18n.t("system.outbox"), outbox.status, [
+        [i18n.t("system.pending"), String(outbox.pending)],
+        [i18n.t("system.oldest"), formatSeconds(outbox.oldest_pending_seconds)],
+        [i18n.t("system.sent"), String(outbox.sent_24h)],
+        [i18n.t("system.lost"), String(outbox.failed_24h)],
+      ]),
+      systemCard(i18n.t("system.disk"), disk.status, disk.error ? [
+        [i18n.t("system.lastError"), disk.error],
+      ] : [
+        [i18n.t("system.free"), `${formatBytes(disk.free_bytes)} (${Math.round(disk.free_ratio * 100)} %)`],
+        [i18n.t("system.total"), formatBytes(disk.total_bytes)],
+      ]),
+      systemCard(i18n.t("system.database"), data.database.status, [
+        [i18n.t("system.size"), formatBytes(data.database.size_bytes)],
+        [i18n.t("system.environment"), data.environment],
+      ]),
+    );
+
+    dom.systemChannels.replaceChildren();
+    for (const row of data.channels) {
+      const tr = document.createElement("tr");
+      const celdas = [
+        CHANNEL_LABELS[row.channel] || row.channel,
+        null,
+        String(row.active_accounts),
+        formatTime(row.last_inbound_at) || "—",
+        formatTime(row.last_outbound_at) || "—",
+        String(row.failures_24h),
+        row.last_error ? `${formatTime(row.last_error.at)} — ${row.last_error.text}` : "—",
+      ];
+      celdas.forEach((value, index) => {
+        const td = document.createElement("td");
+        if (index === 1) {
+          td.appendChild(statusPill(row.status));
+        } else {
+          td.textContent = value;
+        }
+        tr.appendChild(td);
+      });
+      dom.systemChannels.appendChild(tr);
+    }
+  }
+
+  dom.systemRefresh.addEventListener("click", () => loadSystem());
 
   /* ------------------------------------------------- asistente IA */
 
