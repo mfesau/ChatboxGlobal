@@ -88,6 +88,18 @@ CREAR_RESERVA_TOOL: dict[str, Any] = {
 }
 
 #: Ofrecidas juntas: no tendría sentido reservar sin poder antes consultar.
+
+def format_price(cents: int, currency: str) -> str:
+    """Importe legible para el huésped.
+
+    El guaraní no tiene céntimos y se escribe con punto de miles:
+    «Gs. 350.000». El resto de monedas, con dos decimales y su código.
+    """
+    if currency == "PYG":
+        return "Gs. " + f"{round(cents / 100):,}".replace(",", ".")
+    return f"{cents / 100:.2f} {currency}"
+
+
 HOTEL_TOOLS: list[dict[str, Any]] = [CONSULTAR_DISPONIBILIDAD_TOOL, CREAR_RESERVA_TOOL]
 
 
@@ -134,7 +146,7 @@ async def _check_availability(ctx: TurnContext, arguments: dict[str, Any]) -> st
             ctx.session, room_type_id=type_rooms[0].room_type_id, check_in=check_in
         )
         price = (
-            f"{rate_plan.nightly_price_cents / 100:.2f} {rate_plan.currency}/noche"
+            f"{format_price(rate_plan.nightly_price_cents, rate_plan.currency)}/noche"
             if rate_plan is not None
             else "precio a consultar con el hotel"
         )
@@ -200,7 +212,7 @@ async def _create_reservation(ctx: TurnContext, arguments: dict[str, Any]) -> st
         contact_id=ctx.contact.id if ctx.contact else None,
         conversation_id=ctx.conversation.id,
         nightly_price_cents=rate_plan.nightly_price_cents if rate_plan else None,
-        currency=rate_plan.currency if rate_plan else "USD",
+        currency=rate_plan.currency if rate_plan else "PYG",
         status="pending",
     )
     await repo.record_audit(
@@ -235,7 +247,7 @@ async def _create_reservation(ctx: TurnContext, arguments: dict[str, Any]) -> st
     )
 
     price_text = (
-        f"{reservation.nightly_price_cents / 100:.2f} {reservation.currency}/noche"
+        f"{format_price(reservation.nightly_price_cents, reservation.currency)}/noche"
         if reservation.nightly_price_cents
         else "precio a confirmar con el hotel"
     )

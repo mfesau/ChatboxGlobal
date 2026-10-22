@@ -659,8 +659,8 @@
                 <label class="panel__field"><span data-i18n="aside.name">Nombre</span><input type="text" id="new-rate-plan-name" maxlength="120" data-i18n-placeholder="hotel.admin.rateNamePlaceholder" placeholder="p. ej. Temporada alta" required /></label>
                 <label class="panel__field"><span data-i18n="hotel.admin.startsOn">Desde (opcional)</span><input type="date" id="new-rate-plan-starts" /></label>
                 <label class="panel__field"><span data-i18n="hotel.admin.endsOn">Hasta (opcional)</span><input type="date" id="new-rate-plan-ends" /></label>
-                <label class="panel__field"><span data-i18n="hotel.admin.nightlyPrice">Precio por noche</span><input type="number" id="new-rate-plan-price" min="0.01" step="0.01" required /></label>
-                <label class="panel__field"><span data-i18n="hotel.admin.currency">Moneda</span><input type="text" id="new-rate-plan-currency" maxlength="3" value="USD" style="text-transform:uppercase" /></label>
+                <label class="panel__field"><span data-i18n="hotel.admin.nightlyPrice">Precio por noche</span><input type="number" id="new-rate-plan-price" min="0" step="any" required /></label>
+                <label class="panel__field"><span data-i18n="hotel.admin.currency">Moneda</span><input type="text" id="new-rate-plan-currency" maxlength="3" value="PYG" style="text-transform:uppercase" /></label>
                 <button type="submit" class="send-button" id="rate-plan-submit" data-i18n="hotel.admin.createRate">Crear tarifa</button>
                 <button type="button" class="ghost-button" id="rate-plan-cancel-edit" data-i18n="hotel.cancelEdit" hidden>
                   Cancelar edición

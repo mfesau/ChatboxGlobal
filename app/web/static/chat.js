@@ -202,6 +202,11 @@
   }
 
   function money(cents, currency) {
+    // El guaraní no tiene céntimos y se escribe con punto de miles: «Gs. 350.000».
+    if (currency === "PYG") {
+      const entero = String(Math.round(cents / 100)).replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+      return `Gs. ${entero}`;
+    }
     return `${(cents / 100).toFixed(2)} ${currency}`;
   }
 

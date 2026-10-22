@@ -3879,7 +3879,7 @@ async def _hotel_room(
             "room_type_id": room_type["id"],
             "name": "Tarifa base",
             "nightly_price_cents": 5_000,
-            "currency": "USD",
+            "currency": "PYG",
         },
     )
     return (
@@ -4233,7 +4233,7 @@ async def test_the_ai_tool_lists_availability_with_price_and_capacity(
         )
     assert "Doble 101" in result
     assert "1 libres" in result
-    assert "50.00 USD/noche" in result
+    assert "Gs. 50/noche" in result
 
 
 async def test_the_ai_tool_creates_a_pending_reservation_and_blocks_the_room(
@@ -4622,7 +4622,7 @@ async def test_hotel_report_counts_arrivals_departures_occupancy_and_revenue(as_
     assert body["occupied_rooms"] == 2
     assert body["pending_count"] == 0
     # arr: 3 noches dentro de la ventana; sty: 1 noche; dep: 0 (ya terminó).
-    assert body["revenue_next_30_days"] == [{"currency": "USD", "total_cents": 20_000}]
+    assert body["revenue_next_30_days"] == [{"currency": "PYG", "total_cents": 20_000}]
 
 
 async def test_hotel_report_counts_pending_reservations(as_agent, team):

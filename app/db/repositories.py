@@ -2028,7 +2028,7 @@ async def create_hotel_reservation(
     conversation_id: uuid.UUID | None = None,
     created_by_agent_id: uuid.UUID | None = None,
     nightly_price_cents: int | None = None,
-    currency: str = "USD",
+    currency: str = "PYG",
     notes: str | None = None,
     status: str = "confirmed",
 ) -> HotelReservation:

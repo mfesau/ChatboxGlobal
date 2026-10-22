@@ -2809,7 +2809,15 @@
   /* --------------------------------------------- módulo Hotel: administración */
 
   function formatMoney(cents, currency) {
-    return cents == null ? "—" : `${(cents / 100).toFixed(2)} ${currency}`;
+    if (cents == null) {
+      return "—";
+    }
+    // El guaraní no tiene céntimos y se escribe con punto de miles: «Gs. 350.000».
+    if (currency === "PYG") {
+      const entero = String(Math.round(cents / 100)).replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+      return `Gs. ${entero}`;
+    }
+    return `${(cents / 100).toFixed(2)} ${currency}`;
   }
 
   let hotelAdminRoomTypes = [];
@@ -2984,7 +2992,7 @@
     dom.newRatePlanName.value = ratePlan.name;
     dom.newRatePlanStarts.value = ratePlan.starts_on || "";
     dom.newRatePlanEnds.value = ratePlan.ends_on || "";
-    dom.newRatePlanPrice.value = (ratePlan.nightly_price_cents / 100).toFixed(2);
+    dom.newRatePlanPrice.value = String(ratePlan.nightly_price_cents / 100);
     dom.newRatePlanCurrency.value = ratePlan.currency;
     dom.ratePlanFormTitle.textContent = i18n.t("hotel.admin.editRateTitle");
     dom.ratePlanSubmit.textContent = i18n.t("hotel.saveChanges");
@@ -2995,7 +3003,7 @@
     editingRatePlanId = null;
     dom.createRatePlanForm.reset();
     dom.newRatePlanTypeSelect.disabled = false;
-    dom.newRatePlanCurrency.value = "USD";
+    dom.newRatePlanCurrency.value = "PYG";
     dom.ratePlanFormTitle.textContent = i18n.t("hotel.admin.rates");
     dom.ratePlanSubmit.textContent = i18n.t("hotel.admin.createRate");
     dom.ratePlanCancelEdit.hidden = true;
@@ -3110,7 +3118,7 @@
       starts_on: dom.newRatePlanStarts.value || null,
       ends_on: dom.newRatePlanEnds.value || null,
       nightly_price_cents: Math.round(price * 100),
-      currency: (dom.newRatePlanCurrency.value || "USD").toUpperCase(),
+      currency: (dom.newRatePlanCurrency.value || "PYG").toUpperCase(),
     };
     try {
       if (editingRatePlanId) {
@@ -3127,7 +3135,7 @@
           body: JSON.stringify({ ...body, room_type_id: dom.newRatePlanTypeSelect.value }),
         });
         dom.createRatePlanForm.reset();
-        dom.newRatePlanCurrency.value = "USD";
+        dom.newRatePlanCurrency.value = "PYG";
         await loadHotelRatePlans();
         setStatus(i18n.t("hotel.rateCreated"));
       }

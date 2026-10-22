@@ -212,7 +212,7 @@ async def reserve(
         contact_id=contact.id,
         conversation_id=conversation.id if conversation is not None else None,
         nightly_price_cents=rate_plan.nightly_price_cents if rate_plan else None,
-        currency=rate_plan.currency if rate_plan else "USD",
+        currency=rate_plan.currency if rate_plan else "PYG",
         status="pending",
     )
     await repo.record_audit(

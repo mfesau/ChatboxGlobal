@@ -264,7 +264,7 @@ class HotelRatePlanIn(BaseModel):
     starts_on: date | None = None
     ends_on: date | None = None
     nightly_price_cents: int = Field(gt=0)
-    currency: str = Field(default="USD", min_length=3, max_length=3)
+    currency: str = Field(default="PYG", min_length=3, max_length=3)
 
 
 class HotelReservationOut(BaseModel):
@@ -299,7 +299,7 @@ class HotelReservationIn(BaseModel):
     guests: int = Field(default=1, ge=1, le=20)
     #: Nulo = se toma la tarifa vigente de la categoría, si hay alguna cargada.
     nightly_price_cents: int | None = Field(default=None, gt=0)
-    currency: str = Field(default="USD", min_length=3, max_length=3)
+    currency: str = Field(default="PYG", min_length=3, max_length=3)
     notes: str | None = None
 
     @field_validator("check_out")

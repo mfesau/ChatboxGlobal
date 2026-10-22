@@ -972,7 +972,7 @@ class HotelRatePlan(Base, TimestampMixin):
     nightly_price_cents: Mapped[int] = mapped_column(Integer, nullable=False)
     #: Código ISO 4217. Configurable por si la Cooperativa cobra en más de una
     #: moneda según la rama de negocio.
-    currency: Mapped[str] = mapped_column(String(3), default="USD", nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), default="PYG", nullable=False)
 
     room_type: Mapped[HotelRoomType] = relationship()
 
@@ -1036,7 +1036,7 @@ class HotelReservation(Base, TimestampMixin):
     #: momento: si la tarifa cambia después, la reserva ya hecha no se ve
     #: afectada.
     nightly_price_cents: Mapped[int | None] = mapped_column(Integer)
-    currency: Mapped[str] = mapped_column(String(3), default="USD", nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), default="PYG", nullable=False)
     notes: Mapped[str | None] = mapped_column(Text)
 
     room: Mapped[HotelRoom] = relationship()
